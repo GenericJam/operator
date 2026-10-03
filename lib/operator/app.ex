@@ -18,8 +18,8 @@ defmodule Operator.App do
     # $MOB_BEAMS_DIR/mob_dist_cookie (MobDev.DistCookie on the host side).
     Mob.Dist.ensure_started(node: :"operator_android@127.0.0.1")
 
-    # DNS, CA certs, the agent stack, the repo, the OpenRouter key, the Core
-    # and the current Dyn generation (Operator.Boot, timed).
+    # DNS, CA certs, the agent stack, the repo, the provider sign-ins, the
+    # Core and the current Dyn generation (Operator.Boot, timed).
     :ok = Operator.Boot.run()
 
     Ecto.Migrator.with_repo(Operator.Repo, fn repo ->
@@ -30,12 +30,12 @@ defmodule Operator.App do
     :ok = Term.install()
 
     # Safe mode (launches kept failing, no Dyn loaded): the rescue screen.
-    # Otherwise chat once signed in; until then the diagnostics screen,
-    # which signs in.
+    # Otherwise chat once signed in to a provider; until then the
+    # diagnostics screen, which says how to sign in.
     root =
       cond do
         Dyn.safe_mode?() -> Operator.RescueScreen
-        Operator.KeyStore.present?() -> Operator.ChatScreen
+        Enum.any?(Operator.Auth.providers(), &Operator.Auth.signed_in?/1) -> Operator.ChatScreen
         true -> Operator.HomeScreen
       end
 

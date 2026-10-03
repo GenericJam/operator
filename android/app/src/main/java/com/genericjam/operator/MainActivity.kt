@@ -204,7 +204,7 @@ class MainActivity : ComponentActivity() {
         MobBridge.init(this)
 
         // Bootstrap the secure store (EncryptedSharedPreferences backed by an
-        // Android Keystore MasterKey) that holds the OpenRouter key. Must run
+        // Android Keystore MasterKey) that holds the provider sign-ins. Must run
         // BEFORE the BEAM starts so the first Elixir call into
         // Operator.Nifs.OperatorSecureStore finds prefs initialised.
         OperatorSecureStore.init(this)
@@ -221,6 +221,7 @@ class MainActivity : ComponentActivity() {
         // Operator's native views (Mob.UI.native_view components).
         OperatorMarkdown.register()
         OperatorDictation.register()
+        OperatorApproval.register()
 
         // Forward launcher-supplied env vars into the BEAM process. Set BEFORE
         // nativeStartBeam below so the BEAM (and Mob.Dist in particular) sees

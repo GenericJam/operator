@@ -28,7 +28,7 @@ defmodule Operator.Core.SessionTest do
       %{loop: loop, session: session} = start_loop(dir, script)
       :ok = Loop.prompt(loop, "first line\nsecond line")
       collect()
-      :ok = Loop.set_model(loop, "openrouter:openai/gpt-5-mini")
+      :ok = Loop.set_model(loop, "openai_codex:gpt-5-mini")
       :ok = Loop.prompt(loop, "again")
       collect()
       %{path: session.path, loop: loop}
@@ -63,7 +63,7 @@ defmodule Operator.Core.SessionTest do
       assert Enum.map(entries, & &1["parentId"]) == [nil | Enum.drop(ids, -1)]
       assert Enum.all?(entries, &match?({:ok, _, _}, DateTime.from_iso8601(&1["timestamp"])))
 
-      assert %{"type" => "model_change", "model" => "openrouter/anthropic/claude-haiku-4.5"} =
+      assert %{"type" => "model_change", "model" => "anthropic/claude-haiku-4-5"} =
                hd(entries)
     end
 
@@ -87,9 +87,9 @@ defmodule Operator.Core.SessionTest do
                ~w(api content model provider role stopReason timestamp usage)
 
       assert %{
-               "api" => "openrouter",
-               "provider" => "openrouter",
-               "model" => "anthropic/claude-haiku-4.5"
+               "api" => "anthropic-messages",
+               "provider" => "anthropic",
+               "model" => "claude-haiku-4-5"
              } = tool_turn
 
       assert "toolUse" = tool_turn["stopReason"]
@@ -120,6 +120,14 @@ defmodule Operator.Core.SessionTest do
              } = usage
 
       assert %{"stopReason" => "error", "content" => [], "errorMessage" => error} = error_turn
+
+      # after the switch, pi's provider id and api for OpenAI Codex
+      assert %{
+               "api" => "openai-codex-responses",
+               "provider" => "openai-codex",
+               "model" => "gpt-5-mini"
+             } = error_turn
+
       assert error =~ "402"
 
       [result] = for %{"role" => "toolResult"} = m <- messages, do: m
@@ -134,7 +142,7 @@ defmodule Operator.Core.SessionTest do
                "content" => [%{"type" => "text", "text" => "hi"}]
              } = result
 
-      assert [%{"model" => "openrouter/openai/gpt-5-mini"}] =
+      assert [%{"model" => "openai-codex/gpt-5-mini"}] =
                for(%{"type" => "model_change"} = e <- tl(entries), do: e)
 
       for m <- messages, do: assert(m["role"] in ~w(user assistant toolResult))
@@ -165,7 +173,7 @@ defmodule Operator.Core.SessionTest do
     test "reopens to the same context and model", %{path: path, loop: loop} do
       {:ok, session, entries} = Session.open(path, "unused")
       assert Session.context(entries) == Loop.context(loop)
-      assert session.model == "openrouter:openai/gpt-5-mini"
+      assert session.model == "openai_codex:gpt-5-mini"
       assert session.title == "first line"
     end
   end

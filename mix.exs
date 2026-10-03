@@ -28,14 +28,12 @@ defmodule Operator.MixProject do
       {:mob_dev, "~> 0.7.9", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,
-      # tool calling) and req_llm (provider clients; OpenRouter).
+      # tool calling) and req_llm (provider clients; Anthropic, OpenAI Codex).
       {:jido, "~> 2.3"},
       {:jido_ai, "~> 2.3"},
       {:req_llm, "~> 1.26"},
       # zoi 0.18.11 removed Zoi.Types.Default, which jido/jido_ai still use.
       {:zoi, "~> 0.18.10 and < 0.18.11"},
-      # Fingerprint/face gate on applying a self-modification.
-      {:mob_biometric, "~> 0.1.5"},
       # Keeps the app running while an agent run is backgrounded (Android
       # foreground service; iOS silent audio session): Operator.Core.KeepAlive.
       {:mob_background, "~> 0.1.2"},
@@ -44,6 +42,9 @@ defmodule Operator.MixProject do
       {:mob_notify, "~> 0.2.0"},
       {:mob_camera, "~> 0.1.11"},
       {:mob_photos, "~> 0.1.3"},
+      # Scans the login QR minted on the Mac by `mix operator.login`
+      # (Operator.LoginScanScreen).
+      {:mob_scanner, "~> 0.1.5"},
       # Mozilla CA bundle: Android has no system CA store the BEAM can find
       # (see Operator.Certs).
       {:castore, "~> 1.0"},

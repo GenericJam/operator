@@ -95,7 +95,7 @@ defmodule Operator.Core.VoiceTest do
     test "a failed run says the error's first sentence", %{tmp_dir: dir} do
       loop = start(dir, [[{:error, {:http, 402, "can only afford 8000"}}]], :important)
       run(loop, "expensive")
-      assert_receive {:speak, "Error: OpenRouter 402 (payment required): can only afford 8000."}
+      assert_receive {:speak, "Error: 402 (payment required): can only afford 8000."}
     end
 
     test "the step limit says so", %{tmp_dir: dir} do

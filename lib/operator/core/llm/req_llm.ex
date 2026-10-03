@@ -1,22 +1,35 @@
 defmodule Operator.Core.LLM.ReqLLM do
   @moduledoc """
-  OpenRouter through req_llm's provider, streamed. The key
-  is the one `Operator.KeyStore` handed to req_llm at boot / sign-in.
-  `max_tokens` is always explicit (req_llm's 64k default gets a 402 on a
-  small balance; see docs/SPIKE.md).
+  Anthropic (Claude Pro/Max) and OpenAI Codex (ChatGPT Plus/Pro) through
+  req_llm's providers, streamed, with the subscription's OAuth access token
+  from `Operator.Auth` (fetched, and refreshed when due, per call):
+
+    * `anthropic:` → `auth_mode: :oauth`, `access_token`,
+      `with_claude_subscription: true` (Claude Code's betas and identity)
+    * `openai_codex:` → `auth_mode: :oauth`, `access_token`,
+      `chatgpt_account_id`, and the session id as `session_id` (the prompt
+      cache key)
+
+  A provider without a sign-in fails with `{:signed_out, provider}`; any
+  other model prefix with `{:other, _}`. `max_tokens` is always explicit
+  (req_llm's default is the model's whole output limit).
   """
   @behaviour Operator.Core.LLM
 
+  alias Operator.Auth
   alias ReqLLM.StreamResponse
 
   @impl true
   def stream(request, _opts, sink) do
+    case options(request, &Auth.access_token/1) do
+      {:ok, opts} -> run(request, opts, sink)
+      {:error, _normalized} = error -> error
+    end
+  end
+
+  defp run(request, opts, sink) do
     context =
       ReqLLM.Context.new([ReqLLM.Context.system(request.system_prompt) | request.messages])
-
-    opts =
-      [max_tokens: request.max_tokens] ++
-        if(request.tools == [], do: [], else: [tools: request.tools])
 
     with {:ok, stream} <- ReqLLM.stream_text(request.model, context, opts),
          {:ok, response} <-
@@ -28,6 +41,67 @@ defmodule Operator.Core.LLM.ReqLLM do
     else
       {:error, reason} -> {:error, normalize(reason)}
     end
+  end
+
+  @doc false
+  # req_llm's options for `request`: max_tokens, tools and the provider's
+  # credentials from `access_token` (`Operator.Auth.access_token/1`).
+  @spec options(Operator.Core.LLM.request(), (Auth.provider() -> term())) ::
+          {:ok, keyword()} | {:error, Operator.Core.LLM.error()}
+  def options(request, access_token) do
+    base =
+      [max_tokens: request.max_tokens] ++
+        if(request.tools == [], do: [], else: [tools: request.tools])
+
+    with {:ok, provider} <- provider(request.model),
+         {:ok, auth} <- token(provider, access_token) do
+      {:ok, base ++ [provider_options: provider_options(provider, auth, request)]}
+    end
+  end
+
+  defp provider(model) do
+    case Auth.provider_for_model(model) do
+      {:ok, provider} ->
+        {:ok, provider}
+
+      :error ->
+        {:error,
+         {:other,
+          "Operator can't call #{model}: use an anthropic:… or openai_codex:… model " <>
+            "(the model chip)."}}
+    end
+  end
+
+  defp token(provider, access_token) do
+    case access_token.(provider) do
+      {:ok, %{token: _} = auth} ->
+        {:ok, auth}
+
+      {:error, :signed_out} ->
+        {:error, {:signed_out, provider}}
+
+      {:error, {:refresh_failed, message}} ->
+        {:error, {:auth, provider, message}}
+
+      {:error, {:store_failed, reason}} ->
+        {:error,
+         {:other,
+          "the refreshed #{Auth.label(provider)} sign-in couldn't be saved " <>
+            "(#{Auth.describe_error(reason)}); Operator keeps retrying, try again in a moment."}}
+    end
+  end
+
+  defp provider_options(:anthropic, auth, _request),
+    do: [auth_mode: :oauth, access_token: auth.token, with_claude_subscription: true]
+
+  defp provider_options(:openai_codex, auth, request) do
+    [
+      auth_mode: :oauth,
+      access_token: auth.token,
+      chatgpt_account_id: auth.account_id,
+      session_id: request[:session_id]
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   defp reply(response) do

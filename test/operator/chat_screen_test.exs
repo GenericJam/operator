@@ -15,6 +15,7 @@ defmodule Operator.ChatScreenTest do
   alias Operator.Core.Settings
   alias Operator.Test.FakeLLM
   alias Operator.Test.FakeNative
+  alias Operator.Test.FlakySecureStore
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -317,16 +318,105 @@ defmodule Operator.ChatScreenTest do
   test "the model can be changed while idle", %{tmp_dir: dir} do
     %{view: view, loop: loop} = mount_chat(dir, [])
 
+    # omp's provider/model form works too
     view =
       view
       |> render_info({:tap, :edit_model})
-      |> render_info({:change, :model_draft, "openai/gpt-5-mini"})
+      |> render_info({:change, :model_draft, "openai-codex/gpt-5-mini"})
       |> render_info({:tap, :save_model})
 
-    assert assigns(view).model == "openrouter:openai/gpt-5-mini"
-    assert Loop.snapshot(loop).model == "openrouter:openai/gpt-5-mini"
+    assert assigns(view).model == "openai_codex:gpt-5-mini"
+    assert Loop.snapshot(loop).model == "openai_codex:gpt-5-mini"
     # status and cost first, the model's short name last (the line is cut at the end)
     assert text(view) =~ "idle · $0.0000 · 0 tok · gpt-5-mini"
+  end
+
+  describe "sign-in commands" do
+    setup do
+      {:ok, sock} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+      {:ok, port} = :inet.port(sock)
+      :gen_tcp.close(sock)
+      test = self()
+
+      token_endpoint = fn _req ->
+        body = %{
+          "access_token" => "at",
+          "refresh_token" => "rt",
+          "expires_in" => 28_800,
+          "account" => %{"email_address" => "k@example.com"}
+        }
+
+        Req.Response.new(status: 200, body: Jason.encode!(body))
+      end
+
+      start_supervised!(Operator.Auth)
+
+      start_supervised!(
+        {Operator.Auth.Login,
+         open_url: fn url ->
+           send(test, {:opened, url})
+           :ok
+         end,
+         redirect: fn _provider -> "http://localhost:#{port}/callback" end,
+         respond: token_endpoint}
+      )
+
+      on_exit(fn ->
+        for p <- Operator.Auth.providers(), do: Operator.SecureStore.delete("auth:#{p}")
+      end)
+    end
+
+    test "/login and /logout never reach the model; their results show as notices", %{
+      tmp_dir: dir
+    } do
+      %{view: view, loop: loop, llm: llm} = mount_chat(dir, [])
+
+      view = send_text(view, "/login anthropic")
+      assert_received {:opened, "https://claude.ai/oauth/authorize?" <> query}
+      assert assigns(view).draft == ""
+      assert text(view) =~ "Opening claude.ai"
+
+      # Anthropic's code page: paste code#state after the command
+      state = URI.decode_query(query)["state"]
+      view = send_text(view, "/login anthropic the-code##{state}")
+      assert text(view) =~ "Code received"
+
+      assert_receive {:operator_login, :anthropic, :ok} = done, 2_000
+      view = render_info(view, done)
+      assert text(view) =~ "Signed in to Claude (Anthropic) as k@example.com."
+
+      view = send_text(view, "/login")
+      assert text(view) =~ "Signed in: anthropic (k@example.com)"
+
+      view = send_text(view, "/login anthropic stale-code#other-state")
+      assert text(view) =~ "Type /login anthropic first"
+
+      view = send_text(view, "/logout anthropic")
+      assert text(view) =~ "Signed out of Claude (Anthropic)."
+      refute Operator.Auth.signed_in?(:anthropic)
+
+      view = send_text(view, "/login nonsense")
+      assert text(view) =~ "/login anthropic (Claude Pro/Max) or /login openai"
+
+      assert FakeLLM.requests(llm) == []
+      assert Loop.snapshot(loop).entries == []
+      assert assigns(view).status == :idle
+    end
+
+    test "a /logout the store refuses says so, and the sign-in stays", %{tmp_dir: dir} do
+      creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
+      :ok = Operator.Auth.put(:anthropic, creds)
+      FlakySecureStore.install([:delete])
+      on_exit(&FlakySecureStore.restore/0)
+
+      %{view: view} = mount_chat(dir, [])
+      view = send_text(view, "/logout anthropic")
+
+      assert text(view) =~
+               "Couldn't sign out of Claude (Anthropic) (:disk_full): it is still signed in."
+
+      assert Operator.Auth.signed_in?(:anthropic)
+    end
   end
 
   describe "dictation" do
@@ -439,7 +529,7 @@ defmodule Operator.ChatScreenTest do
       end
     end
 
-    test "a candidate shows with its diff; the fingerprint activates it", %{tmp_dir: dir} do
+    test "a candidate shows with its diff; the prompt's pass activates it", %{tmp_dir: dir} do
       %{view: view} = mount_chat(dir, [])
       refute button?(view, "approve")
 
@@ -454,11 +544,7 @@ defmodule Operator.ChatScreenTest do
       assert shown =~ "add the weather tool"
       assert shown =~ "+defmodule Operator.Dyn.Weather do"
 
-      view = render_info(view, {:tap, :approve_proposal})
-      assert_received {:authenticate, "Activate Operator generation " <> _}
-      assert text(view) =~ "waiting for your fingerprint"
-
-      view = render_info(view, {:biometric, :success})
+      view = render_info(view, {:approval, "approved", %{"subject" => {:activate, n}}})
       assert_received {:confirmed, {:activate, ^n}}
       assert %{generation: ^n, status: :probation} = Operator.Core.Dyn.status()
       refute button?(view, "approve")
@@ -471,17 +557,23 @@ defmodule Operator.ChatScreenTest do
       assert text(view) =~ "Generation #{n} is live"
     end
 
-    test "a failed fingerprint changes nothing; deny discards", %{tmp_dir: dir} do
+    test "a cancelled prompt or no screen lock changes nothing; deny discards", %{
+      tmp_dir: dir
+    } do
       %{view: view} = mount_chat(dir, [])
       %{n: n} = propose("notes2")
       view = render_info(view, dyn_event(:candidate))
+      subject = {:activate, n}
 
       view =
-        view
-        |> render_info({:tap, :approve_proposal})
-        |> render_info({:biometric, :failure})
+        render_info(view, {:approval, "failed", %{"reason" => "canceled", "subject" => subject}})
 
-      assert text(view) =~ "not activated: the check failed"
+      assert text(view) =~ "Generation #{n} not activated: the prompt was cancelled"
+
+      view = render_info(view, {:approval, "unavailable", %{"subject" => subject}})
+      assert text(view) =~ "Approve needs a screen lock (PIN, pattern or password) on this phone"
+
+      refute_received {:confirmed, _}
       assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
       assert button?(view, "approve")
 
@@ -490,10 +582,48 @@ defmodule Operator.ChatScreenTest do
       refute button?(view, "approve")
     end
 
+    test "off Android the plain chip approves through the configured approval", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      %{n: n} = propose("plain")
+      view = render_info(view, dyn_event(:candidate))
+
+      view = render_info(view, {:tap, :approve_proposal})
+      refute_received {:confirmed, _}
+      assert %{generation: ^n} = Operator.Core.Dyn.status()
+      assert text(view) =~ "Generation #{n} is live"
+    end
+
     test "a proposal made while the screen was away shows at mount", %{tmp_dir: dir} do
       %{n: n} = propose("later")
       %{view: view} = mount_chat(dir, [])
       assert text(view) =~ "proposal G#{n}"
+    end
+  end
+
+  describe "with the production approval" do
+    setup %{tmp_dir: dir} do
+      Operator.Test.Dyn.purge_all()
+      on_exit(&Operator.Test.Dyn.purge_all/0)
+      start_supervised!(Operator.Core.Dyn.Approval.Biometric)
+
+      Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn_data"),
+        approval: Operator.Core.Dyn.Approval.Biometric
+      )
+
+      :ok
+    end
+
+    test "the plain chip can't activate without the screen-lock prompt", %{tmp_dir: dir} do
+      %{n: n} =
+        Operator.Test.Dyn.propose!(
+          %{"gated.ex" => Operator.Test.Dyn.tool("Gated", "gated")},
+          "add the gated tool"
+        )
+
+      %{view: view} = mount_chat(dir, [])
+      view = render_info(view, {:tap, :approve_proposal})
+      assert text(view) =~ "Generation #{n} not activated: it needs approving"
+      assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
     end
   end
 

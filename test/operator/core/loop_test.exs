@@ -277,7 +277,7 @@ defmodule Operator.Core.LoopTest do
     assert for(%{type: :retry} <- events, do: :retry) == []
     %{error: error, entry: entry} = Enum.find(events, &(&1.type == :turn_end))
     assert error =~ "can only afford 8000"
-    assert error =~ "https://openrouter.ai/settings/credits"
+    assert error =~ "lower max_tokens"
     assert message(entry)["stopReason"] == "error"
     assert message(entry)["errorMessage"] == error
     assert List.last(events).reason == :error
@@ -327,7 +327,7 @@ defmodule Operator.Core.LoopTest do
     assert File.read!(Path.join(dir, "notes.md")) == "milk\n"
 
     live = Loop.context(loop)
-    {:ok, reopened, entries} = Session.open(session.path, "openrouter:unused")
+    {:ok, reopened, entries} = Session.open(session.path, "anthropic:unused")
     assert Session.context(entries) == live
     assert reopened.model == model()
     assert [_, _, _, _] = live

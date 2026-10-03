@@ -1,8 +1,10 @@
 defmodule Operator.Diag do
   @moduledoc """
   Spike probes, run on the device (over dist rpc or from the home screen).
-  Every function returns plain data and never includes the OpenRouter key.
+  Every function returns plain data and never includes a token.
   """
+
+  alias Operator.Core.LLM.ReqLLM, as: Client
 
   @agent_apps [:jido, :jido_signal, :jido_action, :jido_ai, :req_llm, :llm_db, :finch, :req]
 
@@ -28,9 +30,9 @@ defmodule Operator.Diag do
     }
   end
 
-  @doc "LLMDB lookup of a model, timed."
-  def llmdb(spec \\ "openrouter:anthropic/claude-haiku-4.5") do
-    {us, res} = :timer.tc(fn -> LLMDB.model(spec) end)
+  @doc "Model catalog lookup of a model (the default one), timed."
+  def llmdb(spec \\ Operator.Core.default_model()) do
+    {us, res} = :timer.tc(fn -> ReqLLM.model(spec) end)
 
     case res do
       {:ok, m} ->
@@ -40,7 +42,7 @@ defmodule Operator.Diag do
           provider: m.provider,
           us: us,
           tools: get_in(m.capabilities, [:tools, :enabled]),
-          openrouter_models: length(LLMDB.models(:openrouter))
+          provider_models: length(LLMDB.models(m.provider))
         }
 
       other ->
@@ -83,66 +85,41 @@ defmodule Operator.Diag do
       boot: Operator.Boot.timings()
     }
 
-  # ── model calls (need the key) ──
+  # ── model calls (need a sign-in, Operator.Auth) ──
 
   @doc """
-  One streamed completion through req_llm's openrouter provider.
-  Returns time-to-first-token, total time, chunk count, and the text.
+  One streamed completion with the provider's sign-in, as the agent loop
+  calls it. Returns time-to-first-token, total time, chunk count, and the text.
   """
-  def stream(model \\ "openrouter:google/gemma-4-31b-it:free") do
+  def stream(model \\ Operator.Core.default_model()) do
     t0 = now()
 
     prompt = "Count from 1 to 10, one number per line, nothing else."
+    request = %{model: model, system_prompt: "", messages: [], tools: [], max_tokens: 200}
 
-    case ReqLLM.stream_text(model, prompt, max_tokens: 200) do
-      {:ok, resp} ->
-        {ttft, chunks, text} =
-          resp
-          |> ReqLLM.StreamResponse.tokens()
-          |> Enum.reduce({nil, 0, ""}, fn tok, {first, n, acc} ->
-            {first || now() - t0, n + 1, acc <> tok}
-          end)
+    with {:ok, opts} <- Client.options(request, &Operator.Auth.access_token/1),
+         {:ok, resp} <- ReqLLM.stream_text(model, prompt, opts) do
+      {ttft, chunks, text} =
+        resp
+        |> ReqLLM.StreamResponse.tokens()
+        |> Enum.reduce({nil, 0, ""}, fn tok, {first, n, acc} ->
+          {first || now() - t0, n + 1, acc <> tok}
+        end)
 
-        %{
-          ok: true,
-          model: model,
-          ttft_ms: ttft,
-          total_ms: now() - t0,
-          chunks: chunks,
-          text: text,
-          usage: ReqLLM.StreamResponse.usage(resp)
-        }
-
-      {:error, e} ->
-        %{ok: false, model: model, error: describe(e), total_ms: now() - t0}
+      %{
+        ok: true,
+        model: model,
+        ttft_ms: ttft,
+        total_ms: now() - t0,
+        chunks: chunks,
+        text: text,
+        usage: ReqLLM.StreamResponse.usage(resp)
+      }
+    else
+      {:error, e} -> %{ok: false, model: model, error: describe(e), total_ms: now() - t0}
     end
   rescue
     e -> %{ok: false, model: model, error: Exception.message(e)}
-  end
-
-  def tool_roundtrip(model \\ "openrouter:google/gemma-4-31b-it:free") do
-    Application.put_env(:jido_ai, :model_aliases, %{operator: model})
-    {:ok, pid} = Operator.Jido.start_agent(Operator.Agent)
-    t0 = now()
-
-    res =
-      Operator.Agent.ask_sync(
-        pid,
-        "Use the add_numbers tool to compute 1234 + 4321. Reply with just the number.",
-        timeout: 120_000
-      )
-
-    ms = now() - t0
-    {:ok, st} = Jido.AgentServer.state(pid)
-    Operator.Jido.stop_agent(pid)
-
-    %{
-      model: model,
-      ms: ms,
-      result: inspect(res, limit: 50, printable_limit: 500),
-      tool_results:
-        inspect(get_in(st.agent.state, [:__strategy__, :details, :tool_results]) || :n_a)
-    }
   end
 
   defp describe(%{__exception__: true} = e), do: Exception.message(e)

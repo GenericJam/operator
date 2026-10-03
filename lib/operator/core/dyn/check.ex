@@ -10,7 +10,7 @@ defmodule Operator.Core.Dyn.Check do
   smuggled in through a message). This check stops the obvious and the
   accidental and makes the rest deliberate. What actually keeps the phone
   safe is the rest of the pipeline: versioned modules, selftests in
-  contained processes, biometric approval, probation and automatic revert.
+  contained processes, screen-lock approval, probation and automatic revert.
 
   Source rules (each violation carries `file:line`):
 

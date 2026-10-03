@@ -3,14 +3,14 @@
  * Keychain, or EncryptedSharedPreferences on Android (JNI branch below).
  *
  * Wraps SecItemAdd / SecItemUpdate / SecItemCopyMatching / SecItemDelete
- * from Security.framework. Holds the OpenRouter key (Operator.KeyStore)
+ * from Security.framework. Holds the provider sign-ins (Operator.Auth)
  * so it is encrypted at rest instead of sitting in a plain 0600 file in
  * the app's data dir. Ported from muster_app's muster_secure_store.c.
  *
  * Statically linked via mob.exs's :static_nifs entry — see
  * MobDev.StaticNifs. `-framework Security` is added from the iOS
- * build files' base frameworks lists. Operator.KeyStore only uses
- * this NIF on Android; on iOS it still keeps the file store.
+ * build files' base frameworks lists. Operator.SecureStore uses this NIF
+ * on both phones and refuses to store secrets when it isn't loaded.
  *
  * Item attributes:
  *   kSecClass                 = kSecClassGenericPassword

@@ -9,7 +9,7 @@ import androidx.security.crypto.MasterKey
  * Kotlin bridge for Operator.Nifs.OperatorSecureStore (Android side
  * of the same NIF that talks Keychain on iOS via
  * c_src/operator_secure_store.c). Ported from muster_app's
- * MusterSecureStore.kt; holds the OpenRouter key (Operator.KeyStore).
+ * MusterSecureStore.kt; holds the provider sign-ins (Operator.Auth).
  *
  * Wraps AndroidX Jetpack Security's EncryptedSharedPreferences —
  * itself backed by a MasterKey stored in the Android Keystore
@@ -23,8 +23,8 @@ import androidx.security.crypto.MasterKey
  * request. init(Context) MUST be called before any bridge method —
  * see MainActivity.onCreate.
  *
- * Operator.KeyStore signs out with `deleteBridge`: it has no fallback
- * key, so "never written" and "signed out" mean the same thing.
+ * Operator.Auth signs out with `deleteBridge`: there is no fallback
+ * value, so "never written" and "signed out" mean the same thing.
  */
 object OperatorSecureStore {
     private const val PREFS_NAME = "operator_secure_store"

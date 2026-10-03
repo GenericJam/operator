@@ -18,7 +18,7 @@ sleep "$secs"
 scripts/rpc.sh '
 f = fn ->
   t0 = System.monotonic_time(:millisecond)
-  r = Req.get("https://openrouter.ai/api/v1/models?limit=1", retry: false, receive_timeout: 15_000, connect_options: [timeout: 15_000])
+  r = Req.get("https://api.anthropic.com/v1/models", retry: false, receive_timeout: 15_000, connect_options: [timeout: 15_000])
   ms = System.monotonic_time(:millisecond) - t0
   case r do
     {:ok, %{status: s}} -> {:ok, s, ms}

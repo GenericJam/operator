@@ -61,13 +61,16 @@ defmodule Operator.Core.Dyn.ToolsTest do
 
     assert {:ok, text} = DynPropose.run(%{"rationale" => "A weather tool"}, ctx)
     assert text =~ "Proposed generation G1 (on top of G0): A weather tool"
-    assert text =~ "It is NOT active. The human has to approve it on the phone with a fingerprint"
+
+    assert text =~
+             "It is NOT active. The human has to approve it on the phone with the screen lock"
+
     assert text =~ "- Operator.Dyn.Weather (tool): ok"
     assert text =~ ~s|+  def run(_args, _ctx), do: {:ok, "rain"}|
 
     assert {:ok, status} = DynStatus.run(%{}, ctx)
     assert status =~ "Running generation G0 (proven)."
-    assert status =~ "Proposal G1 waits for the human's fingerprint: A weather tool"
+    assert status =~ "Proposal G1 waits for the human's approval: A weather tool"
     assert %{generation: 0, pending: 1} = Dyn.status()
 
     assert {:ok, "Deleted weather.ex from staging."} =

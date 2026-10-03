@@ -16,9 +16,9 @@ end
 
 defmodule Operator.Agent do
   @moduledoc """
-  The on-phone ReAct agent (spike shape: one tool). The model is an
-  OpenRouter model id; the key comes from `Operator.KeyStore` via
-  `config :req_llm, :openrouter_api_key` (set at boot / sign-in).
+  The spike's Jido.AI ReAct agent (one tool), started without network by
+  `Operator.Diag.agent/0`; the model is the `:operator` alias
+  (`config :jido_ai, :model_aliases`). The chat uses `Operator.Core.Loop`.
   """
   use Jido.AI.Agent,
     name: "operator_agent",

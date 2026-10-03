@@ -408,6 +408,7 @@ defmodule Operator.Core.Loop do
   defp request(s, entries) do
     %{
       model: s.session.model,
+      session_id: s.session.id,
       system_prompt: s.opts[:system_prompt] || Operator.Core.system_prompt(),
       messages: Session.context(entries),
       tools: s |> tools() |> Map.values() |> Enum.map(&Tool.to_req_llm/1),

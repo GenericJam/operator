@@ -17,7 +17,7 @@ config :mob_dev,
   elixir_lib:
     System.get_env("MOB_ELIXIR_LIB", :code.lib_dir(:elixir) |> to_string() |> Path.dirname()),
   # App-owned C NIF (c_src/<module>.c): the Keychain / EncryptedSharedPrefs
-  # store that holds the OpenRouter key (Operator.KeyStore).
+  # store that holds the provider sign-ins (Operator.SecureStore, Operator.Auth).
   static_nifs: [%{module: :operator_secure_store, archs: [:all]}]
 
 # Activated capability plugins (the packages added in mix.exs). Each contributes
@@ -25,12 +25,12 @@ config :mob_dev,
 # here to deactivate a plugin without removing the dep; remove both to drop it
 # entirely (the native build shrinks and a clean rebuild prunes its artifacts).
 config :mob, :plugins, [
-  :mob_biometric,
   :mob_background,
   :mob_location,
   :mob_notify,
   :mob_camera,
-  :mob_photos
+  :mob_photos,
+  :mob_scanner
 ]
 
 # Trust gate for the first-party plugins. Each is signed in CI with the shared
@@ -55,8 +55,6 @@ config :mob, :trusted_plugins, %{
   mob_mishka: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_ash: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
 }
-
-
 
 config :mob_dev, beam_flags: "-S 0:0"
 

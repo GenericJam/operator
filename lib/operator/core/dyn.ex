@@ -414,7 +414,7 @@ defmodule Operator.Core.Dyn do
 
     The cycle: `dyn_propose` (with a one-line rationale) checks, compiles and selftests the \
     staging copy as a new generation and shows its diff. Nothing changes yet: the human \
-    approves it on the phone with a fingerprint; you can't activate it yourself. Once active \
+    approves it on the phone with the screen lock; you can't activate it yourself. Once active \
     it is on probation: 3 crashes within 60 s, or an app launch that dies, revert it to the \
     previous generation automatically. `dyn_status` shows what runs, the pending proposal and \
     recent crash reports: read them, fix the sources, propose again.

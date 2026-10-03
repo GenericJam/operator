@@ -1,7 +1,7 @@
 defmodule Operator.Core do
   @moduledoc """
   The fixed core (docs/DESIGN.md §1): the agent loop, sessions, core tools.
-  Started by `Operator.Boot`; supervises the biometric approval and
+  Started by `Operator.Boot`; supervises the approval store and
   `Operator.Core.Dyn.Keeper` (which Dyn generation runs; `Operator.Boot`
   then loads it), the tool registry,
   the task supervisor tools run under, the loops, `Operator.Core.Current`
@@ -11,7 +11,7 @@ defmodule Operator.Core do
   (reads updates aloud).
 
   Config (`config :operator, ...`): `:default_model` (a req_llm spec,
-  default `#{inspect("openrouter:anthropic/claude-haiku-4.5")}`), `:max_tokens` (4096).
+  default `#{inspect("anthropic:claude-haiku-4-5")}`), `:max_tokens` (4096).
   """
   use Supervisor
 
@@ -19,7 +19,7 @@ defmodule Operator.Core do
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
 
-  @default_model "openrouter:anthropic/claude-haiku-4.5"
+  @default_model "anthropic:claude-haiku-4-5"
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
@@ -112,7 +112,8 @@ defmodule Operator.Core.Current do
   Opens the session file at `path` and makes it current. A file outside
   the sessions dir (one from omp, say) is copied in first, so the phone
   appends to its own copy. A session last run on a model Operator can't
-  call (not `openrouter:`) continues on the default model.
+  call (a provider other than `anthropic` / `openai_codex`, or one that
+  isn't signed in) continues on the default model.
   """
   @spec open(Path.t(), GenServer.server()) :: {:ok, pid()} | {:error, term()}
   def open(path, server \\ __MODULE__), do: GenServer.call(server, {:open, path})
@@ -159,10 +160,7 @@ defmodule Operator.Core.Current do
   def handle_call({:open, path}, _from, s) do
     with {:ok, path} <- into_dir(path, s.dir),
          {:ok, session, entries} <- Session.open(path, Operator.Core.default_model()) do
-      session =
-        if String.starts_with?(session.model, "openrouter:"),
-          do: session,
-          else: %{session | model: Operator.Core.default_model()}
+      session = %{session | model: usable_model(session.model)}
 
       if s.pid, do: stop_loop(s)
       s = start(%{s | pid: nil, ref: nil}, {session, entries})
@@ -200,7 +198,7 @@ defmodule Operator.Core.Current do
   defp open_or_new(%{path: path} = s) when is_binary(path) do
     case Session.open(path, Operator.Core.default_model()) do
       {:ok, session, entries} ->
-        {session, entries}
+        {%{session | model: usable_model(session.model)}, entries}
 
       {:error, reason} ->
         Logger.warning(
@@ -213,6 +211,16 @@ defmodule Operator.Core.Current do
 
   defp open_or_new(s),
     do: {Session.new(s.dir, Operator.Core.default_model(), Operator.Paths.data_dir()), []}
+
+  defp usable_model(model) do
+    case Operator.Auth.provider_for_model(model) do
+      {:ok, provider} ->
+        if Operator.Auth.signed_in?(provider), do: model, else: Operator.Core.default_model()
+
+      :error ->
+        Operator.Core.default_model()
+    end
+  end
 
   defp into_dir(path, dir) do
     if Path.dirname(Path.expand(path)) == Path.expand(dir) do

@@ -2,8 +2,9 @@ defmodule Operator.RescueScreen do
   @moduledoc """
   The rescue screen (docs/DESIGN.md §2, safe mode): every Dyn generation
   (number, status, when, rationale), a generation's diff, reverting to any
-  generation that was active once (approved like an activation, through
-  `Operator.Core.Dyn.request_approval/2`), and the crash log.
+  generation that was active once (approved like an activation: "Revert to
+  this", then the approve chip, `Operator.Core.ApproveButton`, whose pass
+  goes through `Operator.Core.Dyn.request_approval/2`), and the crash log.
 
   The app opens it instead of the chat in safe mode; the diagnostics screen
   links to it. It is Core code: nothing the agent writes can remove or
@@ -11,14 +12,21 @@ defmodule Operator.RescueScreen do
   """
   use Mob.Screen
 
+  alias Operator.ChatScreen.Native
+  alias Operator.Core.ApproveButton
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Generation
+  alias Operator.Core.Term
 
   @log_limit 30
 
   def mount(_params, _session, socket) do
     Dyn.subscribe()
-    {:ok, socket |> Mob.Socket.assign(selected: nil, diff: "", message: nil) |> load()}
+
+    {:ok,
+     socket
+     |> Mob.Socket.assign(selected: nil, diff: "", message: nil, reverting: nil)
+     |> load()}
   end
 
   def render(assigns) do
@@ -54,7 +62,42 @@ defmodule Operator.RescueScreen do
       else: {:noreply, Mob.Socket.assign(socket, selected: n, diff: Dyn.diff(n))}
   end
 
-  def handle_info({:tap, {:revert, n}}, socket) do
+  def handle_info({:tap, {:revert, n}}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, reverting: n, message: nil)}
+
+  def handle_info({:tap, :cancel_revert}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :reverting, nil)}
+
+  # Off Android there's no screen-lock prompt: the plain button asks for a
+  # token unconfirmed, which only an approval needing no confirmation grants.
+  def handle_info({:tap, :approve_revert}, %{assigns: %{reverting: n}} = socket)
+      when is_integer(n),
+      do: {:noreply, revert(socket, n)}
+
+  def handle_info({:approval, "approved", %{"subject" => {:revert_to, n} = subject}}, socket) do
+    case Native.impl().confirm_approval(subject) do
+      :ok -> {:noreply, revert(socket, n)}
+      {:error, reason} -> {:noreply, Mob.Socket.assign(socket, :message, not_reverted(reason))}
+    end
+  end
+
+  def handle_info({:approval, "failed", payload}, socket),
+    do:
+      {:noreply,
+       Mob.Socket.assign(
+         socket,
+         :message,
+         "Not reverted: " <> ApproveButton.why("failed", payload)
+       )}
+
+  def handle_info({:approval, "unavailable", payload}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :message, ApproveButton.why("unavailable", payload))}
+
+  def handle_info({:operator_dyn, _event}, socket), do: {:noreply, load(socket)}
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp revert(socket, n) do
     message =
       with {:ok, token} <- Dyn.request_approval({:revert_to, n}),
            {:ok, _gen} <- Dyn.revert_to(n, token) do
@@ -63,18 +106,16 @@ defmodule Operator.RescueScreen do
           else: "Generation #{n} is current."
       else
         {:error, :approval_required} ->
-          "Reverting needs approval, and the biometric prompt isn't wired yet."
+          "Not reverted: it needs approving through the phone's screen-lock prompt."
 
         {:error, reason} ->
-          "Not reverted: #{inspect(reason) |> String.slice(0, 300)}"
+          not_reverted(reason)
       end
 
-    {:noreply, socket |> Mob.Socket.assign(:message, message) |> load()}
+    socket |> Mob.Socket.assign(message: message, reverting: nil) |> load()
   end
 
-  def handle_info({:operator_dyn, _event}, socket), do: {:noreply, load(socket)}
-
-  def handle_info(_message, socket), do: {:noreply, socket}
+  defp not_reverted(reason), do: "Not reverted: #{inspect(reason) |> String.slice(0, 300)}"
 
   # ── view ──
 
@@ -104,18 +145,16 @@ defmodule Operator.RescueScreen do
     current? = gen.n == assigns.status.generation
     head = "G#{gen.n} · #{gen.status}" <> if(current?, do: " · current", else: "") <> created(gen)
 
-    actions =
-      [
-        gen.n > 0 &&
+    diff_action =
+      if gen.n > 0,
+        do: [
           button(
             if(assigns.selected == gen.n, do: "Hide diff", else: "Diff"),
             {:diff, gen.n},
             :surface
-          ),
-        (Generation.ever_active?(gen) and not current?) &&
-          button("Revert to this", {:revert, gen.n}, :primary)
-      ]
-      |> Enum.filter(& &1)
+          )
+        ],
+        else: []
 
     diff =
       if assigns.selected == gen.n,
@@ -124,8 +163,42 @@ defmodule Operator.RescueScreen do
 
     column(
       [text(head, :on_surface, :base), text(gen.rationale, :muted, :sm)] ++
-        reason(gen) ++ actions ++ diff ++ [spacer(8)]
+        reason(gen) ++
+        diff_action ++ revert_actions(gen, current?, assigns) ++ diff ++ [spacer(8)]
     )
+  end
+
+  defp revert_actions(gen, current?, assigns) do
+    cond do
+      not Generation.ever_active?(gen) or current? ->
+        []
+
+      assigns.reverting == gen.n ->
+        [approve_revert(gen.n), button("Cancel", :cancel_revert, :surface)]
+
+      true ->
+        [button("Revert to this", {:revert, gen.n}, :primary)]
+    end
+  end
+
+  # The system screen-lock prompt; only Android has the native view so far.
+  defp approve_revert(n) do
+    if Term.platform() == :android do
+      palette = Mob.Theme.resolved_palette()
+
+      Mob.UI.native_view(ApproveButton,
+        id: :approve_revert,
+        notify: self(),
+        subject: {:revert_to, n},
+        label: "Approve revert to G#{n}",
+        title: "Revert to generation #{n}",
+        subtitle: "Operator runs that generation's code again",
+        text_color: palette[:on_primary],
+        background: palette[:primary]
+      )
+    else
+      button("Approve revert to G#{n}", :approve_revert, :primary)
+    end
   end
 
   defp created(%Generation{created_at: nil}), do: ""

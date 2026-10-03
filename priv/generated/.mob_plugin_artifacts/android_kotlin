@@ -1,6 +1,6 @@
-android/app/src/main/java/io/mob/biometric/MobBiometricBridge.kt
 android/app/src/main/java/io/mob/background/MobBackgroundBridge.kt
 android/app/src/main/java/io/mob/location/MobLocationBridge.kt
 android/app/src/main/java/io/mob/notify/MobNotifyBridge.kt
 android/app/src/main/java/io/mob/camera/MobCameraBridge.kt
 android/app/src/main/java/io/mob/photos/MobPhotosBridge.kt
+android/app/src/main/java/io/mob/scanner/MobScannerBridge.kt

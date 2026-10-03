@@ -127,8 +127,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
 
     // Jetpack Security — EncryptedSharedPreferences + MasterKey for the
-    // OpenRouter key store. OperatorSecureStore.kt bridges these to the C NIF
-    // c_src/operator_secure_store.c (Android JNI branch) for Operator.KeyStore.
+    // provider sign-ins. OperatorSecureStore.kt bridges these to the C NIF
+    // c_src/operator_secure_store.c (Android JNI branch) for Operator.SecureStore.
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
     // Biometric authentication
@@ -176,8 +176,8 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
     // mob:plugin-deps BEGIN (managed — regenerated each build; do not edit)
-    implementation "androidx.biometric:biometric:1.1.0"
     implementation "com.google.android.gms:play-services-location:21.0.1"
     implementation "com.google.firebase:firebase-messaging:24.0.0"
+    implementation "com.google.mlkit:barcode-scanning:17.3.0"
     // mob:plugin-deps END
 }

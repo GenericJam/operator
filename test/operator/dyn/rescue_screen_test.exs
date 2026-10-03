@@ -12,7 +12,12 @@ defmodule Operator.RescueScreenTest do
 
   setup do
     purge_all()
-    on_exit(&purge_all/0)
+    Application.put_env(:operator, :chat_native, Operator.Test.FakeNative)
+
+    on_exit(fn ->
+      purge_all()
+      Application.delete_env(:operator, :chat_native)
+    end)
   end
 
   test "lists generations, shows a diff, reverts through approval", %{tmp_dir: dir} do
@@ -30,14 +35,42 @@ defmodule Operator.RescueScreenTest do
     assert text(view) =~ ~s|+  def name, do: "weather"|
 
     view = render_info(view, {:tap, {:revert, 0}})
+    assert find(view, :button, text: "Approve revert to G0")
+    assert Dyn.status().generation == n
+
+    view = render_info(view, {:approval, "approved", %{"subject" => {:revert_to, 0}}})
+    assert_received {:confirmed, {:revert_to, 0}}
     assert_renderable(view)
     assert text(view) =~ "Generation 0 is current."
     assert text(view) =~ "Running G0"
     assert Dyn.status().generation == 0
     assert text(view) =~ "reverted by hand to generation 0"
+    refute find(view, :button, text: "Approve revert to G0")
   end
 
-  test "without a wired biometric prompt nothing is reverted", %{tmp_dir: dir} do
+  test "a cancelled prompt or no screen lock reverts nothing; cancel hides the approve",
+       %{tmp_dir: dir} do
+    start_keeper(dir)
+    n = activate!(%{"weather.ex" => tool("Weather", "weather")}, "Add a weather tool")
+    view = mount_screen(RescueScreen) |> render_info({:tap, {:revert, 0}})
+    subject = {:revert_to, 0}
+
+    view =
+      render_info(view, {:approval, "failed", %{"reason" => "lockout", "subject" => subject}})
+
+    assert text(view) =~ "Not reverted: too many wrong tries"
+
+    view = render_info(view, {:approval, "unavailable", %{"subject" => subject}})
+    assert text(view) =~ "Approve needs a screen lock (PIN, pattern or password) on this phone"
+    assert Dyn.status().generation == n
+
+    view = render_info(view, {:tap, :cancel_revert})
+    refute find(view, :button, text: "Approve revert to G0")
+    assert find(view, :button, text: "Revert to this")
+  end
+
+  test "with the production approval the plain button reverts nothing", %{tmp_dir: dir} do
+    start_supervised!(Operator.Core.Dyn.Approval.Biometric)
     start_keeper(dir, approval: Operator.Core.Dyn.Approval.Biometric)
     :ok = Dyn.stage_put("weather.ex", tool("Weather", "weather"))
     {:ok, %{n: n}} = Dyn.propose("weather")
@@ -45,8 +78,8 @@ defmodule Operator.RescueScreenTest do
     view = mount_screen(RescueScreen)
     assert text(view) =~ "G#{n} · candidate"
 
-    view = render_info(view, {:tap, {:revert, 0}})
-    assert text(view) =~ "needs approval"
+    view = view |> render_info({:tap, {:revert, 0}}) |> render_info({:tap, :approve_revert})
+    assert text(view) =~ "Not reverted: it needs approving"
     assert Dyn.status().generation == 0
   end
 end

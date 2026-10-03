@@ -5,9 +5,10 @@ defmodule Operator.Boot do
   `[{step, ms}]` plus the BEAM's own uptime at the end of boot.
   """
 
+  alias Operator.Auth
+  alias Operator.Auth.Login
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
-  alias Operator.OpenRouter.OAuth
 
   require Logger
 
@@ -17,11 +18,14 @@ defmodule Operator.Boot do
   def run do
     steps = [
       # The emulator (and some networks) drop outbound UDP :53, so BEAM's
-      # pure DNS returns nxdomain; seed openrouter.ai through the platform
-      # resolver (Mob.DNS.resolve/1), as muster_app does for its host.
+      # pure DNS returns nxdomain; seed the hosts the BEAM talks to (token
+      # endpoints and model APIs) through the platform resolver
+      # (Mob.DNS.resolve/1), as muster_app does for its host.
       dns: fn ->
         Mob.DNS.configure_pure_beam()
-        _ = Mob.DNS.resolve("openrouter.ai")
+
+        for host <- ~w(api.anthropic.com auth.openai.com chatgpt.com),
+            do: Mob.DNS.resolve(host)
       end,
       tz_data: fn -> :ok = Operator.TzData.install!() end,
       llm_catalog: fn -> :ok = Operator.LLMCatalog.install!() end,
@@ -31,15 +35,20 @@ defmodule Operator.Boot do
       # llm_db, finch, req).
       apps: fn -> {:ok, _} = Application.ensure_all_started(:jido_ai) end,
       jido_instance: fn -> {:ok, _} = Operator.Jido.start_link() end,
-      llmdb_first_lookup: fn ->
-        {:ok, _} = LLMDB.model("openrouter:anthropic/claude-haiku-4.5")
-      end,
+      llmdb_first_lookup: fn -> {:ok, _} = ReqLLM.model(Operator.Core.default_model()) end,
       repo: fn ->
         {:ok, _} = Application.ensure_all_started(:ecto_sqlite3)
         {:ok, _} = Operator.Repo.start_link()
       end,
-      key: fn -> Operator.KeyStore.load() end,
-      oauth: fn -> {:ok, _} = OAuth.start_link([]) end,
+      # The provider sign-ins (Operator.Auth, which model calls take their
+      # tokens from) and `/login`'s browser flow. Earlier builds kept an API
+      # key in the secure store (or, before that, a file); nothing uses it.
+      auth: fn ->
+        _ = Operator.SecureStore.delete("openrouter_api_key")
+        _ = File.rm(Path.join(Operator.Paths.data_dir(), "openrouter.key"))
+        {:ok, _} = Auth.start_link()
+        {:ok, _} = Login.start_link()
+      end,
       # The agent loop, sessions, core tools (resumes the latest session) and
       # the Dyn keeper.
       core: fn -> {:ok, _} = Operator.Core.start_link() end,

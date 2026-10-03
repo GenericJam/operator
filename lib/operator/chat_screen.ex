@@ -26,11 +26,23 @@ defmodule Operator.ChatScreen do
   aloud (`Operator.Core.Settings.voice/0`). The first send asks for the
   notification permission (the background-run notification needs it on
   Android 13+).
+
+  A proposed self-change shows with its diff; on Android its approve chip
+  is `Operator.Core.ApproveButton` (the system prompt: fingerprint, face,
+  PIN, pattern or password), whose pass activates it.
+
+  `/login anthropic`, `/login openai`, `/login anthropic <code#state>` and
+  `/logout <provider>` are the app's own commands (`Operator.Auth.Login`,
+  `Operator.Auth`): they never reach the model, and their results show as
+  notices.
   """
   use Mob.Screen
 
+  alias Operator.Auth
+  alias Operator.Auth.Login
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
+  alias Operator.Core.ApproveButton
   alias Operator.Core.DictationButton
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
@@ -71,7 +83,6 @@ defmodule Operator.ChatScreen do
        dictation_base: nil,
        notifications_asked: false,
        proposal: pending_proposal(),
-       approving: nil,
        activated: nil,
        phone: %{},
        foreground: true
@@ -318,10 +329,11 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  def handle_info({:tap, :approve_proposal}, %{assigns: %{proposal: %{gen: n}}} = socket) do
-    Native.impl().authenticate("Activate Operator generation #{n}")
-    {:noreply, Mob.Socket.assign(socket, :approving, {:activate, n})}
-  end
+  # Off Android there's no screen-lock prompt: the plain chip asks for a
+  # token unconfirmed, which only an approval needing no confirmation (the
+  # tests') grants.
+  def handle_info({:tap, :approve_proposal}, %{assigns: %{proposal: %{gen: n}}} = socket),
+    do: {:noreply, activate(socket, n)}
 
   def handle_info({:tap, :deny_proposal}, %{assigns: %{proposal: %{gen: n}}} = socket) do
     case Dyn.discard(n) do
@@ -337,40 +349,22 @@ defmodule Operator.ChatScreen do
   def handle_info({:tap, tag}, socket) when tag in [:approve_proposal, :deny_proposal],
     do: {:noreply, Mob.Socket.assign(socket, :proposal, nil) |> refresh()}
 
-  def handle_info(
-        {:biometric, :success},
-        %{assigns: %{approving: {:activate, n} = subject}} = socket
-      ) do
-    socket = Mob.Socket.assign(socket, :approving, nil)
+  # ── the approve chip (Operator.Core.ApproveButton) ──
 
-    with :ok <- Native.impl().confirm_approval(subject),
-         {:ok, token} <- Dyn.request_approval(subject),
-         {:ok, _gen} <- Dyn.activate(n, token) do
-      {:noreply,
-       socket
-       |> Mob.Socket.assign(proposal: nil, activated: n)
-       |> toast(
-         "Generation #{n} is live, on probation: it reverts by itself if it keeps crashing"
-       )}
-    else
-      {:error, reason} ->
-        {:noreply, toast(socket, "Generation #{n} not activated: #{inspect(reason)}")}
+  def handle_info({:approval, "approved", %{"subject" => {:activate, n} = subject}}, socket) do
+    case Native.impl().confirm_approval(subject) do
+      :ok -> {:noreply, activate(socket, n)}
+      {:error, reason} -> {:noreply, not_activated(socket, n, inspect(reason))}
     end
   end
 
-  def handle_info({:biometric, result}, %{assigns: %{approving: {_, n}}} = socket) do
-    why =
-      if result == :not_available,
-        do: "no fingerprint to check (none enrolled on this phone, or locked out)",
-        else: "the check failed"
+  def handle_info({:approval, "failed", %{"subject" => {:activate, n}} = payload}, socket),
+    do: {:noreply, not_activated(socket, n, ApproveButton.why("failed", payload))}
 
-    {:noreply,
-     socket
-     |> Mob.Socket.assign(:approving, nil)
-     |> toast("Generation #{n} not activated: #{why}")}
-  end
+  def handle_info({:approval, "unavailable", payload}, socket),
+    do: {:noreply, toast(socket, ApproveButton.why("unavailable", payload))}
 
-  def handle_info({:biometric, _result}, socket), do: {:noreply, socket}
+  def handle_info({:approval, _event, _payload}, socket), do: {:noreply, socket}
 
   # ── copy ──
 
@@ -425,7 +419,7 @@ defmodule Operator.ChatScreen do
 
   def handle_info({:tap, :save_model}, socket) do
     model = String.trim(socket.assigns.model_draft || "")
-    model = if String.contains?(model, ":"), do: model, else: "openrouter:" <> model
+    model = if String.contains?(model, ":"), do: model, else: Session.from_pi_model(model)
 
     case Loop.set_model(socket.assigns.loop, model) do
       :ok ->
@@ -435,6 +429,21 @@ defmodule Operator.ChatScreen do
         {:noreply, toast(socket, "Can't change the model while the agent runs")}
     end
   end
+
+  # ── sign-in (`/login`, Operator.Auth.Login) ──
+
+  def handle_info({:operator_login, provider, :ok}, socket) do
+    who =
+      case Auth.get(provider) do
+        {:ok, %{"email" => email}} -> " as #{email}"
+        _ -> ""
+      end
+
+    {:noreply, login_toast(socket, "Signed in to #{Auth.label(provider)}#{who}.")}
+  end
+
+  def handle_info({:operator_login, provider, {:error, message}}, socket),
+    do: {:noreply, login_toast(socket, "Sign-in to #{Auth.label(provider)} failed: #{message}")}
 
   def handle_info({:tap, :diagnostics}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.HomeScreen)}
@@ -691,6 +700,10 @@ defmodule Operator.ChatScreen do
       text == "" ->
         {:noreply, socket}
 
+      command?(text) ->
+        {:noreply,
+         socket |> Mob.Socket.assign(:draft, "") |> command(String.split(text, ~r/\s+/, parts: 3))}
+
       socket.assigns.status == :running ->
         :ok = Loop.steer(socket.assigns.loop, text)
         {:noreply, Mob.Socket.assign(socket, draft: "", following: true)}
@@ -703,6 +716,84 @@ defmodule Operator.ChatScreen do
 
         {:noreply, socket |> ask_notifications() |> Mob.Socket.assign(draft: "", following: true)}
     end
+  end
+
+  # `/login` and `/logout` are the app's: they never reach the model.
+  defp command?(text), do: Regex.match?(~r{^/log(in|out)(\s|$)}, text)
+
+  defp command(socket, ["/login", name]) do
+    with {:ok, provider} <- Auth.parse_provider(name),
+         {:ok, url} <- Login.begin(provider) do
+      host = URI.parse(url).host
+      login_toast(socket, "Opening #{host}: sign in there, then come back to Operator.")
+    else
+      :error -> toast(socket, login_usage())
+      {:error, reason} -> toast(socket, "Couldn't start the sign-in: #{inspect(reason)}")
+    end
+  end
+
+  # What Anthropic's page shows when it doesn't redirect back (`code#state`).
+  defp command(socket, ["/login", name, pasted]) do
+    with {:ok, provider} <- Auth.parse_provider(name),
+         :ok <- Login.paste(provider, pasted) do
+      login_toast(socket, "Code received: finishing the sign-in…")
+    else
+      :error -> toast(socket, login_usage())
+      {:error, reason} -> toast(socket, paste_error(reason, name))
+    end
+  end
+
+  defp command(socket, ["/logout", name]) do
+    case Auth.parse_provider(name) do
+      {:ok, provider} -> logout(socket, provider)
+      :error -> toast(socket, login_usage())
+    end
+  end
+
+  defp command(socket, _usage), do: login_toast(socket, login_usage())
+
+  defp logout(socket, provider) do
+    case Auth.delete(provider) do
+      :ok ->
+        toast(socket, "Signed out of #{Auth.label(provider)}.")
+
+      {:error, reason} ->
+        login_toast(
+          socket,
+          "Couldn't sign out of #{Auth.label(provider)} (#{Auth.describe_error(reason)}): " <>
+            "it is still signed in."
+        )
+    end
+  end
+
+  defp login_usage do
+    signed_in =
+      for {provider, %{signed_in: true} = st} <- Auth.status() do
+        Auth.name(provider) <> if(st.email, do: " (#{st.email})", else: "")
+      end
+
+    "/login anthropic (Claude Pro/Max) or /login openai (ChatGPT Plus/Pro); " <>
+      "/logout <provider>. Signed in: " <>
+      if(signed_in == [], do: "none", else: Enum.join(signed_in, ", "))
+  end
+
+  defp paste_error(:no_login_started, name),
+    do: "Type /login #{name} first, then paste the code its page shows."
+
+  defp paste_error({:started_for, other}, name),
+    do: "The sign-in in progress is for #{Auth.name(other)}: type /login #{name} again."
+
+  defp paste_error(:state_mismatch, name),
+    do: "That code is from another sign-in: type /login #{name} again."
+
+  defp paste_error(:no_code, _name),
+    do: "No code in that: paste what the page shows (code#state)."
+
+  # Sign-in news arrives while the browser is in front: it stays up long
+  # enough to be seen on return.
+  defp login_toast(socket, text) do
+    Process.send_after(self(), {:clear_toast, text}, 20_000)
+    socket |> Mob.Socket.assign(:toast, text) |> repaint()
   end
 
   # Once per screen: a run may go on in the background, and its notification
@@ -808,7 +899,7 @@ defmodule Operator.ChatScreen do
           "**Proposal: generation #{n}**: #{gen.rationale}\n\n" <>
             "#{passed}/#{length(tests)} selftests passed · compiled in #{gen.compile_ms || "?"} ms\n\n" <>
             "```diff\n#{diff}\n```\n\n" <>
-            "Approve with your fingerprint below, or deny it."
+            "Approve below (fingerprint, face, PIN, pattern or password), or deny it."
 
         entry = %{
           "type" => "message",
@@ -831,6 +922,23 @@ defmodule Operator.ChatScreen do
     do: [%{key: key, entry: entry}]
 
   defp proposal_message(_socket), do: []
+
+  defp activate(socket, n) do
+    with {:ok, token} <- Dyn.request_approval({:activate, n}),
+         {:ok, _gen} <- Dyn.activate(n, token) do
+      socket
+      |> Mob.Socket.assign(proposal: nil, activated: n)
+      |> toast("Generation #{n} is live, on probation: it reverts by itself if it keeps crashing")
+    else
+      {:error, :approval_required} ->
+        not_activated(socket, n, "it needs approving through the phone's screen-lock prompt")
+
+      {:error, reason} ->
+        not_activated(socket, n, inspect(reason))
+    end
+  end
+
+  defp not_activated(socket, n, why), do: toast(socket, "Generation #{n} not activated: #{why}")
 
   defp dyn_line(%{type: :activated, gen: n}), do: "Generation #{n} activated (on probation)"
   defp dyn_line(%{type: :proven, gen: n}), do: "Generation #{n} is proven"
@@ -888,7 +996,7 @@ defmodule Operator.ChatScreen do
 
   defp header(a, t) do
     # Status and cost first: the line is one row and gets cut at the end.
-    model = a.model |> String.split("/") |> List.last()
+    model = a.model |> String.split(["/", ":"]) |> List.last()
 
     tokens =
       if a.totals.tokens >= 1000,
@@ -913,7 +1021,7 @@ defmodule Operator.ChatScreen do
   defp model_editor(a, t) do
     [
       bar_row(t, [
-        field(a.model_draft, "openrouter:provider/model", :model_draft, t, weight: 1),
+        field(a.model_draft, "anthropic:… or openai_codex:…", :model_draft, t, weight: 1),
         chip("save", :save_model, t)
       ])
     ]
@@ -1007,23 +1115,41 @@ defmodule Operator.ChatScreen do
     %{type: :text, props: props, children: []}
   end
 
-  defp approval_bar(%{proposal: %{gen: n}} = a, t) do
-    waiting = if a.approving, do: " · waiting for your fingerprint", else: ""
-
+  defp approval_bar(%{proposal: %{gen: n}}, t) do
     [
       bar_row(t, [
-        text("proposal G#{n}#{waiting}", t, "accent",
+        text("proposal G#{n}", t, "accent",
           weight: 1,
           max_lines: 1,
           text_size: t.text_size - 1
         ),
-        chip("approve", :approve_proposal, t, "user"),
+        approve_chip(n, t),
         chip("deny", :deny_proposal, t, "error")
       ])
     ]
   end
 
   defp approval_bar(_a, _t), do: []
+
+  # The system screen-lock prompt; only Android has the native view so far.
+  defp approve_chip(n, t) do
+    if Term.platform() == :android do
+      Mob.UI.native_view(ApproveButton,
+        id: :approve_proposal,
+        notify: self(),
+        subject: {:activate, n},
+        label: "approve",
+        title: "Activate generation #{n}",
+        subtitle: "Operator changes its own code",
+        text_color: Term.color(t, "user"),
+        background: Term.color(t, "code_bg"),
+        text_size: t.text_size - 1,
+        font: Term.markdown_props(t).font_regular
+      )
+    else
+      chip("approve", :approve_proposal, t, "user")
+    end
+  end
 
   defp chip(label, tag, t, color \\ "fg") do
     %{

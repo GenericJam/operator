@@ -53,7 +53,7 @@ defmodule Operator.Core.TermTest do
       # unclosed while streaming: like an unclosed ** plus a lone *
       assert Markup.inline("***bol") == [{"*bol", []}]
 
-      entry = Session.assistant(%{text: "***x***", stop_reason: "stop"}, "openrouter:x/y")
+      entry = Session.assistant(%{text: "***x***", stop_reason: "stop"}, "anthropic:x")
       [row] = Term.entry_rows(entry, "m0", self(), Term.default_theme())
       assert [%{props: %{text: "x", font: :term_bold_italic}}] = row.children
     end
@@ -171,7 +171,7 @@ defmodule Operator.Core.TermTest do
 
     test "assistant markdown: mixed styles flow word by word", %{owner: owner, theme: t} do
       entry =
-        Session.assistant(%{text: "Run **mix test** now", stop_reason: "stop"}, "openrouter:x/y")
+        Session.assistant(%{text: "Run **mix test** now", stop_reason: "stop"}, "anthropic:x")
 
       [row] = Term.entry_rows(entry, "m1", owner)
 
@@ -196,7 +196,7 @@ defmodule Operator.Core.TermTest do
       entry =
         Session.assistant(
           %{text: "", tool_calls: [call], stop_reason: "toolUse"},
-          "openrouter:x/y"
+          "anthropic:x"
         )
 
       assert ["● notes(action: \"read\")"] =
@@ -223,12 +223,12 @@ defmodule Operator.Core.TermTest do
     test "errors are red and bold; notices italic", %{owner: owner, theme: t} do
       failed =
         Session.assistant(
-          %{text: "", stop_reason: "error", error: "OpenRouter 402"},
-          "openrouter:x/y"
+          %{text: "", stop_reason: "error", error: "Model call failed: 402"},
+          "anthropic:x"
         )
 
       [row] = Term.entry_rows(failed, "m5", owner)
-      assert [%{text: "✗ OpenRouter 402", font: :term_bold, text_color: red}] = texts(row)
+      assert [%{text: "✗ Model call failed: 402", font: :term_bold, text_color: red}] = texts(row)
       assert red == Term.color(t, "error")
 
       [row] = Term.entry_rows(Session.custom(:notice, "Stopped by the user."), "m6", owner)
@@ -265,7 +265,7 @@ defmodule Operator.Core.TermTest do
 
     test "a code block gets a Copy button; no fence lines are shown", %{owner: owner} do
       entry =
-        Session.assistant(%{text: "```sh\nmix test\n```", stop_reason: "stop"}, "openrouter:x/y")
+        Session.assistant(%{text: "```sh\nmix test\n```", stop_reason: "stop"}, "anthropic:x")
 
       [header, code] = Term.entry_rows(entry, "m7", owner)
 
@@ -298,8 +298,7 @@ defmodule Operator.Core.TermTest do
     end
 
     defp reply(text, extra \\ %{}),
-      do:
-        Session.assistant(Map.merge(%{text: text, stop_reason: "stop"}, extra), "openrouter:x/y")
+      do: Session.assistant(Map.merge(%{text: text, stop_reason: "stop"}, extra), "anthropic:x")
 
     defp shape(rows) do
       Enum.map(rows, fn

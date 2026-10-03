@@ -1,30 +1,32 @@
 defmodule Operator.HomeScreen do
   @moduledoc """
-  Diagnostics (and the sign-in screen when there is no key yet): OpenRouter
-  sign-in (localhost callback or pasted code), today's model spend against
-  the daily cost cap (editable), the agent stack's status, and the Dyn
-  layer: its current generation, sample proposals that run the
-  self-modification pipeline on the phone, its screens, and the way to the
-  rescue screen. Signing in hands over to `Operator.ChatScreen`.
+  Diagnostics (and the first screen while no model provider is signed in):
+  the provider sign-ins (`Operator.Auth`; signing in is `/login anthropic`
+  or `/login openai` in the chat, or scanning a login QR minted on the Mac),
+  today's model spend against the daily cost cap (editable), the agent
+  stack's status, and the Dyn layer: its current generation, sample
+  proposals that run the self-modification pipeline on the phone, its
+  screens, and the way to the rescue screen. The first sign-in hands over
+  to `Operator.ChatScreen`.
   """
   use Mob.Screen
 
+  alias Operator.Auth
   alias Operator.Core.Budget
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Samples
   alias Operator.Core.Settings
-  alias Operator.OpenRouter.OAuth
 
   def mount(params, _session, socket) do
     # The theme (terminal font token included) is installed once at boot by
     # Operator.Core.Term.install/0.
-    OAuth.subscribe()
+    :ok = Auth.subscribe()
     Dyn.subscribe()
     data_dir = Map.get(params, :data_dir) || Operator.Paths.data_dir()
 
     {:ok,
      socket
-     |> Mob.Socket.assign(oauth: OAuth.status(), code_draft: "", last: boot_line())
+     |> Mob.Socket.assign(auth: Auth.status(), last: boot_line())
      |> Mob.Socket.assign(data_dir: data_dir, cap_draft: "")
      |> spend()
      |> dyn()}
@@ -37,16 +39,17 @@ defmodule Operator.HomeScreen do
         <Text text="Operator" text_size={:xl} text_color={:on_surface} />
         <Text text={stack_line()} text_size={:sm} text_color={:muted} />
         <Spacer size={16} />
-        <Text text="OpenRouter" text_size={:sm} text_color={:muted} />
-        <Text text={oauth_line(assigns.oauth)} text_color={:primary} />
+        <Text text="Model sign-in" text_size={:sm} text_color={:muted} />
+        {auth_section(assigns.auth)}
+        <Text
+          text="Sign in from the chat: type /login anthropic (Claude Pro/Max) or /login openai (ChatGPT Plus/Pro)."
+          text_size={:sm}
+          text_color={:muted}
+        />
         <Spacer size={8} />
-        {button("Sign in with OpenRouter", :sign_in_localhost)}
+        {button("Open the chat", :open_chat)}
         <Spacer size={8} />
-        {button("Sign in (show code to paste)", :sign_in_headless)}
-        <Spacer size={8} />
-        {code_field(assigns.code_draft)}
-        <Spacer size={8} />
-        {button("Submit pasted code", :submit_code)}
+        {button("Scan login QR", :scan_login)}
         <Spacer size={24} />
         <Text text="Spending" text_size={:sm} text_color={:muted} />
         <Text text={assigns.spend_line} text_color={:primary} />
@@ -75,16 +78,20 @@ defmodule Operator.HomeScreen do
 
   # ── sign-in ──
 
-  def handle_info({:tap, :sign_in_localhost}, socket), do: begin(socket, :localhost)
-  def handle_info({:tap, :sign_in_headless}, socket), do: begin(socket, :headless)
+  def handle_info({:tap, :open_chat}, socket),
+    do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)}
 
-  def handle_info({:change, :code, value}, socket) when is_binary(value),
-    do: {:noreply, Mob.Socket.assign(socket, :code_draft, value)}
+  def handle_info({:tap, :scan_login}, socket),
+    do: {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen)}
 
-  def handle_info({:tap, :submit_code}, socket) do
-    _ = OAuth.exchange_pasted(socket.assigns.code_draft)
+  # The first sign-in (a scanned QR, say) goes on to the chat.
+  def handle_info({:operator_auth, :changed}, socket) do
+    was = signed_in?(socket.assigns.auth)
+    socket = Mob.Socket.assign(socket, :auth, Auth.status())
 
-    {:noreply, Mob.Socket.assign(socket, code_draft: "", oauth: OAuth.status())}
+    if not was and signed_in?(socket.assigns.auth),
+      do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)},
+      else: {:noreply, socket}
   end
 
   # ── spending ──
@@ -106,15 +113,6 @@ defmodule Operator.HomeScreen do
            "Not a dollar amount: #{socket.assigns.cap_draft}"
          )}
     end
-  end
-
-  def handle_info({:oauth, _phase}, socket) do
-    status = OAuth.status()
-    socket = Mob.Socket.assign(socket, :oauth, status)
-
-    if status.phase == :signed_in and status.key_present,
-      do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)},
-      else: {:noreply, socket}
   end
 
   # ── the Dyn layer ──
@@ -156,7 +154,7 @@ defmodule Operator.HomeScreen do
             "G#{gen.n} active, on probation"
           else
             {:error, :approval_required} ->
-              "G#{n} waits for approval (the biometric prompt isn't wired yet)"
+              "G#{n} waits for approval: approve it in the chat"
 
             {:error, e} ->
               "G#{n} not activated: #{inspect(e) |> String.slice(0, 300)}"
@@ -178,11 +176,6 @@ defmodule Operator.HomeScreen do
 
   # ── helpers ──
 
-  defp begin(socket, mode) do
-    _ = OAuth.begin(mode)
-    {:noreply, Mob.Socket.assign(socket, :oauth, OAuth.status())}
-  end
-
   defp button(label, tag) do
     tap = {self(), tag}
     ~MOB(<Button
@@ -193,19 +186,6 @@ defmodule Operator.HomeScreen do
   fill_width={true}
   on_tap={tap}
 />)
-  end
-
-  defp code_field(draft) do
-    %{
-      type: :text_field,
-      props: %{
-        value: draft,
-        placeholder: "paste the OpenRouter code",
-        fill_width: true,
-        on_change: {self(), :code}
-      },
-      children: []
-    }
   end
 
   defp cap_field(draft) do
@@ -253,11 +233,31 @@ defmodule Operator.HomeScreen do
     if down == [], do: "agent stack: all apps running", else: "agent stack DOWN: #{inspect(down)}"
   end
 
-  defp oauth_line(%{phase: phase, error: nil, key_fingerprint: fp}),
-    do: "#{phase}" <> if(fp, do: " · key #{fp}…", else: "")
+  defp auth_section(status) do
+    lines =
+      for provider <- Auth.providers() do
+        text = "#{Auth.label(provider)}: #{auth_line(status[provider])}"
+        ~MOB(<Text text={text} text_color={:primary} />)
+      end
 
-  defp oauth_line(%{phase: phase, error: err}),
-    do: "#{phase}: #{inspect(err) |> String.slice(0, 200)}"
+    %{type: :column, props: %{fill_width: true}, children: lines}
+  end
+
+  defp auth_line(%{signed_in: false}), do: "not signed in"
+
+  defp auth_line(%{email: email, expires: expires}) do
+    who = if email, do: "signed in as #{email}", else: "signed in"
+    minutes = div(expires - System.os_time(:millisecond), 60_000)
+
+    token =
+      if minutes > 0,
+        do: "token good for #{div(minutes, 60)} h #{rem(minutes, 60)} min",
+        else: "token refreshes on the next call"
+
+    "#{who} · #{token}"
+  end
+
+  defp signed_in?(status), do: Enum.any?(status, fn {_provider, st} -> st.signed_in end)
 
   defp boot_line do
     t = Operator.Boot.timings()

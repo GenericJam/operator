@@ -34,10 +34,12 @@ What a transfer has to deal with:
    History is fine (tool calls and results are just text); for new turns each
    host offers its own tools and tells the model what changed with a
    `custom_message` ("now on the phone: these tools are available").
-2. **Models and providers differ.** The phone uses OpenRouter; omp may use a
-   direct provider. A `model_change` entry is written on arrival; provider-
-   specific fields (`responseId`, thinking signatures, cache metadata) are
-   kept but not replayed to a different provider.
+2. **Models and providers.** The phone signs in to the same subscriptions
+   omp does (Anthropic, OpenAI Codex), so a session's `anthropic/…` or
+   `openai-codex/…` model continues as is when that provider is signed in;
+   anything else continues on the default model. Provider-specific fields
+   (`responseId`, thinking signatures, cache metadata) are kept but not
+   replayed to a different provider.
 3. **Paths and environment.** `cwd` and file paths in the history refer to the
    original host; the arrival notice says so.
 4. **Size.** omp sessions can be large: transfer the latest branch only, or a
@@ -236,15 +238,17 @@ message.
    the Android 15 emulator up to recognition (no audio played at night);
    on the Moto G 2021 the Google app's own mic permission is denied (op-i2w).
 3. **Self-modification**: generations with versioned module names, static
-   check, selftests, biometric approval, probation, automatic revert, safe
+   check, selftests, screen-lock approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn
    artifact. Built: engine, review fixes, proposal card (fingerprint approve
    / deny), the agent's `dyn_*` tools, Dyn guide in the system prompt.
    Verified: whole cycle on the Android 15 emulator with a simulated
    fingerprint (propose -> card -> fingerprint -> probation -> relaunch ->
    proven, the Dyn screen runs); on the Moto: boot, card, deny/discard; the
-   Moto has no fingerprint enrolled, so approving there needs one (or a PIN
-   fallback decision). The theme artifact is done (`Operator.Dyn.Theme`
+   Moto has no fingerprint enrolled. Approval now takes the screen lock
+   (fingerprint, face, PIN, pattern or password: the app's own
+   `OperatorApproval.kt` prompt, chat card and rescue revert; mob_biometric
+   dropped), not yet device-verified. The theme artifact is done (`Operator.Dyn.Theme`
    with `overrides/0`, applied by `Operator.Core.DynTheme`; a warm theme
    proposed, fingerprint-approved and drawn on the emulator), and automatic
    revert was seen on the emulator (a Dyn tool crashing 3 times through

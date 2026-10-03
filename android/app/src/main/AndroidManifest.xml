@@ -62,6 +62,10 @@
         </intent>
     </queries>
 
+    <!-- The self-change approval prompt (OperatorApproval.kt): BiometricPrompt
+         with the device credential allowed; without this it throws. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
     <!-- mob:plugin-permissions BEGIN (managed — regenerated each build; do not edit) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -132,6 +136,10 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <activity android:name="io.mob.scanner.MobScannerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
         <!-- mob:plugin-components END -->
     </application>
 </manifest>

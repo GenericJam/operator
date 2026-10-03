@@ -2,7 +2,7 @@ defmodule Operator.Core.Tools.DynTool do
   @moduledoc """
   What the `dyn_*` Core tools share: the agent edits its Dyn layer's
   staging copy and proposes it (`Operator.Core.Dyn`). There is deliberately
-  no tool to activate or revert: those need the human's fingerprint.
+  no tool to activate or revert: those need the human's approval (the screen lock).
 
   The tools act on the app's Keeper, or on `ctx[:dyn]` (a Keeper name; the
   selftests use their own Keeper on a temp dir, `with_selftest_keeper/1`).

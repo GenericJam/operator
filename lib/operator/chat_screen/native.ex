@@ -13,9 +13,10 @@ defmodule Operator.ChatScreen.Native do
   @callback scroll_to(String.t(), float(), float()) :: :ok | {:error, term()}
   @doc "Asks the OS for a permission; the answer comes as `{:permission, capability, result}`."
   @callback request_permission(atom()) :: :ok | {:error, term()}
-  @doc "Shows the fingerprint prompt; the answer comes as `{:biometric, :success | :failure | :not_available}`."
-  @callback authenticate(String.t()) :: :ok | {:error, term()}
-  @doc "Records that the human just passed the fingerprint check for `subject` (`Dyn.Approval.Biometric`)."
+  @doc """
+  Records that the human just passed the screen-lock prompt
+  (`Operator.Core.ApproveButton`) for `subject` (`Dyn.Approval.Biometric`).
+  """
   @callback confirm_approval(Operator.Core.Dyn.Approval.subject()) :: :ok | {:error, term()}
   @doc """
   Starts a phone action for a tool (`Operator.Core.Phone`); its result
@@ -40,14 +41,6 @@ defmodule Operator.ChatScreen.Native do
   @impl true
   def request_permission(capability) do
     _ = :mob_nif.request_permission(capability)
-    :ok
-  rescue
-    _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}
-  end
-
-  @impl true
-  def authenticate(reason) do
-    _ = :mob_biometric_nif.biometric_authenticate(reason)
     :ok
   rescue
     _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}

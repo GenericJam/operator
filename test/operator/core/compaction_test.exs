@@ -313,7 +313,7 @@ defmodule Operator.Core.CompactionTest do
                )
 
       assert notice["customType"] == "operator.error"
-      assert notice["content"] =~ "Compacting the context failed: OpenRouter 402"
+      assert notice["content"] =~ "Compacting the context failed: 402"
       assert %{type: :turn_end, error: "Compacting" <> _} = Enum.at(events, -2)
 
       refute Enum.any?(lines(session.path), &(&1["type"] == "compaction"))

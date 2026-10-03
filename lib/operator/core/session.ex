@@ -57,7 +57,7 @@ defmodule Operator.Core.Session do
   def dir, do: Path.join(Operator.Paths.data_dir(), "sessions")
 
   @doc """
-  A new session in `dir` for `model` (a req_llm spec, `"openrouter:…"`).
+  A new session in `dir` for `model` (a req_llm spec, `"anthropic:…"`).
   Nothing is written until the first `append/2`, which writes the header
   (titled after the first user message) and a `model_change` entry.
   """
@@ -204,7 +204,7 @@ defmodule Operator.Core.Session do
     message = %{
       "role" => "assistant",
       "content" => content,
-      "api" => provider,
+      "api" => pi_api(provider),
       "provider" => provider,
       "model" => model_id,
       "usage" => usage(reply[:usage]),
@@ -243,7 +243,7 @@ defmodule Operator.Core.Session do
     }
   end
 
-  @doc "Records a model switch; `model` is a req_llm spec (`\"openrouter:…\"`)."
+  @doc ~S|Records a model switch; `model` is a req_llm spec (`"anthropic:…"`).|
   @spec model_change(String.t()) :: entry()
   def model_change(model), do: %{"type" => "model_change", "model" => to_pi_model(model)}
 
@@ -502,13 +502,33 @@ defmodule Operator.Core.Session do
     }
   end
 
-  @doc ~S|`"openrouter:anthropic/x"` (req_llm) → `"openrouter/anthropic/x"` (pi).|
-  @spec to_pi_model(String.t()) :: String.t()
-  def to_pi_model(spec), do: String.replace(spec, ":", "/", global: false)
+  # req_llm's provider ids where pi's differ, and the `api` pi records per provider.
+  @pi_providers %{"openai_codex" => "openai-codex"}
+  @pi_apis %{"anthropic" => "anthropic-messages", "openai-codex" => "openai-codex-responses"}
 
-  @doc ~S|`"openrouter/anthropic/x"` (pi) → `"openrouter:anthropic/x"` (req_llm).|
+  @doc ~S|`"openai_codex:gpt-5"` (req_llm) → `"openai-codex/gpt-5"` (pi).|
+  @spec to_pi_model(String.t()) :: String.t()
+  def to_pi_model(spec) do
+    {provider, id} = split_model(spec)
+    "#{provider}/#{id}"
+  end
+
+  @doc ~S|`"openai-codex/gpt-5"` (pi) → `"openai_codex:gpt-5"` (req_llm).|
   @spec from_pi_model(String.t()) :: String.t()
-  def from_pi_model(pi_model), do: String.replace(pi_model, "/", ":", global: false)
+  def from_pi_model(pi_model) do
+    case String.split(pi_model, "/", parts: 2) do
+      [provider, id] -> "#{req_llm_provider(provider)}:#{id}"
+      [id] -> id
+    end
+  end
+
+  defp req_llm_provider(pi_provider) do
+    Enum.find_value(@pi_providers, pi_provider, fn {req_llm, pi} ->
+      if pi == pi_provider, do: req_llm
+    end)
+  end
+
+  defp pi_api(pi_provider), do: Map.get(@pi_apis, pi_provider, pi_provider)
 
   # ── helpers ──
 
@@ -577,10 +597,11 @@ defmodule Operator.Core.Session do
 
   defp title_for(_entry), do: ""
 
+  # `{pi provider, model id}` of a req_llm spec.
   defp split_model(model) do
     case String.split(model, ":", parts: 2) do
-      [provider, id] -> {provider, id}
-      [id] -> {"openrouter", id}
+      [provider, id] -> {Map.get(@pi_providers, provider, provider), id}
+      [id] -> {"unknown", id}
     end
   end
 

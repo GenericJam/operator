@@ -83,7 +83,7 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert Store.current(dir) == n
   end
 
-  test "the production approval: only a fresh fingerprint confirmation of that subject",
+  test "the production approval: only a fresh confirmation of that subject",
        %{tmp_dir: dir} do
     alias Operator.Core.Dyn.Approval.Biometric
 

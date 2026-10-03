@@ -19,7 +19,8 @@ defmodule Operator.Core.Tools.DynPropose do
   def description do
     "Propose the staged Dyn sources as a new generation: they are checked, compiled and " <>
       "selftested, and the result (diff, tests, or every error with file:line) comes back. " <>
-      "It does NOT activate anything: the human must approve it on the phone with a fingerprint."
+      "It does NOT activate anything: the human must approve it on the phone with the screen " <>
+      "lock (fingerprint, face, PIN, pattern or password)."
   end
 
   @impl true
@@ -64,7 +65,7 @@ defmodule Operator.Core.Tools.DynPropose do
     """
     Proposed generation G#{p.n} (on top of G#{p.parent}): #{p.rationale}
 
-    It is NOT active. The human has to approve it on the phone with a fingerprint; you can't \
+    It is NOT active. The human has to approve it on the phone with the screen lock; you can't \
     activate it yourself. Once approved it runs on probation and is reverted automatically if \
     it keeps crashing.
 

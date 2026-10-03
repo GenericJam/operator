@@ -8,7 +8,7 @@ defmodule Operator.Test.LoopHelpers do
   alias Operator.Core.Session
   alias Operator.Test.FakeLLM
 
-  @model "openrouter:anthropic/claude-haiku-4.5"
+  @model "anthropic:claude-haiku-4-5"
 
   def model, do: @model
 

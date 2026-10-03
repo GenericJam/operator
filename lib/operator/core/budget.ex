@@ -1,7 +1,8 @@
 defmodule Operator.Core.Budget do
   @moduledoc """
   The per-day cost cap (DESIGN.md §5): what the model calls cost today,
-  from the usage OpenRouter reports on each reply, against
+  priced by req_llm from each reply's usage (notional on a Claude or
+  ChatGPT subscription), against
   `Operator.Core.Settings.daily_cap/1`.
 
   The ledger is `spend.json` in the data dir, `{"YYYY-MM-DD" => dollars}`

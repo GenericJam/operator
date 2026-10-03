@@ -10,7 +10,7 @@ defmodule Operator.Dyn.Checklist do
   @seed [
     %{id: 1, title: "Read the change log", done: true, tag: :ops},
     %{id: 2, title: "Pick a model", done: false, tag: :agent},
-    %{id: 3, title: "Sign in to OpenRouter", done: false, tag: :auth},
+    %{id: 3, title: "Sign in to Claude", done: false, tag: :auth},
     %{id: 4, title: "Compile a screen on the phone", done: true, tag: :selfmod},
     %{id: 5, title: "Persist and recompile at boot", done: false, tag: :selfmod}
   ]

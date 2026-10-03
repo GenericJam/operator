@@ -64,7 +64,7 @@ defmodule Operator.Core.Tools.DynStatus do
         {:error, _} -> ""
       end
 
-    "Proposal G#{n} waits for the human's fingerprint#{rationale}"
+    "Proposal G#{n} waits for the human's approval#{rationale}"
   end
 
   defp events([]), do: "No recent events."

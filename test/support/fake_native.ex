@@ -27,12 +27,6 @@ defmodule Operator.Test.FakeNative do
     :ok
   end
 
-  @impl true
-  def authenticate(reason) do
-    send(self(), {:authenticate, reason})
-    :ok
-  end
-
   # Tests run the Keeper with Operator.Test.Dyn.Approval, which needs no confirmation.
   @impl true
   def confirm_approval(subject) do

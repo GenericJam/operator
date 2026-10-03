@@ -4,9 +4,10 @@ Operator (`com.genericjam.operator`) is a mob app (Elixir on the phone's own
 BEAM) that is an omp-style coding agent running entirely on the phone: a
 Jido.AI ReAct loop, the session stored on device, phone tools, and
 self-modification (it compiles new screens/tools for itself, gated by tests
-and a biometric approval). The model is reached through OpenRouter (OAuth
-PKCE sign-in). Read `docs/SPIKE.md` first: it records what was proven on an
-emulator, the numbers, and the recommended architecture.
+and a biometric approval). The model is Claude or ChatGPT on the user's
+subscription, signed in as omp does (`/login anthropic`, `/login openai` in
+the chat; `Operator.Auth`). Read `docs/SPIKE.md` first: it records what was
+proven on an emulator, the numbers, and the recommended architecture.
 
 ## Working on it
 
@@ -16,7 +17,7 @@ emulator, the numbers, and the recommended architecture.
   BEAM-only changes. Android emulators only for now (iOS untested).
 - Drive the running app over dist: `mix mob.connect --no-iex --no-restart`,
   then `scripts/rpc.sh '<elixir>'` (see the script header).
-- Never print or commit the OpenRouter key; it lives on the device only.
+- Never print or commit a sign-in token; they live on the device only.
 
 # Beads
 

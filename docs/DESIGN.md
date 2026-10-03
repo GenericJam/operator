@@ -1,7 +1,7 @@
 # Operator design: an omp-shaped agent that rewrites itself on the phone
 
 Status: **accepted 2026-10-02** by Kevin: Core fixed (changed only by a
-release from the Mac), Dyn self-editable; every self-change needs biometric
+release from the Mac), Dyn self-editable; every self-change needs screen-lock
 approval in v1. Builds on `docs/SPIKE.md` (on-device compile 0.1–0.3 s,
 persisted sources recompile at boot, OpenRouter sign-in, streaming and tool
 calls via req_llm on a Moto G 2021).
@@ -68,7 +68,8 @@ only once nothing references them.
    timeout, and `trap_exit`: screens must mount + render, tools must pass
    their own `selftest/0`, hooks get a canned request. Any failure stops here.
 5. **Approval**: a card with the diff, rationale and test results; Kevin
-   approves with **biometrics** (deny needs no biometric). Small policy
+   approves with the **screen lock**: biometrics or the phone's PIN, pattern
+   or password (Kevin's decision, 2026-10-03; deny needs none). Small policy
    changes can be configured to auto-approve later; not in v1.
 6. **Activate** (registry swap + `current` pointer) under **probation**: the
    generation is "unproven" until it has run for a while (first render of
@@ -148,7 +149,7 @@ the file **is** pi's format; the types live in
   file name `<ISO time>_<id>.jsonl` under `<data dir>/sessions`, as omp names them.
 - Every entry: `type`, `id` (8 hex), `parentId` (a tree; Operator appends a
   linear chain, the last entry is the leaf), ISO `timestamp`.
-- Written by Operator: `model_change` (`"openrouter/<model>"`, first and on
+- Written by Operator: `model_change` (`"anthropic/<model>"`, `"openai-codex/<model>"`, first and on
   switches), `message` with pi's user / assistant (`text`/`thinking`/
   `toolCall` content, `api`/`provider`/`model`, `usage`, `stopReason`,
   `errorMessage`) / `toolResult` shapes, and `custom_message`
@@ -158,7 +159,7 @@ the file **is** pi's format; the types live in
   leaf's branch and uses `message` and `custom_message` entries, like pi's
   `buildSessionContext`; compaction entries are ignored until step 3.
   `custom_message` goes to the model as a user message (pi sends it as a
-  developer message, which OpenRouter's chat API has no slot for).
+  developer message, which not every provider's chat API has a slot for).
 - Planned entries from §2 (`generation`) will be pi `custom` entries, which
   omp carries but ignores.
 
@@ -203,11 +204,25 @@ Each with name, description, schema (Jido.Action), streaming progress, and a
 `selftest/0`.
 
 ## 5. Model and cost
-OpenRouter via req_llm (key from the PKCE sign-in, moving to the platform
-secure store). Default model: a cheap Claude/GPT tier for chat, a stronger
-one for self-modification work, both user-selectable; per-day cost cap
-enforced by the loop from OpenRouter's reported usage, with an optional hard
-limit on the OpenRouter key itself.
+Claude (Pro/Max) and ChatGPT (Plus/Pro, Codex) through req_llm, signed in
+on the phone as omp does: `/login anthropic` / `/login openai` in the chat
+runs the provider's OAuth PKCE flow with its own localhost redirect
+(54545 / 1455) answered by the phone's BEAM, and `Operator.Auth` keeps the
+credentials in the platform secure store, refreshing the access token
+before each call when due. Default model: the cheapest current Claude
+(`anthropic:claude-haiku-4-5`), user-selectable; per-day cost cap enforced
+by the loop from req_llm's priced usage (notional on a subscription).
+
+Moving a login from the Mac: `mix operator.login anthropic|openai` runs the
+provider's OAuth sign-in in the Mac's browser (a one-shot listener on the
+provider's localhost port, 54545 / 1455, so omp's own `/login` must not be
+running), and seals the fresh grant with `Operator.Auth.Transfer` into a QR
+(`operator-login:1:…`, AES-256-GCM under PBKDF2-SHA256 of six EFF
+short-list words, 10-minute lifetime) plus the six words. Diagnostics →
+Scan login QR (`Operator.LoginScanScreen`, mob_scanner) opens it and stores
+it with `Operator.Auth.put/2`. Each run is a new grant, so omp and the phone
+never share a rotating refresh token; only the refresh token travels (an
+OpenAI access token alone is ~1.8 kB), and the phone refreshes on first use.
 
 ## 6. Known constraints
 - Android 15 cuts a backgrounded app's network after ~60 s: a run pauses

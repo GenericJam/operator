@@ -35,16 +35,17 @@ end
 
 defmodule Operator.Core.Dyn.Approval.Biometric do
   @moduledoc """
-  The production approval: a fingerprint or face check (mob_biometric) in
-  the screen that shows the proposal. A small Core process under
-  `Operator.Core` holds what the human confirmed.
+  The production approval: the system screen-lock prompt (fingerprint,
+  face, or the phone's PIN, pattern or password) behind the approve chip,
+  `Operator.Core.ApproveButton`, in the screen that shows the change. This
+  small Core process under `Operator.Core` holds what the human confirmed.
 
   The screen's flow:
 
-      MobBiometric.authenticate(socket, ...)          # the prompt
-      # handle_info({:biometric, :success}, socket):
-      :ok = Biometric.confirm({:activate, n})
-      {:ok, token} = Operator.Core.Dyn.request_approval({:activate, n})
+      Mob.UI.native_view(ApproveButton, id: ..., notify: self(), subject: {:activate, n})
+      # handle_info({:approval, "approved", %{"subject" => {:activate, n} = s}}, socket):
+      :ok = Biometric.confirm(s)
+      {:ok, token} = Operator.Core.Dyn.request_approval(s)
       {:ok, gen} = Operator.Core.Dyn.activate(n, token)
 
   * `confirm/1` records that the human just approved `subject`: valid for
@@ -69,7 +70,7 @@ defmodule Operator.Core.Dyn.Approval.Biometric do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @doc "The human approved `subject` (call right after `{:biometric, :success}`)."
+  @doc "The human approved `subject` (call right after the approve chip's `\"approved\"`)."
   @spec confirm(Approval.subject()) :: :ok
   def confirm(subject), do: GenServer.call(__MODULE__, {:confirm, subject})
 

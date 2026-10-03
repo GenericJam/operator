@@ -13,9 +13,6 @@ object MobPluginBootstrap {
 
     @JvmStatic
     fun registerAll(activity: Activity) {
-        io.mob.biometric.MobBiometricBridge.register()
-        handOff(io.mob.biometric.MobBiometricBridge, activity)
-        collectPermissionProvider(io.mob.biometric.MobBiometricBridge)
         io.mob.background.MobBackgroundBridge.register()
         handOff(io.mob.background.MobBackgroundBridge, activity)
         collectPermissionProvider(io.mob.background.MobBackgroundBridge)
@@ -31,6 +28,9 @@ object MobPluginBootstrap {
         io.mob.photos.MobPhotosBridge.register()
         handOff(io.mob.photos.MobPhotosBridge, activity)
         collectPermissionProvider(io.mob.photos.MobPhotosBridge)
+        io.mob.scanner.MobScannerBridge.register()
+        handOff(io.mob.scanner.MobScannerBridge, activity)
+        collectPermissionProvider(io.mob.scanner.MobScannerBridge)
     }
 
     // Returns the first plugin-supplied Android permission mapping for `cap`,
