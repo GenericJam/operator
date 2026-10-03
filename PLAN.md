@@ -96,32 +96,67 @@ field, approvals and the rest of the app stay native.
 Operator isn't going to an app store yet, so **Android comes first** and iOS
 gets the best it can without store review.
 
-- **Android: keep running while backgrounded.** Activate the existing
-  `mob_background` plugin (0.1.2: a foreground service with a persistent
-  notification) for the duration of an agent run, and stop it when the run
-  ends. This should also lift the problem the spike measured: Android 15
-  cut a backgrounded app's network ~60 s after it left the screen; to be
-  verified on the Moto G with a run that outlasts that.
+- **Android: keep running while backgrounded.** Done (code; device checks
+  below): `mob_background` 0.1.2 is activated (signature verified against
+  the mob release key) and `Operator.Core.KeepAlive` turns its `dataSync`
+  foreground service on at a run's start and off 20 s after the last run
+  ended (no flapping between back-to-back runs; a loop that dies or is
+  replaced by a new session counts as ended). The service class is copied
+  into `android/.../io/mob/background/` and declared in the manifest, as
+  the plugin requires. This should also lift the problem the spike
+  measured: Android 15 cut a backgrounded app's network ~60 s after it
+  left the screen.
   - `mob_background` declares a `dataSync` foreground service. Since
-    Android 15, `dataSync` may run at most 6 hours per 24 h (the system
-    then calls `onTimeout` and the service must stop). Fine for agent
-    runs; if it ever bites, switch the plugin to `specialUse` (no time
-    limit; its justification only matters for Play Store review).
-  - The notification shows what the agent is doing ("Running: editing
-    Notes screen · 3 tools"), with Stop.
+    Android 15, `dataSync` may run at most 6 hours per 24 h (0.1.2 handles
+    `onTimeout` by stopping). Fine for agent runs; if it ever bites, switch
+    the plugin to `specialUse` (no time limit; its justification only
+    matters for Play Store review).
+  - Not yet: the notification showing what the agent is doing ("Running:
+    editing Notes screen · 3 tools") with Stop. 0.1.2's text is fixed
+    ("Running in background") and it has no action; it needs a plugin
+    release (an update-text NIF, a Stop action that reaches the BEAM).
+  - Android 13+ shows the notification only once POST_NOTIFICATIONS is
+    granted (declared in the manifest; the app doesn't request it yet:
+    `Mob.Permissions.request(socket, :notifications)` from the chat screen).
+    The service runs either way.
 - **iOS: tell people to keep the app in front**, or keep an audio session
   alive. `mob_background` already does the latter with a silent
   `AVAudioEngine` session; acceptable here because there's no store review.
-- **The agent speaks.** mob has text-to-speech on both platforms
-  (`Mob.Speech.speak/3`, `stop_speaking/1`). Operator reads out what
-  matters (finished, needs approval, error, a short summary of a long
-  reply), with a toggle and a "speak everything" option. On iOS, speech is
-  also a legitimate reason to hold an audio session in the background
-  (to verify: that `Mob.Speech` uses a playback session category that
-  keeps playing when backgrounded).
+  Same code path as Android; untested.
+- **The agent speaks.** Done (code; device checks below):
+  `Operator.Core.Voice` reads out a finished run (first sentence of the
+  final reply, ≤ 200 chars, Markdown stripped), stopped, error (its first
+  sentence) and the step limit. Setting `Operator.Core.Settings.voice/0`
+  (`:off | :important | :everything`, default `:important`;
+  `put_voice/1`), in `settings.json` in the data dir; `:everything` also
+  reads each assistant reply. While an utterance plays (estimated from its
+  length; the platforms don't report the end) a reply is skipped and a
+  run-end line interrupts it. Speech from a non-screen process: `Mob.Speech`
+  ignores its socket and calls `:mob_nif.tts_speak/2` / `tts_stop/0`, which
+  work from any process; Android's needs the Activity to exist (it does
+  while backgrounded, unless the system destroyed it).
+  - Not yet: the ChatScreen toggle (after the Markdown view lands), "needs
+    approval" (no approval event in the loop yet).
+  - iOS: `Mob.Speech` sets no audio session category; in the background it
+    plays under the keep-alive's (Playback, MixWithOthers), which stays on
+    20 s after a run so the run-end line can finish. To verify.
 - **Coming back to the app** shows what happened while away (the transcript
   is the record), and a notification is posted when a backgrounded run
   finishes or needs approval (biometric approval needs the app in front).
+  Not yet (needs `mob_notify`).
+
+Device checks (Moto G, `mix mob.deploy --native --android`, which also
+regenerates the tracked plugin bootstrap / bridge Kotlin; commit those):
+
+1. A run that outlasts 60 s with the app backgrounded (screen off too):
+   tool calls and model calls keep going, the network stays up, the run
+   finishes; the foreground-service notification appears at the start and
+   goes away ~20 s after the end.
+2. Notification text: "Running in background" (fixed in 0.1.2), visible
+   only with POST_NOTIFICATIONS granted.
+3. Speech audible: run finished (foreground and backgrounded), Stop, an
+   error (e.g. a bad model), `put_voice(:everything)` / `:off` over rpc.
+4. iOS: not tested.
 
 ## Transcript rendering contract (phone ⇄ omp)
 

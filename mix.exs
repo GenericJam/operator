@@ -36,6 +36,9 @@ defmodule Operator.MixProject do
       {:zoi, "~> 0.18.10 and < 0.18.11"},
       # Fingerprint/face gate on applying a self-modification.
       {:mob_biometric, "~> 0.1.5"},
+      # Keeps the app running while an agent run is backgrounded (Android
+      # foreground service; iOS silent audio session): Operator.Core.KeepAlive.
+      {:mob_background, "~> 0.1.2"},
       # Mozilla CA bundle: Android has no system CA store the BEAM can find
       # (see Operator.Certs).
       {:castore, "~> 1.0"},

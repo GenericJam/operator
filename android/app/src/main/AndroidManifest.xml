@@ -28,7 +28,11 @@
          plugin's plain-string permission list can't express maxSdkVersion="32"
          on the legacy one — harmless (no-op on API 33+). -->
 
-    <!-- POST_NOTIFICATIONS moved to the mob_notify plugin manifest. -->
+    <!-- POST_NOTIFICATIONS (API 33+, runtime-granted) makes the mob_background
+         keep-alive notification visible in the tray; without the grant the
+         foreground service still runs, its notification only shows in the
+         task manager. Request it with Mob.Permissions (:notifications). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- AlarmManager for scheduled local notifications -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -96,6 +100,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_provider_paths" />
         </provider>
+
+        <!-- mob_background keep-alive (Operator.Core.KeepAlive): a foreground
+             service must be a host-package class, so its source is copied from
+             deps/mob_background/priv/native/android/ into io/mob/background/. -->
+        <service android:name="io.mob.background.BeamForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 </manifest>

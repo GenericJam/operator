@@ -74,9 +74,12 @@ defmodule Operator.Core.Loop do
   @spec stop(GenServer.server()) :: :ok
   def stop(loop), do: GenServer.call(loop, :stop)
 
-  @doc "Sends the caller `{:operator_core, session_id, event}` for every event."
-  @spec subscribe(GenServer.server()) :: :ok
-  def subscribe(loop), do: GenServer.call(loop, {:subscribe, self()})
+  @doc """
+  Sends `pid` (the caller by default) `{:operator_core, session_id, event}`
+  for every event, until it exits or unsubscribes.
+  """
+  @spec subscribe(GenServer.server(), pid()) :: :ok
+  def subscribe(loop, pid \\ self()), do: GenServer.call(loop, {:subscribe, pid})
 
   @spec unsubscribe(GenServer.server()) :: :ok
   def unsubscribe(loop), do: GenServer.call(loop, {:unsubscribe, self()})

@@ -2,8 +2,11 @@ defmodule Operator.Core do
   @moduledoc """
   The fixed core (docs/DESIGN.md §1): the agent loop, sessions, core tools.
   Started by `Operator.Boot`; supervises the tool registry, the task
-  supervisor tools run under, the loops, and `Operator.Core.Current`
-  (which session the app is showing; the latest one is resumed at boot).
+  supervisor tools run under, the loops, `Operator.Core.Current`
+  (which session the app is showing; the latest one is resumed at boot),
+  and the observers of its runs: `Operator.Core.KeepAlive` (keeps the app
+  running in the background during a run) and `Operator.Core.Voice`
+  (reads updates aloud).
 
   Config (`config :operator, ...`): `:default_model` (a req_llm spec,
   default `#{inspect("openrouter:anthropic/claude-haiku-4.5")}`), `:max_tokens` (4096).
@@ -21,7 +24,10 @@ defmodule Operator.Core do
       Operator.Core.ToolRegistry,
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
-      Operator.Core.Current
+      Operator.Core.Current,
+      # After Current, which they watch for loops (they re-watch if it restarts).
+      Operator.Core.KeepAlive,
+      Operator.Core.Voice
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -61,6 +67,14 @@ defmodule Operator.Core.Current do
   Which session's loop the app is showing. At start it resumes the most
   recently written session (or prepares a new one); if that loop dies, the
   next `current/0` reopens the session from its file.
+
+  Background observers (`Operator.Core.KeepAlive`, `Operator.Core.Voice`)
+  `watch/1` it: each loop it starts (or has, at the time of the call) gets
+  the watcher subscribed to its events before anyone can prompt it, and the
+  watcher is sent `{:operator_core_loop, loop_pid, session_id}`.
+
+  Options: `:name` (default `#{inspect(__MODULE__)}`), `:dir` (sessions),
+  `:loop_sup` (the DynamicSupervisor loops run under), `:loop_opts`.
   """
   use GenServer
 
@@ -70,13 +84,18 @@ defmodule Operator.Core.Current do
   require Logger
 
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts \\ []),
+    do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
 
-  @spec current() :: pid()
-  def current, do: GenServer.call(__MODULE__, :current)
+  @spec current(GenServer.server()) :: pid()
+  def current(server \\ __MODULE__), do: GenServer.call(server, :current)
 
-  @spec new_session() :: pid()
-  def new_session, do: GenServer.call(__MODULE__, :new_session)
+  @spec new_session(GenServer.server()) :: pid()
+  def new_session(server \\ __MODULE__), do: GenServer.call(server, :new_session)
+
+  @doc "Subscribes the caller to the current loop and every later one (see the moduledoc)."
+  @spec watch(GenServer.server()) :: :ok
+  def watch(server \\ __MODULE__), do: GenServer.call(server, {:watch, self()})
 
   @impl true
   def init(opts) do
@@ -88,6 +107,9 @@ defmodule Operator.Core.Current do
        path: Session.latest(dir),
        pid: nil,
        ref: nil,
+       session_id: nil,
+       watchers: %{},
+       loop_sup: Keyword.get(opts, :loop_sup, Operator.Core.LoopSup),
        loop_opts: Keyword.get(opts, :loop_opts, [])
      }}
   end
@@ -110,10 +132,27 @@ defmodule Operator.Core.Current do
     {:reply, s.pid, s}
   end
 
+  def handle_call({:watch, pid}, _from, s) do
+    watchers =
+      if Map.has_key?(s.watchers, pid),
+        do: s.watchers,
+        else: Map.put(s.watchers, pid, Process.monitor(pid))
+
+    if s.pid, do: announce(s.pid, s.session_id, [pid])
+    {:reply, :ok, %{s | watchers: watchers}}
+  end
+
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{ref: ref} = s) do
     Logger.warning("[core] session loop exited: #{inspect(reason)}")
     {:noreply, %{s | pid: nil, ref: nil}}
+  end
+
+  def handle_info({:DOWN, ref, :process, pid, _reason}, s) do
+    case s.watchers do
+      %{^pid => ^ref} -> {:noreply, %{s | watchers: Map.delete(s.watchers, pid)}}
+      _ -> {:noreply, s}
+    end
   end
 
   def handle_info(_message, s), do: {:noreply, s}
@@ -139,12 +178,28 @@ defmodule Operator.Core.Current do
     opts =
       [session: session, entries: entries, max_tokens: Operator.Core.max_tokens()] ++ s.loop_opts
 
-    {:ok, pid} = DynamicSupervisor.start_child(Operator.Core.LoopSup, {Loop, opts})
-    %{s | pid: pid, ref: Process.monitor(pid), path: session.path}
+    {:ok, pid} = DynamicSupervisor.start_child(s.loop_sup, {Loop, opts})
+    announce(pid, session.id, Map.keys(s.watchers))
+
+    %{s | pid: pid, ref: Process.monitor(pid), path: session.path, session_id: session.id}
+  end
+
+  # A watcher monitors the loop it is told about, so one that died before its
+  # `:DOWN` reached us is cleaned up on the watcher's side.
+  defp announce(loop, session_id, watchers) do
+    for w <- watchers do
+      try do
+        Loop.subscribe(loop, w)
+      catch
+        :exit, _ -> :ok
+      end
+
+      send(w, {:operator_core_loop, loop, session_id})
+    end
   end
 
   defp stop_loop(s) do
     Process.demonitor(s.ref, [:flush])
-    DynamicSupervisor.terminate_child(Operator.Core.LoopSup, s.pid)
+    DynamicSupervisor.terminate_child(s.loop_sup, s.pid)
   end
 end
