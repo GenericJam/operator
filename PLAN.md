@@ -238,18 +238,26 @@ message.
 3. **Self-modification**: generations with versioned module names, static
    check, selftests, biometric approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn
-   artifact. Engine built and booted on the Moto (generation 0); the chat
-   screen's proposal card (fingerprint approve / deny) and the agent's
-   `dyn_*` tools are next; approval testing needs Kevin's finger. Phone
-   tools become Dyn-replaceable by shipping them in a seed generation (a
-   Core tool's name can't be taken by a Dyn tool).
+   artifact. Built: engine, review fixes, proposal card (fingerprint approve
+   / deny), the agent's `dyn_*` tools, Dyn guide in the system prompt.
+   Verified: whole cycle on the Android 15 emulator with a simulated
+   fingerprint (propose -> card -> fingerprint -> probation -> relaunch ->
+   proven, the Dyn screen runs); on the Moto: boot, card, deny/discard; the
+   Moto has no fingerprint enrolled, so approving there needs one (or a PIN
+   fallback decision). Not yet: the agent writing a change itself (no
+   OpenRouter credit left), automatic revert on a device, the theme
+   artifact. Phone tools become Dyn-replaceable by shipping them in a seed
+   generation (a Core tool's name can't be taken by a Dyn tool).
 4. **Phone tools, context management**: camera/photos/location/notifications/
    http; output budget + artifacts; compaction; cost cap. Done and
    device-verified: output budget + `read_artifact`, compaction (pi's soft
-   method, pi-shaped entries), daily cost cap ($1.00 default). Built:
-   `http_get`, `clipboard`. Not started: camera, photos, location,
-   notifications (each needs its mob plugin).
+   method, pi-shaped entries), daily cost cap ($1.00 default), `location`,
+   `notify`, `camera_photo` and `pick_photos` (through the chat screen, which
+   asks for permissions; cancel paths verified, no photo taken at night),
+   `clipboard`; `http_get` unit-tested.
 5. **Session transfer omp ⇄ phone** (this document's compatibility section),
-   starting with export/import files, then Muster as the relay.
+   starting with export/import files, then Muster as the relay. Files over
+   adb done (`scripts/session.sh pull|push`, verified both ways); Muster
+   relay not started.
 6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
    background).
