@@ -1,26 +1,32 @@
 defmodule Operator.HomeScreen do
   @moduledoc """
   Diagnostics (and the sign-in screen when there is no key yet): OpenRouter
-  sign-in (localhost callback or pasted code), the agent stack's status,
-  and the Dyn layer: its current generation, sample proposals that run the
+  sign-in (localhost callback or pasted code), today's model spend against
+  the daily cost cap (editable), the agent stack's status, and the Dyn
+  layer: its current generation, sample proposals that run the
   self-modification pipeline on the phone, its screens, and the way to the
   rescue screen. Signing in hands over to `Operator.ChatScreen`.
   """
   use Mob.Screen
 
+  alias Operator.Core.Budget
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Samples
+  alias Operator.Core.Settings
   alias Operator.OpenRouter.OAuth
 
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     # The theme (terminal font token included) is installed once at boot by
     # Operator.Core.Term.install/0.
     OAuth.subscribe()
     Dyn.subscribe()
+    data_dir = Map.get(params, :data_dir) || Operator.Paths.data_dir()
 
     {:ok,
      socket
      |> Mob.Socket.assign(oauth: OAuth.status(), code_draft: "", last: boot_line())
+     |> Mob.Socket.assign(data_dir: data_dir, cap_draft: "")
+     |> spend()
      |> dyn()}
   end
 
@@ -41,6 +47,13 @@ defmodule Operator.HomeScreen do
         {code_field(assigns.code_draft)}
         <Spacer size={8} />
         {button("Submit pasted code", :submit_code)}
+        <Spacer size={24} />
+        <Text text="Spending" text_size={:sm} text_color={:muted} />
+        <Text text={assigns.spend_line} text_color={:primary} />
+        <Spacer size={8} />
+        {cap_field(assigns.cap_draft)}
+        <Spacer size={8} />
+        {button("Save daily cap", :save_cap)}
         <Spacer size={24} />
         <Text text="Dyn layer (self-modification)" text_size={:sm} text_color={:muted} />
         <Text text={assigns.dyn_line} text_color={:primary} />
@@ -72,6 +85,27 @@ defmodule Operator.HomeScreen do
     _ = OAuth.exchange_pasted(socket.assigns.code_draft)
 
     {:noreply, Mob.Socket.assign(socket, code_draft: "", oauth: OAuth.status())}
+  end
+
+  # ── spending ──
+
+  def handle_info({:change, :cap, value}, socket) when is_binary(value),
+    do: {:noreply, Mob.Socket.assign(socket, :cap_draft, value)}
+
+  def handle_info({:tap, :save_cap}, socket) do
+    case Float.parse(String.trim(socket.assigns.cap_draft)) do
+      {cap, ""} when cap >= 0 ->
+        :ok = Settings.put_daily_cap(cap, socket.assigns.data_dir)
+        {:noreply, socket |> Mob.Socket.assign(cap_draft: "") |> spend()}
+
+      _ ->
+        {:noreply,
+         Mob.Socket.assign(
+           socket,
+           :spend_line,
+           "Not a dollar amount: #{socket.assigns.cap_draft}"
+         )}
+    end
   end
 
   def handle_info({:oauth, _phase}, socket) do
@@ -172,6 +206,26 @@ defmodule Operator.HomeScreen do
       },
       children: []
     }
+  end
+
+  defp cap_field(draft) do
+    %{
+      type: :text_field,
+      props: %{
+        value: draft,
+        placeholder: "new daily cap in dollars, e.g. 2.50",
+        fill_width: true,
+        on_change: {self(), :cap}
+      },
+      children: []
+    }
+  end
+
+  defp spend(socket) do
+    dir = socket.assigns.data_dir
+    spent = :erlang.float_to_binary(Budget.spent(dir), decimals: 4)
+    cap = :erlang.float_to_binary(Settings.daily_cap(dir), decimals: 2)
+    Mob.Socket.assign(socket, :spend_line, "Today $#{spent} of the $#{cap} daily cap")
   end
 
   defp dyn_section([]), do: ~MOB(<Text text="No Dyn screens" text_color={:muted} />)
