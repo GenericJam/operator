@@ -1,8 +1,9 @@
 defmodule Operator.Core do
   @moduledoc """
   The fixed core (docs/DESIGN.md §1): the agent loop, sessions, core tools.
-  Started by `Operator.Boot`; supervises `Operator.Core.Dyn.Keeper` (which
-  Dyn generation runs; `Operator.Boot` then loads it), the tool registry,
+  Started by `Operator.Boot`; supervises the biometric approval and
+  `Operator.Core.Dyn.Keeper` (which Dyn generation runs; `Operator.Boot`
+  then loads it), the tool registry,
   the task supervisor tools run under, the loops, `Operator.Core.Current`
   (which session the app is showing; the latest one is resumed at boot),
   and the observers of its runs: `Operator.Core.KeepAlive` (keeps the app
@@ -14,6 +15,8 @@ defmodule Operator.Core do
   """
   use Supervisor
 
+  alias Operator.Core.Dyn
+
   @default_model "openrouter:anthropic/claude-haiku-4.5"
 
   @spec start_link(keyword()) :: Supervisor.on_start()
@@ -22,6 +25,7 @@ defmodule Operator.Core do
   @impl true
   def init(_opts) do
     children = [
+      Operator.Core.Dyn.Approval.Biometric,
       Operator.Core.Dyn.Keeper,
       Operator.Core.ToolRegistry,
       {Task.Supervisor, name: Operator.Core.TaskSup},
@@ -60,7 +64,8 @@ defmodule Operator.Core do
     > quotes, short tables, ``` fenced code with a language ```. It is shown in a narrow \
     monospace terminal, so keep lines and tables short. Put anything the user is likely to copy \
     (commands, values, URLs, IDs, snippets) in a fenced code block: each block gets a Copy button.
-    """
+
+    """ <> Dyn.agent_guide()
   end
 end
 

@@ -6,11 +6,23 @@ defmodule Operator.ChatScreen.Native do
   `{:error, :unavailable}` instead of raising.
   """
 
+  alias Operator.Core.Dyn.Approval.Biometric
+
   @callback clipboard_put(String.t()) :: :ok | {:error, term()}
   @callback scroll_info(String.t()) :: map() | {:error, term()}
   @callback scroll_to(String.t(), float(), float()) :: :ok | {:error, term()}
   @doc "Asks the OS for a permission; the answer comes as `{:permission, capability, result}`."
   @callback request_permission(atom()) :: :ok | {:error, term()}
+  @doc "Shows the fingerprint prompt; the answer comes as `{:biometric, :success | :failure | :not_available}`."
+  @callback authenticate(String.t()) :: :ok | {:error, term()}
+  @doc "Records that the human just passed the fingerprint check for `subject` (`Dyn.Approval.Biometric`)."
+  @callback confirm_approval(Operator.Core.Dyn.Approval.subject()) :: :ok | {:error, term()}
+  @doc """
+  Starts a phone action for a tool (`Operator.Core.Phone`); its result
+  arrives as the plugin's message (`{:location, ...}`, `{:camera, ...}`,
+  `{:photos, ...}`). `:notify` schedules and has none.
+  """
+  @callback phone(Operator.Core.Phone.action(), map()) :: :ok | {:error, term()}
 
   @behaviour __MODULE__
 
@@ -32,6 +44,34 @@ defmodule Operator.ChatScreen.Native do
   rescue
     _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}
   end
+
+  @impl true
+  def authenticate(reason) do
+    _ = :mob_biometric_nif.biometric_authenticate(reason)
+    :ok
+  rescue
+    _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}
+  end
+
+  @impl true
+  def confirm_approval(subject), do: Biometric.confirm(subject)
+
+  @impl true
+  def phone(action, args) do
+    _ = start_phone(action, args)
+    :ok
+  rescue
+    _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}
+  end
+
+  defp start_phone(:location, _args), do: MobLocation.get_once(nil)
+
+  defp start_phone(:notify, a),
+    do:
+      MobNotify.schedule(nil, id: a.id, title: a.title, body: a.body, delay_seconds: a.in_seconds)
+
+  defp start_phone(:camera_photo, _args), do: MobCamera.capture_photo(nil, quality: :medium)
+  defp start_phone(:pick_photos, a), do: MobPhotos.pick(nil, max: a.max, types: [:image, :video])
 
   @impl true
   def scroll_info(id) do

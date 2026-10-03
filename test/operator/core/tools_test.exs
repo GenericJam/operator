@@ -25,7 +25,24 @@ defmodule Operator.Core.ToolsTest do
     start_supervised!(ToolRegistry)
 
     # sorted by name
-    assert ToolRegistry.list() == [Clipboard, HttpGet, Notes, Operator.Core.Tools.ReadArtifact]
+    assert Enum.map(ToolRegistry.list(), & &1.name()) == [
+             "camera_photo",
+             "clipboard",
+             "dyn_delete",
+             "dyn_edit",
+             "dyn_files",
+             "dyn_propose",
+             "dyn_read",
+             "dyn_reset",
+             "dyn_status",
+             "dyn_write",
+             "http_get",
+             "location",
+             "notes",
+             "notify",
+             "pick_photos",
+             "read_artifact"
+           ]
 
     assert {:ok, Notes} = ToolRegistry.lookup("notes")
 

@@ -18,7 +18,20 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.Notes,
     Operator.Core.Tools.ReadArtifact,
     Operator.Core.Tools.HttpGet,
-    Operator.Core.Tools.Clipboard
+    Operator.Core.Tools.Clipboard,
+    Operator.Core.Tools.Location,
+    Operator.Core.Tools.Notify,
+    Operator.Core.Tools.CameraPhoto,
+    Operator.Core.Tools.PickPhotos,
+    # The agent's own Dyn layer; activating and reverting need the human.
+    Operator.Core.Tools.DynFiles,
+    Operator.Core.Tools.DynRead,
+    Operator.Core.Tools.DynWrite,
+    Operator.Core.Tools.DynEdit,
+    Operator.Core.Tools.DynDelete,
+    Operator.Core.Tools.DynReset,
+    Operator.Core.Tools.DynPropose,
+    Operator.Core.Tools.DynStatus
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

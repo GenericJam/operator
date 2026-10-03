@@ -20,7 +20,14 @@ config :mob_dev,
 # its native code, permissions, and any demo screens at build time. Drop a name
 # here to deactivate a plugin without removing the dep; remove both to drop it
 # entirely (the native build shrinks and a clean rebuild prunes its artifacts).
-config :mob, :plugins, [:mob_biometric, :mob_background]
+config :mob, :plugins, [
+  :mob_biometric,
+  :mob_background,
+  :mob_location,
+  :mob_notify,
+  :mob_camera,
+  :mob_photos
+]
 
 # Trust gate for the first-party plugins. Each is signed in CI with the shared
 # mob release key; this is that key's public fingerprint. The build refuses an

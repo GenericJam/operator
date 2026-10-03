@@ -27,6 +27,25 @@ defmodule Operator.Test.FakeNative do
     :ok
   end
 
+  @impl true
+  def authenticate(reason) do
+    send(self(), {:authenticate, reason})
+    :ok
+  end
+
+  # Tests run the Keeper with Operator.Test.Dyn.Approval, which needs no confirmation.
+  @impl true
+  def confirm_approval(subject) do
+    send(self(), {:confirmed, subject})
+    :ok
+  end
+
+  @impl true
+  def phone(action, args) do
+    send(self(), {:phone_call, action, args})
+    :ok
+  end
+
   @doc "A lazy list (Android, item indexes) showing items `first..first+visible-1` of `total`."
   def index_info(first, visible, total) do
     %{

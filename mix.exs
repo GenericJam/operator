@@ -39,6 +39,11 @@ defmodule Operator.MixProject do
       # Keeps the app running while an agent run is backgrounded (Android
       # foreground service; iOS silent audio session): Operator.Core.KeepAlive.
       {:mob_background, "~> 0.1.2"},
+      # Phone tools (Operator.Core.Phone brokers them through the chat screen).
+      {:mob_location, "~> 0.1.4"},
+      {:mob_notify, "~> 0.2.0"},
+      {:mob_camera, "~> 0.1.11"},
+      {:mob_photos, "~> 0.1.3"},
       # Mozilla CA bundle: Android has no system CA store the BEAM can find
       # (see Operator.Certs).
       {:castore, "~> 1.0"},

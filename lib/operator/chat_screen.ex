@@ -32,7 +32,9 @@ defmodule Operator.ChatScreen do
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
   alias Operator.Core.DictationButton
+  alias Operator.Core.Dyn
   alias Operator.Core.Loop
+  alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
   alias Operator.Core.Term
@@ -46,11 +48,14 @@ defmodule Operator.ChatScreen do
   @toast_ms 1_500
   @window 300
   @max_native 200
+  @proposal_diff_lines 200
   @list_id "transcript"
 
   def mount(params, _session, socket) do
     loop = Map.get(params, :loop) || Operator.Core.current()
     settings_dir = Map.get(params, :settings_dir) || Operator.Paths.data_dir()
+    _ = Dyn.subscribe()
+    :ok = Phone.register_host(self())
 
     {:ok,
      socket
@@ -59,7 +64,10 @@ defmodule Operator.ChatScreen do
        settings_dir: settings_dir,
        voice: Settings.voice(settings_dir),
        dictation_base: nil,
-       notifications_asked: false
+       notifications_asked: false,
+       proposal: pending_proposal(),
+       approving: nil,
+       phone: %{}
      )
      |> attach(loop)}
   end
@@ -80,7 +88,10 @@ defmodule Operator.ChatScreen do
               props: %{id: @list_id, weight: 1, padding: t.padding, background: bg},
               children: assigns.visible
             },
-            footer(assigns, t),
+            footer(assigns, t)
+          ] ++
+          approval_bar(assigns, t) ++
+          [
             composer(assigns, t)
           ]
     }
@@ -181,7 +192,60 @@ defmodule Operator.ChatScreen do
   def handle_info({:permission, :microphone, _denied}, socket),
     do: {:noreply, toast(socket, "No microphone access: allow it in Settings to dictate")}
 
+  def handle_info({:permission, capability, result}, socket)
+      when capability in [:location, :camera] do
+    action = if capability == :location, do: :location, else: :camera_photo
+
+    case socket.assigns.phone do
+      %{^action => {_ref, _from, args}} when result == :granted ->
+        :ok = Native.impl().phone(action, args)
+        {:noreply, socket}
+
+      %{^action => {ref, from, _args}} ->
+        Phone.reply(from, ref, {:error, "The user didn't allow #{capability} access."})
+        {:noreply, Mob.Socket.assign(socket, :phone, Map.delete(socket.assigns.phone, action))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_info({:permission, _capability, _result}, socket), do: {:noreply, socket}
+
+  # ── phone actions for tools (Operator.Core.Phone) ──
+
+  def handle_info({:phone_request, ref, from, action, args}, socket) do
+    case socket.assigns.phone do
+      %{^action => {_ref, waiting, _args}} ->
+        if Process.alive?(waiting) do
+          Phone.reply(from, ref, {:error, "Another #{action} request is still waiting."})
+          {:noreply, socket}
+        else
+          start_phone(socket, ref, from, action, args)
+        end
+
+      _ ->
+        start_phone(socket, ref, from, action, args)
+    end
+  end
+
+  def handle_info({:location, %{} = fix}, socket),
+    do: {:noreply, phone_done(socket, :location, {:ok, fix})}
+
+  def handle_info({:location, :error, reason}, socket),
+    do: {:noreply, phone_done(socket, :location, {:error, "No location: #{inspect(reason)}"})}
+
+  def handle_info({:camera, :photo, %{} = photo}, socket),
+    do: {:noreply, phone_done(socket, :camera_photo, {:ok, photo})}
+
+  def handle_info({:camera, :cancelled}, socket),
+    do: {:noreply, phone_done(socket, :camera_photo, {:ok, :cancelled})}
+
+  def handle_info({:photos, :picked, items}, socket),
+    do: {:noreply, phone_done(socket, :pick_photos, {:ok, items})}
+
+  def handle_info({:photos, :cancelled}, socket),
+    do: {:noreply, phone_done(socket, :pick_photos, {:ok, :cancelled})}
 
   # ── voice ──
 
@@ -197,6 +261,75 @@ defmodule Operator.ChatScreen do
     :ok = Settings.put_voice(next, socket.assigns.settings_dir)
     {:noreply, socket |> Mob.Socket.assign(:voice, next) |> toast("Voice: #{voice_hint(next)}")}
   end
+
+  # ── self-modification proposals (Operator.Core.Dyn) ──
+
+  def handle_info({:operator_dyn, %{type: :candidate, gen: n}}, socket),
+    do: {:noreply, socket |> Mob.Socket.assign(:proposal, proposal(n)) |> repaint()}
+
+  def handle_info({:operator_dyn, event}, socket) do
+    gone =
+      event[:type] in [:superseded, :discarded, :activated] and
+        match?(%{gen: _}, socket.assigns.proposal) and socket.assigns.proposal.gen == event[:gen]
+
+    socket = if gone, do: Mob.Socket.assign(socket, :proposal, nil), else: socket
+
+    case dyn_line(event) do
+      nil -> {:noreply, refresh(socket)}
+      line -> {:noreply, toast(socket, line)}
+    end
+  end
+
+  def handle_info({:tap, :approve_proposal}, %{assigns: %{proposal: %{gen: n}}} = socket) do
+    Native.impl().authenticate("Activate Operator generation #{n}")
+    {:noreply, Mob.Socket.assign(socket, :approving, {:activate, n})}
+  end
+
+  def handle_info({:tap, :deny_proposal}, %{assigns: %{proposal: %{gen: n}}} = socket) do
+    case Dyn.discard(n) do
+      :ok ->
+        {:noreply,
+         socket |> Mob.Socket.assign(:proposal, nil) |> toast("Proposal #{n} discarded")}
+
+      {:error, reason} ->
+        {:noreply, toast(socket, "Couldn't discard proposal #{n}: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_info({:tap, tag}, socket) when tag in [:approve_proposal, :deny_proposal],
+    do: {:noreply, Mob.Socket.assign(socket, :proposal, nil) |> refresh()}
+
+  def handle_info(
+        {:biometric, :success},
+        %{assigns: %{approving: {:activate, n} = subject}} = socket
+      ) do
+    socket = Mob.Socket.assign(socket, :approving, nil)
+
+    with :ok <- Native.impl().confirm_approval(subject),
+         {:ok, token} <- Dyn.request_approval(subject),
+         {:ok, _gen} <- Dyn.activate(n, token) do
+      {:noreply,
+       socket
+       |> Mob.Socket.assign(:proposal, nil)
+       |> toast(
+         "Generation #{n} is live, on probation: it reverts by itself if it keeps crashing"
+       )}
+    else
+      {:error, reason} ->
+        {:noreply, toast(socket, "Generation #{n} not activated: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_info({:biometric, result}, %{assigns: %{approving: {_, n}}} = socket) do
+    why = if result == :not_available, do: "no fingerprint available", else: "the check failed"
+
+    {:noreply,
+     socket
+     |> Mob.Socket.assign(:approving, nil)
+     |> toast("Generation #{n} not activated: #{why}")}
+  end
+
+  def handle_info({:biometric, _result}, socket), do: {:noreply, socket}
 
   # ── copy ──
 
@@ -421,7 +554,11 @@ defmodule Operator.ChatScreen do
     {rows, hidden} = window(a.done_rev, stream_rows, a.window)
     earlier = if hidden > 0, do: [earlier_row(hidden)], else: []
     toast = if a.toast, do: [Term.notice_row(a.toast, "toast")], else: []
-    Mob.Socket.assign(socket, :visible, earlier ++ rows ++ toast)
+
+    proposal =
+      if a.proposal, do: Term.entry_rows(a.proposal.entry, a.proposal.key, owner), else: []
+
+    Mob.Socket.assign(socket, :visible, earlier ++ rows ++ proposal ++ toast)
   end
 
   @doc false
@@ -544,6 +681,105 @@ defmodule Operator.ChatScreen do
   defp voice_hint(:important), do: "speaks when a run ends"
   defp voice_hint(:everything), do: "speaks every reply"
 
+  # Location and camera ask for their permission first (the answer starts
+  # the action, `{:permission, ...}` above); a notification is scheduled at
+  # once and answered with its id.
+  defp start_phone(socket, ref, from, :notify, args) do
+    id = "operator-#{System.unique_integer([:positive])}"
+
+    result =
+      case Native.impl().phone(:notify, Map.put(args, :id, id)) do
+        :ok -> {:ok, id}
+        {:error, reason} -> {:error, "Couldn't schedule it: #{inspect(reason)}"}
+      end
+
+    Phone.reply(from, ref, result)
+    {:noreply, socket}
+  end
+
+  defp start_phone(socket, ref, from, action, args) do
+    socket =
+      Mob.Socket.assign(socket, :phone, Map.put(socket.assigns.phone, action, {ref, from, args}))
+
+    case action do
+      :location -> Native.impl().request_permission(:location)
+      :camera_photo -> Native.impl().request_permission(:camera)
+      :pick_photos -> Native.impl().phone(:pick_photos, args)
+    end
+
+    {:noreply, socket}
+  end
+
+  defp phone_done(socket, action, result) do
+    case Map.pop(socket.assigns.phone, action) do
+      {{ref, from, _args}, rest} ->
+        Phone.reply(from, ref, result)
+        Mob.Socket.assign(socket, :phone, rest)
+
+      {nil, _} ->
+        socket
+    end
+  end
+
+  # The pending candidate when the screen mounts (a proposal made while it
+  # was away still shows).
+  defp pending_proposal do
+    case Dyn.status() do
+      %{pending: n} when is_integer(n) -> proposal(n)
+      _ -> nil
+    end
+  end
+
+  # The proposal as a reply-like transcript block: rationale, selftests,
+  # the diff (as a `diff` code block, so it can be copied).
+  defp proposal(n) do
+    case Dyn.generation(n) do
+      {:ok, gen} ->
+        tests = gen.selftests
+        passed = Enum.count(tests, & &1.ok)
+        diff = n |> Dyn.diff() |> String.split("\n") |> cap_lines(@proposal_diff_lines)
+
+        md =
+          "**Proposal: generation #{n}**: #{gen.rationale}\n\n" <>
+            "#{passed}/#{length(tests)} selftests passed · compiled in #{gen.compile_ms || "?"} ms\n\n" <>
+            "```diff\n#{diff}\n```\n\n" <>
+            "Approve with your fingerprint below, or deny it."
+
+        entry = %{
+          "type" => "message",
+          "message" => %{"role" => "assistant", "content" => [%{"type" => "text", "text" => md}]}
+        }
+
+        %{gen: n, key: "p#{n}", entry: entry}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp cap_lines(lines, max) when length(lines) <= max, do: Enum.join(lines, "\n")
+
+  defp cap_lines(lines, max),
+    do: Enum.join(Enum.take(lines, max), "\n") <> "\n… #{length(lines) - max} more lines"
+
+  defp proposal_message(%{assigns: %{proposal: %{key: key, entry: entry}}}),
+    do: [%{key: key, entry: entry}]
+
+  defp proposal_message(_socket), do: []
+
+  defp dyn_line(%{type: :activated, gen: n}), do: "Generation #{n} activated (on probation)"
+  defp dyn_line(%{type: :proven, gen: n}), do: "Generation #{n} is proven"
+  defp dyn_line(%{type: :superseded, gen: n}), do: "Proposal #{n} superseded by a newer one"
+  defp dyn_line(%{type: :discarded}), do: nil
+
+  defp dyn_line(%{type: :reverted, from: from, to: to} = e),
+    do: "Generation #{from} reverted to #{to}: #{e[:reason] || "crashing"}"
+
+  defp dyn_line(%{type: :crash} = e), do: "A Dyn module crashed (generation #{e[:gen] || "?"})"
+  defp dyn_line(%{type: :safe_mode}), do: "Safe mode: the Dyn layer isn't loaded this launch"
+  defp dyn_line(%{type: :load_failed, gen: n}), do: "Generation #{n} failed to load"
+  defp dyn_line(_event), do: nil
+
   defp copy(socket, text) when is_binary(text) and text != "" do
     case Native.impl().clipboard_put(text) do
       :ok -> toast(socket, "Copied #{String.length(text)} characters")
@@ -563,7 +799,7 @@ defmodule Operator.ChatScreen do
 
   # The full text of message `key` (`:plain` for the clipboard, `:raw` for markup).
   defp message_text(socket, key, mode) do
-    case Enum.find(socket.assigns.done_rev, &(&1.key == key)) do
+    case Enum.find(socket.assigns.done_rev ++ proposal_message(socket), &(&1.key == key)) do
       %{entry: entry} when mode == :plain -> Term.plain_text(entry)
       %{entry: %{"message" => m}} -> Session.text(m["content"])
       %{entry: entry} -> Term.plain_text(entry)
@@ -705,6 +941,24 @@ defmodule Operator.ChatScreen do
 
     %{type: :text, props: props, children: []}
   end
+
+  defp approval_bar(%{proposal: %{gen: n}} = a, t) do
+    waiting = if a.approving, do: " · waiting for your fingerprint", else: ""
+
+    [
+      bar_row(t, [
+        text("proposal G#{n}#{waiting}", t, "accent",
+          weight: 1,
+          max_lines: 1,
+          text_size: t.text_size - 1
+        ),
+        chip("approve", :approve_proposal, t, "user"),
+        chip("deny", :deny_proposal, t, "error")
+      ])
+    ]
+  end
+
+  defp approval_bar(_a, _t), do: []
 
   defp chip(label, tag, t, color \\ "fg") do
     %{

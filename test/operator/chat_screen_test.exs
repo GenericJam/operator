@@ -10,6 +10,7 @@ defmodule Operator.ChatScreenTest do
   alias Operator.ChatScreen
   alias Operator.ChatScreen.Follow
   alias Operator.Core.Loop
+  alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
   alias Operator.Test.FakeLLM
@@ -409,5 +410,163 @@ defmodule Operator.ChatScreenTest do
     view = render_info(view, {:tap, :cycle_voice})
     assert text(view) =~ "[voice:off]"
     assert Settings.voice(dir) == :off
+  end
+
+  describe "self-modification proposals" do
+    setup %{tmp_dir: dir} do
+      Operator.Test.Dyn.purge_all()
+      on_exit(&Operator.Test.Dyn.purge_all/0)
+      Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn_data"))
+      :ok
+    end
+
+    defp propose(name) do
+      Operator.Test.Dyn.propose!(
+        %{"#{name}.ex" => Operator.Test.Dyn.tool(Macro.camelize(name), name)},
+        "add the #{name} tool"
+      )
+    end
+
+    defp dyn_event(type) do
+      receive do
+        {:operator_dyn, %{type: ^type}} = msg -> msg
+      after
+        2_000 -> flunk("no #{type} event")
+      end
+    end
+
+    test "a candidate shows with its diff; the fingerprint activates it", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      refute button?(view, "approve")
+
+      %{n: n} = propose("weather")
+      view = render_info(view, dyn_event(:candidate))
+
+      assert button?(view, "approve") and button?(view, "deny")
+      assert text(view) =~ "proposal G#{n}"
+      # mixed-style words are separate nodes joined by no-break spaces
+      shown = view |> text() |> String.replace(~r/[\s\x{00A0}]+/u, " ")
+      assert shown =~ "Proposal: generation #{n}"
+      assert shown =~ "add the weather tool"
+      assert shown =~ "+defmodule Operator.Dyn.Weather do"
+
+      view = render_info(view, {:tap, :approve_proposal})
+      assert_received {:authenticate, "Activate Operator generation " <> _}
+      assert text(view) =~ "waiting for your fingerprint"
+
+      view = render_info(view, {:biometric, :success})
+      assert_received {:confirmed, {:activate, ^n}}
+      assert %{generation: ^n, status: :probation} = Operator.Core.Dyn.status()
+      refute button?(view, "approve")
+      assert text(view) =~ "Generation #{n} is live"
+    end
+
+    test "a failed fingerprint changes nothing; deny discards", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      %{n: n} = propose("notes2")
+      view = render_info(view, dyn_event(:candidate))
+
+      view =
+        view
+        |> render_info({:tap, :approve_proposal})
+        |> render_info({:biometric, :failure})
+
+      assert text(view) =~ "not activated: the check failed"
+      assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
+      assert button?(view, "approve")
+
+      view = render_info(view, {:tap, :deny_proposal})
+      assert %{generation: 0, pending: nil} = Operator.Core.Dyn.status()
+      refute button?(view, "approve")
+    end
+
+    test "a proposal made while the screen was away shows at mount", %{tmp_dir: dir} do
+      %{n: n} = propose("later")
+      %{view: view} = mount_chat(dir, [])
+      assert text(view) =~ "proposal G#{n}"
+    end
+  end
+
+  describe "phone actions for tools" do
+    test "location: permission first, then one fix back to the asking tool", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      ref = make_ref()
+
+      view = render_info(view, {:phone_request, ref, self(), :location, %{}})
+      assert_received {:requested_permission, :location}
+      refute_received {:phone_call, :location, _}
+
+      # a second location request while the first waits is refused
+      ref2 = make_ref()
+      view = render_info(view, {:phone_request, ref2, self(), :location, %{}})
+      assert_received {:phone_reply, ^ref2, {:error, "Another location request" <> _}}
+
+      view = render_info(view, {:permission, :location, :granted})
+      assert_received {:phone_call, :location, %{}}
+
+      fix = %{lat: 45.5, lon: -73.6, accuracy: 9.0, altitude: 30.0}
+      view = render_info(view, {:location, fix})
+      assert_received {:phone_reply, ^ref, {:ok, ^fix}}
+
+      # done: a new request is served again; a denial answers with an error
+      ref3 = make_ref()
+
+      view
+      |> render_info({:phone_request, ref3, self(), :location, %{}})
+      |> render_info({:permission, :location, :denied})
+
+      assert_received {:phone_reply, ^ref3, {:error, "The user didn't allow location access."}}
+    end
+
+    test "notify is answered with its id at once; photos and camera relay the plugin", %{
+      tmp_dir: dir
+    } do
+      %{view: view} = mount_chat(dir, [])
+      ref = make_ref()
+
+      view =
+        render_info(
+          view,
+          {:phone_request, ref, self(), :notify, %{title: "t", body: "b", in_seconds: 60}}
+        )
+
+      assert_received {:phone_call, :notify, %{id: "operator-" <> _ = id, in_seconds: 60}}
+      assert_received {:phone_reply, ^ref, {:ok, ^id}}
+
+      ref = make_ref()
+      view = render_info(view, {:phone_request, ref, self(), :pick_photos, %{max: 2}})
+      assert_received {:phone_call, :pick_photos, %{max: 2}}
+      view = render_info(view, {:photos, :picked, [%{display_name: "a.jpg"}]})
+      assert_received {:phone_reply, ^ref, {:ok, [%{display_name: "a.jpg"}]}}
+
+      ref = make_ref()
+
+      view
+      |> render_info({:phone_request, ref, self(), :camera_photo, %{}})
+      |> render_info({:permission, :camera, :granted})
+      |> render_info({:camera, :cancelled})
+
+      assert_received {:phone_reply, ^ref, {:ok, :cancelled}}
+    end
+  end
+
+  test "phone tools: no chat screen, a clear error; their selftests pass" do
+    host_gone = spawn(fn -> :ok end)
+    Process.sleep(10)
+
+    assert {:error, "The chat screen went away" <> _} =
+             Phone.request(:location, %{}, 1_000, host_gone)
+
+    assert {:error, "The Operator chat screen isn't running" <> _} =
+             Phone.request(:location, %{}, 1_000, nil)
+
+    for tool <- [
+          Operator.Core.Tools.Location,
+          Operator.Core.Tools.Notify,
+          Operator.Core.Tools.CameraPhoto,
+          Operator.Core.Tools.PickPhotos
+        ] do
+      assert tool.selftest() == :ok, inspect(tool)
+    end
   end
 end
