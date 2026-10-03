@@ -52,9 +52,15 @@ defmodule Operator.Boot do
       # The agent loop, sessions, core tools (resumes the latest session) and
       # the Dyn keeper.
       core: fn -> {:ok, _} = Operator.Core.start_link() end,
+      # A delivered Core update's probation ends with the Keeper's stable
+      # launch, not at mob_deliver's first frame (Operator.Deliver).
+      deliver: fn -> :ok = Operator.Deliver.take_over_probation() end,
       # The current Dyn generation (or boot probation's revert, or safe mode:
-      # Core only), see Operator.Core.Dyn.Keeper.
-      dyn: fn -> %{} = Dyn.boot() end,
+      # Core only), see Operator.Core.Dyn.Keeper. A failed launch whose Core
+      # update mob_deliver just rolled back doesn't count against it.
+      dyn: fn ->
+        %{} = Dyn.boot(core_rolled_back: Operator.Deliver.rolled_back_this_launch?())
+      end,
       # The theme that generation defines, if any (Operator.Core.DynTheme).
       dyn_theme: fn -> :ok = DynTheme.refresh() end
     ]

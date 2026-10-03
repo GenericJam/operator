@@ -288,3 +288,39 @@ message.
    `/login anthropic` verified on the Moto (Kevin signed in; replies stream
    from claude-haiku-4-5 on his subscription). Not yet tried: `/login
    openai`, the QR transfer.
+8. **OTA updates of the Core** (Kevin, 2026-10-03: from the Mac, home
+   network only, nothing through Muster). mob_deliver 0.3.1 on the phone,
+   mob_deliver_server 0.2.0 + Bandit on the Mac (dev-only): `mix
+   operator.deliver.key`, `.serve` (port 8040, store
+   `~/.local/share/operator/deliver`), `.qr`, `mix operator.publish`
+   (AGENTS.md "How to update the phone"; DESIGN.md §1 "The Core's release
+   path"). Publishes Operator's own modules (not the entry module, the
+   build config, NIF stubs or Mix tasks); the endpoint comes from an
+   `operator://deliver?endpoint=…&key=…` QR checked against the build's
+   key and kept in settings; Diagnostics shows the server, the code
+   running, the last check and "Check for updates now". The Keeper's stable
+   launch also ends an update's probation, a Core change rebuilds and
+   selftests the Dyn generation, and a launch that failed on a rolled-back
+   Core update isn't counted against Dyn. Built, host-tested (publish ->
+   serve -> mob_deliver's client; on the host also install -> next launch
+   loads it -> no stable launch -> rolled back). Device checks (Moto G
+   2021), not done yet:
+   1. Key, native deploy, serve, scan the QR with the camera: "Update
+      server set …: close Operator and open it again"; after relaunching,
+      Diagnostics shows the server and a last check ("nothing published
+      yet" before the first publish).
+   2. A visible Core change, `mix operator.publish`, Diagnostics → Check
+      for updates now: "update installed"; after a relaunch the change
+      shows, Diagnostics says "Running: update …", logcat has `[dyn]
+      rebuilding generation …` if a generation exists; one more stable
+      relaunch proves it. Note the boot line before and after (mob_deliver
+      loads every delivered module at launch).
+   3. A crashing update (e.g. `System.halt(1)` 5 s after the first frame in
+      `Operator.App.on_start`): the launch dies; the next one logs
+      `mob_deliver: manifest … never reached first idle; rolling back` and
+      `[dyn] the last launch failed on a Core update that was rolled back`,
+      runs the old code, keeps the Dyn generation, and Diagnostics shows
+      the rollback notice; Check now says the update was rolled back
+      before. Publishing the fix installs again.
+   4. A QR from another key (or a build without one) is refused and
+      nothing changes.

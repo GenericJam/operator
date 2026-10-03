@@ -9,7 +9,12 @@ start() ->
     step(2, fun() -> application:start(elixir)   end),
     step(3, fun() -> application:start(logger)   end),
     step(4, fun() -> mob_nif:platform()          end),
-    step(5, fun() -> 'Elixir.Operator.App':start() end),
+    %% The update server set on this phone (Operator.Deliver): mob_deliver
+    %% reads it when Operator.App.start/0 starts mob's plugins, and only
+    %% starts its update checks with one. Never delivered over the air:
+    %% this module runs before anything delivered is loaded.
+    step(5, fun() -> 'Elixir.Operator.Deliver':apply_saved_endpoint() end),
+    step(6, fun() -> 'Elixir.Operator.App':start() end),
     timer:sleep(infinity).
 
 step(N, Fun) ->

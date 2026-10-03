@@ -45,6 +45,14 @@ defmodule Operator.MixProject do
       # Diagnostics → Scan QR: the codes `mix operator.login` and `mix
       # operator.handoff` show on the Mac (Operator.LoginScanScreen).
       {:mob_scanner, "~> 0.1.5"},
+      # Over-the-air updates of Operator's own code (docs/DESIGN.md §1, the
+      # Core's release path; Operator.Deliver). mob_deliver is the phone side,
+      # a mob plugin (mob.exs). mob_deliver_server and Bandit are the Mac side
+      # (`mix operator.deliver.*`, `mix operator.publish`): dev/test only, so
+      # mob_dev never ships them to the phone.
+      {:mob_deliver, "~> 0.3.1"},
+      {:mob_deliver_server, "~> 0.2.0", only: [:dev, :test], runtime: false},
+      {:bandit, "~> 1.6", only: [:dev, :test], runtime: false},
       # Mozilla CA bundle: Android has no system CA store the BEAM can find
       # (see Operator.Certs).
       {:castore, "~> 1.0"},

@@ -10,6 +10,8 @@ defmodule Operator.LoginScanScreen do
       with another app.
     * A handoff part from `mix operator.handoff`: counted, then on to the
       next; the last one opens the chat on the new session.
+    * The update server from `mix operator.deliver.qr`: saved
+      (`Operator.Deliver`), and the result said.
   """
   use Mob.Screen
 
@@ -26,7 +28,8 @@ defmodule Operator.LoginScanScreen do
         words: "",
         line:
           "On the Mac, in the operator checkout: mix operator.login anthropic (or openai) " <>
-            "to sign in, mix operator.handoff to carry on from omp."
+            "to sign in, mix operator.handoff to carry on from omp, " <>
+            "mix operator.deliver.qr for code updates."
       )
 
     case params do
@@ -126,6 +129,11 @@ defmodule Operator.LoginScanScreen do
       # The handoff's session is current now: a fresh chat shows it.
       {:handoff, _handoff, _loop} ->
         Mob.Socket.reset_to(socket, Operator.ChatScreen)
+
+      {:deliver, text} ->
+        socket
+        |> Mob.Socket.assign(phase: :done, qr: nil, words: "")
+        |> line(text)
 
       {:error, text} ->
         line(socket, text)

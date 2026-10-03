@@ -9,6 +9,9 @@ defmodule Operator.Core.Settings do
       `:everything` (also every assistant reply).
     * `daily_cap`: dollars of model calls a day before the loop refuses
       the next one (`Operator.Core.Budget`); default #{1.0}.
+    * `deliver_endpoint`: the Mac's update server, where mob_deliver
+      fetches Operator's code updates (`Operator.Deliver`); none by
+      default. Set by scanning `mix operator.deliver.qr`.
   """
 
   @file_name "settings.json"
@@ -43,6 +46,18 @@ defmodule Operator.Core.Settings do
   @spec put_daily_cap(number(), String.t()) :: :ok
   def put_daily_cap(cap, dir \\ Operator.Paths.data_dir()) when is_number(cap) and cap >= 0,
     do: write(dir, Map.put(read(dir), "daily_cap", cap * 1.0))
+
+  @spec deliver_endpoint(String.t()) :: String.t() | nil
+  def deliver_endpoint(dir \\ Operator.Paths.data_dir()) do
+    case read(dir) do
+      %{"deliver_endpoint" => endpoint} when is_binary(endpoint) and endpoint != "" -> endpoint
+      _ -> nil
+    end
+  end
+
+  @spec put_deliver_endpoint(String.t(), String.t()) :: :ok
+  def put_deliver_endpoint(endpoint, dir \\ Operator.Paths.data_dir()) when is_binary(endpoint),
+    do: write(dir, Map.put(read(dir), "deliver_endpoint", endpoint))
 
   defp read(dir) do
     with {:ok, json} <- File.read(Path.join(dir, @file_name)),

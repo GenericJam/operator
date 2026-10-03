@@ -238,6 +238,43 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert [{"weather", _}] = Dyn.tools()
   end
 
+  test "a launch that failed on a Core update mob_deliver rolled back doesn't count against Dyn",
+       %{tmp_dir: dir} do
+    start_keeper(dir)
+    n1 = activate!(%{"weather.ex" => tool("Weather", "weather", run: ~s|{:ok, "v1"}|)})
+    n2 = activate!(%{"weather.ex" => tool("Weather", "weather", run: ~s|{:ok, "v2"}|)})
+    assert %{generation: ^n2, status: :probation} = relaunch(dir, stable: true)
+
+    # This launch dies before stable, on a Core update; the next one runs
+    # the rolled-back Core and keeps the unproven generation.
+    :ok = stop_supervised(Keeper)
+    purge_all()
+    start_supervised!({Keeper, approval: Operator.Test.Dyn.Approval, dir: dir}, id: Keeper)
+
+    assert %{generation: ^n2, reverted: nil, failed_launches: 0, mode: :normal} =
+             Keeper.boot(Keeper, core_rolled_back: true)
+
+    assert Store.current(dir) == n2
+
+    # Died again, nothing rolled back: that one is the generation's.
+    assert %{generation: ^n1, reverted: %{from: ^n2, to: ^n1}, failed_launches: 1} =
+             relaunch(dir)
+  end
+
+  test "a stable launch runs :on_stable once (a delivered update's probation ends)",
+       %{tmp_dir: dir} do
+    start_keeper(dir, on_stable: {Kernel, :send, [self(), :launch_stable]}, stable_delay_ms: 50)
+
+    Keeper.first_render(Keeper, nil)
+    refute_received :launch_stable
+    assert_receive :launch_stable, 1_000
+
+    :ok = Keeper.mark_stable(Keeper)
+    send(Keeper, {:mob_device, :did_enter_background})
+    _ = Dyn.status()
+    refute_receive :launch_stable, 100
+  end
+
   test "an old generation is unloaded only once nothing runs its code, anywhere on a stack",
        %{tmp_dir: dir} do
     start_keeper(dir)

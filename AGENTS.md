@@ -19,6 +19,29 @@ proven on an emulator, the numbers, and the recommended architecture.
   then `scripts/rpc.sh '<elixir>'` (see the script header).
 - Never print or commit a sign-in token; they live on the device only.
 
+## How to update the phone
+
+A native deploy is needed for dependency, plugin, native, `priv/`
+(migrations), `config/*.exs` and `mob.exs` changes. Operator's own Elixir
+code can go over the air instead (`Operator.Deliver`, docs/DESIGN.md §1),
+from the Mac on the home network:
+
+```bash
+# Once per Mac (the key is never replaced), then once per phone build:
+mix operator.deliver.key                     # ~/.config/operator/deliver_signing.key
+mix mob.deploy --native --android --device <serial>   # bakes its public half in
+
+mix operator.deliver.serve                   # own terminal; serves on :8040
+mix operator.deliver.qr                      # scan once per phone / Mac address
+mix operator.publish                         # after a green gate; prints the changes
+```
+
+The phone checks at launch, every 5 minutes in front and from Diagnostics →
+"Check for updates now", and runs an installed update from the next launch
+(close Operator and open it again). A launch with it that doesn't get stable
+(first frame + 10 s) rolls it back; Diagnostics says so. Publish from the
+deployed checkout or a newer one; after a native deploy, publish again.
+
 # Beads
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.

@@ -25,7 +25,7 @@ defmodule Operator.Core.Dyn.Keeper do
   stay counted, so the next one tries again. A proven generation's crashes
   are only reported.
 
-  **Launches** (`boot/1`, once per app start). `boot.json` counts the
+  **Launches** (`boot/2`, once per app start). `boot.json` counts the
   launches since the last one that reached stable (`mark_stable/1`). In the
   app a launch is stable once its first frame was drawn and then either
   `:stable_delay_ms` passed or the app went to the background (the user
@@ -42,6 +42,13 @@ defmodule Operator.Core.Dyn.Keeper do
   or `:candidate` / `:reverted` caught between the pointer and manifest
   writes); anything else falls back to generation 0.
 
+  **Core updates** (`Operator.Deliver`) share that launch: the
+  `:on_stable` MFA runs when a launch reaches stable (it ends a delivered
+  update's probation), and `boot/2` with `core_rolled_back: true` (the
+  update the failed launch ran was rolled back by mob_deliver this launch)
+  doesn't count that launch against the Dyn generation: no boot revert
+  and no step towards safe mode for it.
+
   **Old generations** stay loaded while anything may run them: the current
   one, its parent (instant revert), the pending candidate, and any
   generation with a live watched process; the rest are unloaded with
@@ -56,9 +63,11 @@ defmodule Operator.Core.Dyn.Keeper do
   (also the registry table's name), `:dir`, `:approval`
   (`Operator.Core.Dyn.Approval.Biometric`), `:probation_ms` (60 000),
   `:crash_limit` (3), `:crash_window_ms` (60 000), `:stable_delay_ms`
-  (10 000), `:gc_retry_ms` (30 000), `:max_proposals` (50), and the
-  compile / selftest limits (`:compile_timeout_ms`, `:compile_max_heap_mb`,
-  `:selftest_timeout_ms`, `:selftest_max_heap_mb`).
+  (10 000), `:gc_retry_ms` (30 000), `:max_proposals` (50), `:on_stable`
+  (`{module, function, args}` run in its own process when a launch
+  reaches stable, or `nil`), and the compile / selftest limits
+  (`:compile_timeout_ms`, `:compile_max_heap_mb`, `:selftest_timeout_ms`,
+  `:selftest_max_heap_mb`).
   """
   use GenServer
 
@@ -76,7 +85,8 @@ defmodule Operator.Core.Dyn.Keeper do
     crash_window_ms: 60_000,
     stable_delay_ms: 10_000,
     gc_retry_ms: 30_000,
-    max_proposals: 50
+    max_proposals: 50,
+    on_stable: nil
   ]
   @build_opts [
     :compile_timeout_ms,
@@ -109,9 +119,14 @@ defmodule Operator.Core.Dyn.Keeper do
     GenServer.start_link(__MODULE__, opts, name: opts[:name])
   end
 
-  @doc "The launch's Dyn boot: launch markers, boot probation, safe mode, loading the current generation."
-  @spec boot(GenServer.server()) :: boot_report()
-  def boot(server), do: GenServer.call(server, :boot, :infinity)
+  @doc """
+  The launch's Dyn boot: launch markers, boot probation, safe mode, loading
+  the current generation. `core_rolled_back: true`: the previous launch
+  failed on a Core update that has been rolled back since, so it doesn't
+  count against the Dyn generation (see the moduledoc).
+  """
+  @spec boot(GenServer.server(), keyword()) :: boot_report()
+  def boot(server, opts \\ []), do: GenServer.call(server, {:boot, opts}, :infinity)
 
   @doc "Counts a proposal against this launch's cap; `{:error, :proposal_limit}` once it's reached."
   @spec reserve_proposal(GenServer.server()) :: :ok | {:error, :proposal_limit}
@@ -219,8 +234,9 @@ defmodule Operator.Core.Dyn.Keeper do
   end
 
   @impl true
-  def handle_call(:boot, _from, s) do
-    %{boot_attempts: failed} = Store.boot_markers(s.dir)
+  def handle_call({:boot, opts}, _from, s) do
+    %{boot_attempts: attempts} = Store.boot_markers(s.dir)
+    failed = failed_launches(attempts, Keyword.get(opts, :core_rolled_back, false))
 
     case Store.put_boot_markers(s.dir, %{boot_attempts: failed + 1, stable: false}) do
       :ok -> :ok
@@ -414,6 +430,19 @@ defmodule Operator.Core.Dyn.Keeper do
 
   # ── launches ──
 
+  # The last failed launch ran a Core update mob_deliver has rolled back:
+  # the Core failed, not this generation.
+  defp failed_launches(attempts, true) when attempts > 0 do
+    Logger.info(
+      "[dyn] the last launch failed on a Core update that was rolled back; " <>
+        "not counted against the Dyn generation"
+    )
+
+    attempts - 1
+  end
+
+  defp failed_launches(attempts, _core_rolled_back), do: attempts
+
   defp launch(s, failed) do
     s = %{
       s
@@ -544,6 +573,7 @@ defmodule Operator.Core.Dyn.Keeper do
     end
 
     s = remember_launch(%{s | stable: true, stable_timer: nil})
+    run_on_stable(s.opts.on_stable)
 
     with true <- s.mode == :normal and s.booted_on_probation and s.booted == s.current,
          :probation <- s.current_status,
@@ -553,6 +583,15 @@ defmodule Operator.Core.Dyn.Keeper do
       _ -> s
     end
   end
+
+  # Its own process: the callee may block (mob_deliver's watchdog writes to
+  # disk), and its failure is its own.
+  defp run_on_stable({module, fun, args}) do
+    _ = spawn(module, fun, args)
+    :ok
+  end
+
+  defp run_on_stable(nil), do: :ok
 
   # A Keeper restarted within a launch picks up where the last one was.
   defp restore(s) do

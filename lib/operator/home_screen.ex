@@ -3,12 +3,14 @@ defmodule Operator.HomeScreen do
   Diagnostics (and the first screen while no model provider is signed in):
   the provider sign-ins (`Operator.Auth`; signing in is `/login anthropic`
   or `/login openai` in the chat, or scanning a login QR minted on the Mac),
-  today's model spend against the daily cost cap (editable), the agent
-  stack's status, and the Dyn layer: its current generation, sample
-  proposals that run the self-modification pipeline on the phone, its
-  screens, and the way to the rescue screen. The first sign-in hands over
-  to `Operator.ChatScreen`, and so does an `operator://` link scanned with
-  another app while this screen shows (the chat handles it).
+  today's model spend against the daily cost cap (editable), code updates
+  from the Mac (`Operator.Deliver`: the update server, the code running,
+  the last check, "Check for updates now"), the agent stack's status, and
+  the Dyn layer: its current generation, sample proposals that run the
+  self-modification pipeline on the phone, its screens, and the way to the
+  rescue screen. The first sign-in hands over to `Operator.ChatScreen`, and
+  so does an `operator://` link scanned with another app while this screen
+  shows (the chat handles it).
   """
   use Mob.Screen
 
@@ -17,6 +19,7 @@ defmodule Operator.HomeScreen do
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Samples
   alias Operator.Core.Settings
+  alias Operator.Deliver
 
   def mount(params, _session, socket) do
     # The theme (terminal font token included) is installed once at boot by
@@ -28,9 +31,10 @@ defmodule Operator.HomeScreen do
     {:ok,
      socket
      |> Mob.Socket.assign(auth: Auth.status(), last: boot_line())
-     |> Mob.Socket.assign(data_dir: data_dir, cap_draft: "")
+     |> Mob.Socket.assign(data_dir: data_dir, cap_draft: "", updates: nil, update_note: nil)
      |> spend()
-     |> dyn()}
+     |> dyn()
+     |> refresh_updates()}
   end
 
   def render(assigns) do
@@ -58,6 +62,11 @@ defmodule Operator.HomeScreen do
         {cap_field(assigns.cap_draft)}
         <Spacer size={8} />
         {button("Save daily cap", :save_cap)}
+        <Spacer size={24} />
+        <Text text="Code updates from the Mac" text_size={:sm} text_color={:muted} />
+        {updates_section(assigns)}
+        <Spacer size={8} />
+        {button("Check for updates now", :check_updates)}
         <Spacer size={24} />
         <Text text="Dyn layer (self-modification)" text_size={:sm} text_color={:muted} />
         <Text text={assigns.dyn_line} text_color={:primary} />
@@ -117,6 +126,29 @@ defmodule Operator.HomeScreen do
            "Not a dollar amount: #{socket.assigns.cap_draft}"
          )}
     end
+  end
+
+  # ── code updates (Operator.Deliver) ──
+
+  # Checks and the state both read the network or stored code: off the
+  # screen process, the answer comes back as a message.
+  def handle_info({:tap, :check_updates}, socket) do
+    screen = self()
+    {:ok, _} = Task.start(fn -> send(screen, {:operator_deliver, :checked, Deliver.check()}) end)
+    {:noreply, Mob.Socket.assign(socket, :update_note, "Checking for updates…")}
+  end
+
+  def handle_info({:operator_deliver, :checked, result}, socket) do
+    note = "This check: " <> Deliver.describe(result)
+    {:noreply, socket |> Mob.Socket.assign(:update_note, note) |> refresh_updates()}
+  end
+
+  def handle_info({:operator_deliver, :status, status}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :updates, status)}
+
+  def handle_info({:tap, :dismiss_rollback}, socket) do
+    :ok = Deliver.dismiss_rollback()
+    {:noreply, refresh_updates(socket)}
   end
 
   # ── the Dyn layer ──
@@ -203,6 +235,27 @@ defmodule Operator.HomeScreen do
       },
       children: []
     }
+  end
+
+  defp refresh_updates(socket) do
+    screen = self()
+    {:ok, _} = Task.start(fn -> send(screen, {:operator_deliver, :status, Deliver.status()}) end)
+    socket
+  end
+
+  defp updates_section(%{updates: nil}), do: ~MOB(<Text text="…" text_color={:muted} />)
+
+  defp updates_section(%{updates: status, update_note: note}) do
+    lines =
+      for line <- Deliver.status_lines(status) ++ List.wrap(note),
+          do: ~MOB(<Text text={line} text_color={:primary} />)
+
+    dismiss =
+      if status.rollback,
+        do: [button("Dismiss the rollback notice", :dismiss_rollback)],
+        else: []
+
+    %{type: :column, props: %{fill_width: true}, children: lines ++ dismiss}
   end
 
   defp spend(socket) do

@@ -31,3 +31,46 @@ config :jido_ai,
 # default, which isn't shipped to the device. Operator.TzData embeds the file
 # and sets :file_system's path at boot.
 config :time_zone_info, data_persistence: TimeZoneInfo.DataPersistence.FileSystem
+
+# mob_deliver: over-the-air updates of Operator's own code, published from
+# the Mac (Operator.Deliver, docs/DESIGN.md §1). mob_dev evaluates this file
+# on the Mac when it builds the app and ships the result inside the build,
+# where mob_deliver reads its trust settings (delivered code can't change
+# them). The trust root is the public half of the signing key `mix
+# operator.deliver.key` wrote; without that file it is nil and the phone
+# never installs an update. The endpoint is deliberately not here: the
+# phone learns it from the `mix operator.deliver.qr` code and keeps it in
+# its settings (Operator.Deliver).
+deliver_signing_key = Path.expand("~/.config/operator/deliver_signing.key")
+
+trusted_publish_key =
+  with {:ok, "ed25519-private:" <> encoded} <- File.read(deliver_signing_key),
+       {:ok, <<seed::binary-size(32)>>} <- Base.decode64(String.trim(encoded)) do
+    {public, _private} = :crypto.generate_key(:eddsa, :ed25519, seed)
+    "ed25519:" <> Base.encode64(public)
+  else
+    _ -> nil
+  end
+
+config :mob_deliver,
+  trusted_publish_key: trusted_publish_key,
+  app: "com.genericjam.operator",
+  channel: "dev",
+  # While the app is in front; also at launch and from Diagnostics.
+  poll_interval: :timer.minutes(5),
+  # No mob_wake: no silent-push checks. No store listing: no update gate.
+  on_push: false,
+  store_url: nil
+
+if config_env() == :test do
+  # Host tests: no trust root (tests set their own), and mob_deliver's store
+  # (its application runs in the test VM) away from the home directory.
+  config :mob_deliver,
+    trusted_publish_key: nil,
+    root: Path.join(System.tmp_dir!(), "operator_test_mob_deliver")
+else
+  # One "stable launch" for both layers: the Dyn Keeper's (first frame,
+  # then 10 s or the user leaving) also ends a delivered update's
+  # probation (Operator.Deliver.launch_stable/0).
+  config :operator, Operator.Core.Dyn, on_stable: {Operator.Deliver, :launch_stable, []}
+end

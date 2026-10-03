@@ -30,7 +30,10 @@ config :mob, :plugins, [
   :mob_notify,
   :mob_camera,
   :mob_photos,
-  :mob_scanner
+  :mob_scanner,
+  # OTA updates of Operator's own code: pure Elixir, no NIF (config in
+  # config/config.exs, Operator.Deliver).
+  :mob_deliver
 ]
 
 # Trust gate for the first-party plugins. Each is signed in CI with the shared
@@ -53,7 +56,8 @@ config :mob, :trusted_plugins, %{
   mob_photos: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_notify: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_mishka: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
-  mob_ash: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
+  mob_ash: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_deliver: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
 }
 
 config :mob_dev, beam_flags: "-S 0:0"

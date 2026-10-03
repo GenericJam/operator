@@ -68,4 +68,21 @@ defmodule Operator.HomeScreenTest do
     assert text(view) =~ "Not a dollar amount: lots"
     assert Settings.daily_cap(dir) == 2.5
   end
+
+  @tag :capture_log
+  test "code updates: the server, the code running, and Check for updates now" do
+    view = mount_screen(HomeScreen)
+    assert_receive {:operator_deliver, :status, _status} = status, 2_000
+    view = render_info(view, status)
+    assert_renderable(view)
+    assert text(view) =~ "Update server: not set"
+    assert text(view) =~ "Running: this build's own code"
+
+    view = render_info(view, {:tap, :check_updates})
+    assert text(view) =~ "Checking for updates"
+    # No update server on this host: the check says so instead of fetching.
+    assert_receive {:operator_deliver, :checked, {:error, :not_configured}} = checked, 2_000
+    view = render_info(view, checked)
+    assert text(view) =~ "This check: no update server set"
+  end
 end

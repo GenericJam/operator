@@ -62,7 +62,9 @@ defmodule Operator.Core.Tools.DynTool do
       Keeper.start_link(
         name: @selftest_keeper,
         dir: dir,
-        approval: Operator.Core.Dyn.Approval.Biometric
+        approval: Operator.Core.Dyn.Approval.Biometric,
+        # Its launches aren't the app's: they never end an update's probation.
+        on_stable: nil
       )
 
     try do

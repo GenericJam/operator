@@ -8,6 +8,8 @@ defmodule Operator.Links do
       (`Operator.Auth.Transfer`); the six words are still typed on the phone.
     * `operator://handoff?id=…&p=…&n=…&d=…`: one part of omp's handoff, from
       `mix operator.handoff` (`Operator.Handoff`).
+    * `operator://deliver?endpoint=…&key=…`: the Mac's update server, from
+      `mix operator.deliver.qr` (`Operator.Deliver`).
 
   On Android, `MainActivity` hands a link it is opened with to mob as a
   notification tap (mob has no deep-link API), so it reaches the screen
@@ -17,6 +19,7 @@ defmodule Operator.Links do
 
   alias Operator.Auth.Transfer
   alias Operator.Core.Session
+  alias Operator.Deliver
   alias Operator.Handoff
   alias Operator.Handoff.Inbox
 
@@ -24,6 +27,7 @@ defmodule Operator.Links do
           {:login, String.t()}
           | {:handoff_part, pos_integer(), pos_integer()}
           | {:handoff, Handoff.t(), pid()}
+          | {:deliver, String.t()}
           | {:error, String.t()}
 
   @doc """
@@ -36,10 +40,20 @@ defmodule Operator.Links do
       new session that opens with the handoff (`Operator.Handoff.framed/1`
       as its first user message, sent with the next prompt; nothing goes to
       the model before that) and returns `{:handoff, handoff, loop}`;
+    * an update-server link: saved and used for update checks if it signs
+      with this build's trusted key (`Operator.Deliver.configure/2`),
+      `{:deliver, sentence}` to show;
     * anything else: `{:error, sentence}` to show.
   """
   @spec handle(String.t()) :: result()
   def handle(link) when is_binary(link) do
+    case params(link, "deliver") do
+      {:ok, params} -> deliver(params)
+      :error -> handoff_or_login(link)
+    end
+  end
+
+  defp handoff_or_login(link) do
     case Handoff.parse(link) do
       {:ok, part} -> handoff(part)
       {:error, :not_handoff} -> login(link)
@@ -73,6 +87,13 @@ defmodule Operator.Links do
 
       {:error, reason} ->
         {:error, Handoff.message(reason)}
+    end
+  end
+
+  defp deliver(params) do
+    case Deliver.configure(params) do
+      {:ok, sentence} -> {:deliver, sentence}
+      {:error, _sentence} = refused -> refused
     end
   end
 

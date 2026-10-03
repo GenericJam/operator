@@ -19,7 +19,8 @@ defmodule Operator.Core.Dyn.Check do
       `defprotocol` / `defimpl`, macros (`defmacro`, `quote`, `unquote`) or
       `@on_load`;
     * no calls to, or references of: `:code`, `Code`, `Module`, `Port`,
-      `Node`, `Mob.Dist`, `File`, `Path` (v1: no file access at all),
+      `Node`, `Mob.Dist`, `MobDeliver` (the Core's own updates), `File`,
+      `Path` (v1: no file access at all),
       `:init`, `:file`, `:os.cmd`, `:erlang.halt` and the other code-loading
       and node-control functions listed in `@partial`, `System.halt/stop/cmd`,
       `Application.start/stop/put_env`, dynamic atoms (`String.to_atom`, ...);
@@ -66,7 +67,8 @@ defmodule Operator.Core.Dyn.Check do
     "IEx" => "is the interactive shell",
     "Mix" => "is the build tool",
     "Mob.Dist" => "controls distribution",
-    "Mob.Test" => "drives the app remotely"
+    "Mob.Test" => "drives the app remotely",
+    "MobDeliver" => "installs and proves the Core's own updates (only the Mac releases the Core)"
   }
 
   @banned_erlang %{

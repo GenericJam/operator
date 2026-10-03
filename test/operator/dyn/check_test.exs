@@ -72,6 +72,7 @@ defmodule Operator.Core.Dyn.CheckTest do
       {~s|String.to_atom("Elixir.System")|, "String.to_atom"},
       {"&System.halt/0", "System.halt"},
       {"Mob.Test.tap(:x, :y)", "Mob.Test"},
+      {"MobDeliver.mark_stable()", "MobDeliver"},
       {":erlang.suspend_process(pid)", ":erlang.suspend_process"},
       {":erlang.resume_process(pid)", ":erlang.resume_process"},
       {":erlang.trace(pid, true, [:call])", ":erlang.trace"},

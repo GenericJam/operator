@@ -67,11 +67,12 @@ defmodule Operator.Core.Dyn do
   @doc """
   The Dyn step of `Operator.Boot`: loads the current generation (or decides
   on boot probation / safe mode, see `Operator.Core.Dyn.Keeper`) and has the
-  first rendered frame start the clock to "stable".
+  first rendered frame start the clock to "stable". `opts` go to
+  `Operator.Core.Dyn.Keeper.boot/2` (`core_rolled_back:`).
   """
-  @spec boot() :: Keeper.boot_report()
-  def boot do
-    report = Keeper.boot(@keeper)
+  @spec boot(keyword()) :: Keeper.boot_report()
+  def boot(opts \\ []) do
+    report = Keeper.boot(@keeper, opts)
     :ok = Hooks.register(:after_first_render, {Keeper, :first_render, [@keeper]})
     report
   end

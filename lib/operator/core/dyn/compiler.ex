@@ -41,6 +41,8 @@ defmodule Operator.Core.Dyn.Compiler do
         }
   @type failure :: {:check, [Check.violation()]} | {:compile, String.t()}
 
+  # runtime/0, computed once per VM.
+  @runtime_key {__MODULE__, :runtime}
   @default_timeout_ms 60_000
   @default_max_heap_mb 256
 
@@ -315,10 +317,61 @@ defmodule Operator.Core.Dyn.Compiler do
     end
   end
 
-  @doc "Identifies the runtime binaries were built by (OTP, Elixir, app version)."
+  @doc """
+  Identifies the runtime binaries were built by: OTP, Elixir, the app
+  version and the Core's code (`core_digest/0`), fixed for the VM's
+  lifetime. A Core release, by cable or over the air (`Operator.Deliver`),
+  changes it from the next launch on, so every generation built before is
+  rebuilt and selftested against the new Core when it loads.
+  """
   @spec runtime() :: String.t()
-  def runtime,
-    do: "otp-#{System.otp_release()} elixir-#{System.version()} operator-#{app_vsn()}"
+  def runtime do
+    case :persistent_term.get(@runtime_key, nil) do
+      nil ->
+        runtime =
+          "otp-#{System.otp_release()} elixir-#{System.version()} operator-#{app_vsn()} " <>
+            "core-#{core_digest()}"
+
+        :persistent_term.put(@runtime_key, runtime)
+        runtime
+
+      runtime ->
+        runtime
+    end
+  end
+
+  @doc """
+  A digest of the Core's code as this VM runs it: every `Operator.*` module
+  except the Dyn generations' (`Operator.Dyn.*`), by the MD5 of its loaded
+  code, or of its `.beam` on the code path while it isn't loaded (what
+  will load). mob_deliver loads the delivered modules at launch, before
+  the Dyn layer boots, so a delivered Core counts with its delivered code.
+  """
+  @spec core_digest() :: String.t()
+  def core_digest do
+    modules =
+      for {name, file, loaded?} <- :code.all_available(),
+          name = to_string(name),
+          String.starts_with?(name, "Elixir.Operator."),
+          not String.starts_with?(name, "Elixir.Operator.Dyn."),
+          {:ok, md5} <- [module_md5(name, file, loaded?)],
+          do: {name, md5}
+
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary(Enum.sort(modules)))
+    digest |> binary_part(0, 8) |> Base.encode16(case: :lower)
+  end
+
+  defp module_md5(name, _file, true),
+    do: {:ok, :erlang.get_module_info(String.to_existing_atom(name), :md5)}
+
+  defp module_md5(_name, file, false) when is_list(file) do
+    case :beam_lib.md5(file) do
+      {:ok, {_module, md5}} -> {:ok, md5}
+      {:error, :beam_lib, _reason} -> :error
+    end
+  end
+
+  defp module_md5(_name, _file, _loaded?), do: :error
 
   @spec sha256(binary()) :: String.t()
   def sha256(bin), do: :sha256 |> :crypto.hash(bin) |> Base.encode16(case: :lower)

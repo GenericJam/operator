@@ -35,6 +35,44 @@ system prompt sections, hooks that reshape each turn), but not the loop or
 the repair path. Changing the Core is a normal release from the Mac (cable or
 OTA with mob_deliver), never a self-edit.
 
+### The Core's release path: over the air from the Mac
+Built 2026-10-03 (`Operator.Deliver` on the phone, `Mix.Operator.Deliver` and
+`mix operator.deliver.*` / `mix operator.publish` on the Mac). This is the
+only way the Core changes besides a cable deploy:
+
+- **What ships**: Operator's own compiled modules (Core, screens, tools), the
+  BEAMs `mix mob.deploy` would ship, signed with the Mac's key
+  (`~/.config/operator/deliver_signing.key`) and served on the home network
+  by the Mac (`MobDeliverServer.Plug` under Bandit). Not the entry module, the
+  build's config (`mob_app_config`: the trust root), NIF stubs or the Mac's
+  Mix tasks. Dependencies, native code, `priv/` (migrations), `config/*.exs`
+  and `mob.exs` never travel: those need a native deploy.
+- **Trust**: the public key is baked into the build (mob_dev ships
+  `config :mob_deliver` inside it; delivered code can't change it, and Dyn code
+  may not call `MobDeliver` at all, `Operator.Core.Dyn.Check`). The Mac's
+  address is not baked: the phone learns it from an `operator://deliver` QR
+  carrying the key's fingerprint, refused unless it matches the build's key.
+- **When it runs**: mob_deliver checks at launch, every 5 minutes in front
+  and from Diagnostics, prefetches, and loads the delivered modules at the
+  next launch, before the app's code runs.
+- **One stable launch for both layers.** The update is on probation until
+  a launch running it reaches the Keeper's stable point (first frame, then
+  10 s or the user leaving; mob_deliver's own first-frame proof is removed),
+  and is rolled back at the next launch otherwise, and refused on this build
+  from then on. The Dyn runtime fingerprint includes a digest of the Core's
+  loaded code, so the first launch on a new Core rebuilds the current
+  generation from its sources and selftests it (a failure loads no Dyn code
+  that launch and leaves the generation on probation). A launch that failed
+  on a Core update mob_deliver then rolled back isn't counted against the
+  Dyn generation (no boot revert, no step towards safe mode): the Core failed.
+
+  A crashing update, combined: launch 1 runs the new Core (Dyn rebuilt for
+  it, back on probation) and dies before stable; launch 2 rolls the Core
+  back, keeps the generation (rebuilt again for the old Core), and Diagnostics
+  shows the rollback. A crash after stable is an ordinary bug: nothing
+  rolls back; publish a fix (or deploy by cable). A Dyn generation that
+  crashes the app on its own is still reverted by boot probation as before.
+
 ## 2. Self-modification without crashing
 
 ### Generations, not files
