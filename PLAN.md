@@ -56,14 +56,29 @@ Transport options (to decide when we build it):
 
 ## Terminal rendering
 
-**Native first.** The transcript is a mob `:list` (Compose `LazyColumn`,
-virtualized) of `:wrap` rows (`FlowRow`) of styled `:text` pieces, in a
-monospace font, stuck to the bottom while streaming. Copying works by
-long-pressing a message (whole message to the clipboard via
-`Mob.Clipboard.put/2`), tap-to-copy on code blocks, and "Copy last reply".
-Drag-to-select and true inline spans need a mob change: **MOB-374**
-(`selectable` prop → Compose `SelectionContainer` / iOS `UITextView`; `spans`
-prop → `AnnotatedString` / `AttributedString`).
+**Order (Kevin, 2026-10-03):**
+1. **Now (fallback renderer):** the transcript is a mob `:list` (Compose
+   `LazyColumn`, virtualized) of `:wrap` rows (`FlowRow`) of styled `:text`
+   pieces from our own Markdown parser (`Operator.Core.Term`), monospace,
+   stuck to the bottom while streaming. Copying: long-press copies a whole
+   message (`Mob.Clipboard.put/2`), tap-to-copy on code blocks, "Copy last
+   reply".
+2. **Next (real renderer): a native Markdown view per reply**, a mob
+   `native_view` component (`markdown`, props: the reply's Markdown text and
+   the theme) in the same `:list`. Streaming updates the last reply's text.
+   - Android: **Markwon** (commonmark-java → native Spannables in a
+     `TextView`, no HTML step; `setTextIsSelectable(true)` for
+     drag-to-select; table and code plugins).
+   - iOS: **Textual** (successor of MarkdownUI, same author; MarkdownUI is
+     in maintenance mode) or Apple's Markdown parser into an
+     `AttributedString` shown in a read-only selectable `UITextView`;
+     choose by which gives partial selection and tables.
+   This gives true inline styling and selection natively, so Operator no
+   longer depends on **MOB-374** (still useful for other apps). Our parser
+   stays as the fallback and for anywhere a native view isn't available.
+3. Rust is available if we ever want one parser for both platforms: mob
+   builds Rustler NIFs statically (`mix mob.add_nif <name> --type
+   rustler`), so MDEx/comrak could run on device; not needed with step 2.
 
 **Fallback: a self-hosted WebView** (`Mob.UI.webview/1`, local HTML/JS only,
 talking to the app through mob's `postMessage` bridge). It already solves
