@@ -54,6 +54,28 @@ Transport options (to decide when we build it):
 - An omp command/extension `/send-to-phone` and an Operator action
   "Send to omp" that produces a file omp can `--resume`.
 
+## Terminal rendering
+
+**Native first.** The transcript is a mob `:list` (Compose `LazyColumn`,
+virtualized) of `:wrap` rows (`FlowRow`) of styled `:text` pieces, in a
+monospace font, stuck to the bottom while streaming. Copying works by
+long-pressing a message (whole message to the clipboard via
+`Mob.Clipboard.put/2`), tap-to-copy on code blocks, and "Copy last reply".
+Drag-to-select and true inline spans need a mob change: **MOB-374**
+(`selectable` prop → Compose `SelectionContainer` / iOS `UITextView`; `spans`
+prop → `AnnotatedString` / `AttributedString`).
+
+**Fallback: a self-hosted WebView** (`Mob.UI.webview/1`, local HTML/JS only,
+talking to the app through mob's `postMessage` bridge). It already solves
+selection, inline styling, scrollbars and even ANSI (xterm.js), but Kevin
+would rather not, so it's the fallback, used only if one of these holds:
+- the native transcript can't keep up with streaming on the Moto G (dropped
+  frames or input lag a throttle can't fix);
+- MOB-374 turns out impractical on one platform (e.g. iOS range selection);
+- Operator needs real terminal emulation (running programs that emit ANSI).
+If it comes to that, only the transcript moves into the WebView; the input
+field, approvals and the rest of the app stay native.
+
 ## Build order
 
 1. **Core loop** (in progress): pi's turn loop on req_llm (OpenRouter),
