@@ -20,15 +20,16 @@ defmodule Operator.Core.Dyn.Compiler do
   the Keeper counts its crashes and knows the generation is in use.
 
   **Unloading** an old generation (`unload/1`) happens only when no process
-  runs its code: nothing has a module of it as its current function or
-  initial call, and after `:code.delete/1` no process is in its old code
-  (`:erlang.check_process_code/2`); anything still in it is purged later
-  (`purge_old/1`).
+  runs its code: no module of it is anywhere on a process's stack or its
+  initial call; then `:code.delete/1`, and `:code.soft_purge/1` (which
+  refuses while `:erlang.check_process_code/2` finds a process in the old
+  code); anything still in it is purged later (`purge_old/1`).
   """
 
   alias Operator.Core.Dyn.Check
   alias Operator.Core.Dyn.Generation
   alias Operator.Core.Dyn.Keeper
+  alias Operator.Core.Dyn.Selftest
   alias Operator.Core.Dyn.Store
 
   require Logger
@@ -112,8 +113,10 @@ defmodule Operator.Core.Dyn.Compiler do
   @doc """
   Loads generation `gen` from its stored binaries (checked against the
   manifest's hashes). Binaries built by another runtime (an app update
-  since) are rebuilt from the sources first; the manifest records the new
-  hashes. Modules already loaded with the same code are left alone.
+  since) are rebuilt from the sources and selftested again before they
+  load; the manifest records the new hashes and test results, and a
+  proven generation goes back on probation (its code is new). Modules
+  already loaded with the same code are left alone.
   """
   @spec load_generation(Path.t(), Generation.t(), keyword()) ::
           {:ok, [module()], Generation.t()} | {:error, String.t()}
@@ -148,23 +151,54 @@ defmodule Operator.Core.Dyn.Compiler do
 
     case build(Store.sources(root, gen.n), gen.n, Keyword.put(opts, :src_dir, src_dir)) do
       {:ok, %{modules: beams}} ->
-        hashes = Map.new(beams, fn {mod, bin} -> {inspect(mod), sha256(bin)} end)
+        mods = Enum.map(beams, &elem(&1, 0))
 
-        if Enum.sort(Map.keys(hashes)) == Enum.sort(Enum.map(gen.modules, & &1.versioned)) do
-          Store.put_beams(root, gen.n, beams)
-          modules = Enum.map(gen.modules, &%{&1 | sha256: hashes[&1.versioned]})
-          gen = %{gen | modules: modules, runtime: runtime()}
-          :ok = Store.put_generation(root, gen)
-          {:ok, Enum.map(beams, &elem(&1, 0)), gen}
-        else
-          purge(Enum.map(beams, &elem(&1, 0)))
-          {:error, "rebuilding generation #{gen.n} produced different modules"}
+        case rebuilt(root, gen, beams, Selftest.run(mods, opts)) do
+          {:ok, gen} ->
+            {:ok, mods, gen}
+
+          {:error, _} = error ->
+            purge(mods)
+            error
         end
 
       {:error, {_stage, detail}} ->
         {:error, "rebuilding generation #{gen.n} failed: #{failure_text(detail)}"}
     end
   end
+
+  defp rebuilt(root, gen, beams, {:ok, tests}) do
+    hashes = Map.new(beams, fn {mod, bin} -> {inspect(mod), sha256(bin)} end)
+
+    if Enum.sort(Map.keys(hashes)) == Enum.sort(Enum.map(gen.modules, & &1.versioned)) do
+      Store.put_beams(root, gen.n, beams)
+
+      gen = %{
+        unprove(gen)
+        | modules: Enum.map(gen.modules, &%{&1 | sha256: hashes[&1.versioned]}),
+          selftests: Enum.map(tests, &Map.delete(&1, :name)),
+          runtime: runtime()
+      }
+
+      :ok = Store.put_generation(root, gen)
+      {:ok, gen}
+    else
+      {:error, "rebuilding generation #{gen.n} produced different modules"}
+    end
+  end
+
+  defp rebuilt(_root, gen, _beams, {:error, tests}) do
+    failed = for %{ok: false} = t <- tests, do: "#{t.module}: #{t.detail}"
+
+    {:error,
+     "generation #{gen.n} failed its selftests after a rebuild for #{runtime()}: " <>
+       Enum.join(failed, "; ")}
+  end
+
+  defp unprove(%Generation{status: :proven} = gen),
+    do: %{gen | status: :probation, quiet: false, restarted: false, proven_at: nil}
+
+  defp unprove(gen), do: gen
 
   @doc "Loads binaries; one already loaded with identical code is skipped."
   @spec load([{module(), binary()}]) :: :ok | {:error, String.t()}
@@ -220,12 +254,21 @@ defmodule Operator.Core.Dyn.Compiler do
   leaves everything loaded; `{:ok, stuck}` deleted them all and purged all
   but `stuck`, whose old code a process is still executing (retry with
   `purge_old/1`).
+
+  "Runs them" looks at each process's whole stack (its backtrace), not
+  only the function it is in: a process sleeping in `Process.sleep/1`,
+  called from a Dyn function, returns into that function.
   """
   @spec unload([module()]) :: :in_use | {:ok, [module()]}
+  def unload([]), do: {:ok, []}
+
   def unload(mods) do
     set = MapSet.new(mods)
+    # Code addresses print as "('<module>':fun/arity + offset)"; a module
+    # name merely held in a variable doesn't count.
+    needles = :binary.compile_pattern(Enum.map(mods, &"('#{&1}':"))
 
-    if Enum.any?(Process.list(), &runs?(&1, set)) do
+    if Enum.any?(Process.list(), &runs?(&1, set, needles)) do
       :in_use
     else
       Enum.each(mods, &:code.delete/1)
@@ -233,14 +276,13 @@ defmodule Operator.Core.Dyn.Compiler do
     end
   end
 
-  @doc "Purges the old code of `mods` no process executes; returns the rest."
+  @doc """
+  Purges the old code of `mods` that no process executes
+  (`:code.soft_purge/1`, which asks `:erlang.check_process_code/2`);
+  returns the rest.
+  """
   @spec purge_old([module()]) :: [module()]
-  def purge_old(mods) do
-    pids = Process.list()
-    {stuck, free} = Enum.split_with(mods, fn mod -> Enum.any?(pids, &old_code?(&1, mod)) end)
-    Enum.each(free, &:code.purge/1)
-    stuck
-  end
+  def purge_old(mods), do: Enum.reject(mods, &:code.soft_purge/1)
 
   # ── names ──
 
@@ -452,26 +494,25 @@ defmodule Operator.Core.Dyn.Compiler do
 
   # ── helpers ──
 
-  defp runs?(pid, set) do
-    case Process.info(pid, [:current_function, :initial_call, :dictionary]) do
-      [current_function: current, initial_call: initial, dictionary: dict] ->
+  defp runs?(pid, set, needles) do
+    case Process.info(pid, [:current_function, :initial_call, :dictionary, :backtrace]) do
+      [current_function: current, initial_call: initial, dictionary: dict, backtrace: bt] ->
         proc_lib_initial =
           case List.keyfind(dict, :"$initial_call", 0) do
             {_, mfa} -> mfa
             nil -> nil
           end
 
-        Enum.any?([current, initial, proc_lib_initial], fn
-          {mod, _fun, _arity} -> MapSet.member?(set, mod)
-          _ -> false
-        end)
+        :binary.match(bt, needles) != :nomatch or
+          Enum.any?([current, initial, proc_lib_initial], fn
+            {mod, _fun, _arity} -> MapSet.member?(set, mod)
+            _ -> false
+          end)
 
       nil ->
         false
     end
   end
-
-  defp old_code?(pid, mod), do: :erlang.check_process_code(pid, mod)
 
   defp tag({:ok, _} = ok, _stage), do: ok
   defp tag({:error, detail}, stage), do: {:error, {stage, detail}}

@@ -1,12 +1,12 @@
 defmodule Operator.Test.Dyn.Approval do
-  @moduledoc "Approval for tests: `request/1` approves; only its own tokens verify, for their subject."
+  @moduledoc "Approval for tests: `request/1` approves, with a fresh token; only its own tokens verify, for their subject."
   @behaviour Operator.Core.Dyn.Approval
 
   @impl true
-  def request(subject), do: {:ok, {:test_approval, subject}}
+  def request(subject), do: {:ok, {:test_approval, subject, make_ref()}}
 
   @impl true
-  def verify({:test_approval, subject}, subject), do: :ok
+  def verify({:test_approval, subject, ref}, subject) when is_reference(ref), do: :ok
   def verify(_token, _subject), do: {:error, :invalid_approval}
 end
 

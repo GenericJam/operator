@@ -8,7 +8,8 @@ defmodule Operator.Core.Dyn.Generation do
     * `:building` while a proposal compiles and selftests (a crash leaves it so);
     * `:rejected` (check, compile or selftest failed: `reason` says why) or
       `:candidate` (passed; waiting for approval);
-    * `:superseded` when a newer proposal replaced a candidate;
+    * `:superseded` when a newer proposal replaced a candidate, `:discarded`
+      when the human (or agent) dropped it;
     * `:probation` once activated, until it is proven: 60 s without a Dyn
       crash (`quiet`) **and** a later app start reached stable (`restarted`);
     * `:proven`, or `:reverted` (automatically or by hand; `reason`).
@@ -24,7 +25,16 @@ defmodule Operator.Core.Dyn.Generation do
   `selftests` has one `%{module, kind, ok, detail, ms}` per module.
   """
 
-  @statuses [:building, :candidate, :rejected, :superseded, :probation, :proven, :reverted]
+  @statuses [
+    :building,
+    :candidate,
+    :rejected,
+    :superseded,
+    :discarded,
+    :probation,
+    :proven,
+    :reverted
+  ]
   @kinds [:tool, :screen, :module]
 
   defstruct n: 0,
@@ -46,7 +56,14 @@ defmodule Operator.Core.Dyn.Generation do
             restarted: false
 
   @type status ::
-          :building | :candidate | :rejected | :superseded | :probation | :proven | :reverted
+          :building
+          | :candidate
+          | :rejected
+          | :superseded
+          | :discarded
+          | :probation
+          | :proven
+          | :reverted
   @type kind :: :tool | :screen | :module
   @type module_entry :: %{
           module: String.t(),

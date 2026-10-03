@@ -23,6 +23,13 @@ defmodule Operator.Core.Dyn.Check do
       `:init`, `:file`, `:os.cmd`, `:erlang.halt` and the other code-loading
       and node-control functions listed in `@partial`, `System.halt/stop/cmd`,
       `Application.start/stop/put_env`, dynamic atoms (`String.to_atom`, ...);
+    * nothing that controls or watches other processes or the VM: tracing
+      (`:erlang.trace*`, `:trace`, `:seq_trace`, `:dbg`, `:erl_tracer`),
+      `:erlang.suspend_process/resume_process`, `system_monitor` /
+      `system_profile`, `:erts_debug`, `:erts_internal`, `:observer_backend`,
+      and listing every process (`Process.list/0`, `:erlang.processes/0`);
+      `:persistent_term` only to read (`put` / `erase` change VM-wide state
+      and trigger a global GC);
     * Operator's own modules are off limits except `Operator.Core.Tool`
       (the behaviour a Dyn tool implements); of Mob only the UI modules in
       `@mob_allowed`;
@@ -79,7 +86,14 @@ defmodule Operator.Core.Dyn.Check do
     c: "is the shell",
     shell: "is the shell",
     sys: "reaches into other processes' state",
-    application: "starts and stops applications"
+    application: "starts and stops applications",
+    seq_trace: "traces other processes",
+    dbg: "traces other processes",
+    trace: "traces other processes",
+    erl_tracer: "traces other processes",
+    erts_debug: "reaches into the VM's internals",
+    erts_internal: "reaches into the VM's internals",
+    observer_backend: "inspects other processes and the VM"
   }
 
   # Allowed modules with forbidden functions (may only be called directly).
@@ -92,13 +106,15 @@ defmodule Operator.Core.Dyn.Check do
     {:elixir, "String"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "List"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "Function"} => ~w(capture)a,
-    {:elixir, "Process"} => [],
+    {:elixir, "Process"} => [:list],
     {:elixir, "Kernel"} => [],
     {:erlang, :erlang} =>
       ~w(halt open_port load_module purge_module delete_module check_old_code load_nif
          set_cookie system_flag make_fun binary_to_atom list_to_atom binary_to_existing_atom
-         list_to_existing_atom)a,
-    {:erlang, :os} => ~w(cmd putenv unsetenv set_signal)a
+         list_to_existing_atom suspend_process resume_process trace trace_pattern
+         trace_delivered trace_info system_monitor system_profile processes)a,
+    {:erlang, :os} => ~w(cmd putenv unsetenv set_signal)a,
+    {:erlang, :persistent_term} => ~w(put erase)a
   }
 
   # `{module, function, arity}` taking a module + function as data (index 0, 1).

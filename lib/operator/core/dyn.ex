@@ -99,6 +99,12 @@ defmodule Operator.Core.Dyn do
     with {:ok, %{dir: dir}} <- Registry.config(keeper), do: Store.stage_delete(dir, path)
   end
 
+  @spec stage_read(String.t(), atom()) ::
+          {:ok, String.t()} | {:error, :bad_path | :not_found | :not_running}
+  def stage_read(path, keeper \\ @keeper) do
+    with {:ok, %{dir: dir}} <- Registry.config(keeper), do: Store.stage_read(dir, path)
+  end
+
   # ── proposals ──
 
   @doc """
@@ -106,10 +112,13 @@ defmodule Operator.Core.Dyn do
   it. `{:error, rejection}` names the step that refused (`:check`,
   `:compile`, `:selftest`, `:names`) and why; a rejected generation's
   modules are unloaded and the current one is untouched.
+  `{:error, :proposal_limit}`: this launch made too many proposals (see
+  `Operator.Core.Dyn.Keeper`); the app has to restart first.
   """
   @spec propose(String.t(), atom()) ::
           {:ok, proposal()}
-          | {:error, rejection() | :no_changes | :rationale_required | :not_running}
+          | {:error,
+             rejection() | :no_changes | :rationale_required | :not_running | :proposal_limit}
   def propose(rationale, keeper \\ @keeper) do
     with {:ok, config} <- Registry.config(keeper),
          {:ok, rationale} <- rationale(rationale) do
@@ -117,9 +126,11 @@ defmodule Operator.Core.Dyn do
       base = Store.sources(config.dir, parent)
       staged = Store.staged(config.dir)
 
-      if staged == base,
-        do: {:error, :no_changes},
-        else: check(config, keeper, %{parent: parent, rationale: rationale}, base, staged)
+      cond do
+        staged == base -> {:error, :no_changes}
+        Keeper.reserve_proposal(keeper) != :ok -> {:error, :proposal_limit}
+        true -> check(config, keeper, %{parent: parent, rationale: rationale}, base, staged)
+      end
     end
   end
 
@@ -197,7 +208,9 @@ defmodule Operator.Core.Dyn do
       end
     else
       {:error, stage, reason, extra} ->
-        Compiler.purge(Compiler.loaded(n))
+        # A compile failure purged its own modules (and may have refused
+        # because another generation `n` is loaded: not ours to touch).
+        if stage != :compile, do: Compiler.purge(Compiler.loaded(n))
         tests = Keyword.get(extra, :selftests, [])
 
         _ =
@@ -268,10 +281,19 @@ defmodule Operator.Core.Dyn do
 
   # ── approval, activation, revert ──
 
-  @doc "Asks the configured approval (biometric in the app) for a token for `subject`."
+  @doc """
+  A token for `subject` from the configured approval (in the app: only
+  after `Operator.Core.Dyn.Approval.Biometric.confirm/1`).
+  """
   @spec request_approval(Approval.subject(), atom()) :: {:ok, Approval.token()} | {:error, term()}
   def request_approval(subject, keeper \\ @keeper) do
     with {:ok, %{approval: approval}} <- Registry.config(keeper), do: approval.request(subject)
+  end
+
+  @doc "Drops the pending candidate `n` (no approval needed: nothing that runs changes)."
+  @spec discard(pos_integer(), atom()) :: :ok | {:error, :not_pending | :not_running}
+  def discard(n, keeper \\ @keeper) do
+    if GenServer.whereis(keeper), do: Keeper.discard(keeper, n), else: {:error, :not_running}
   end
 
   @doc "Activates candidate generation `n` (it goes on probation). Needs an approval token."
@@ -358,6 +380,46 @@ defmodule Operator.Core.Dyn do
 
   @spec dyn_module?(module()) :: boolean()
   def dyn_module?(module), do: Compiler.generation_of(module) != nil
+
+  @doc "Generation `n`'s sources (what runs, for the current one)."
+  @spec sources(non_neg_integer(), atom()) :: %{String.t() => String.t()}
+  def sources(n, keeper \\ @keeper), do: with_dir(keeper, %{}, &Store.sources(&1, n))
+
+  # ── the agent's view ──
+
+  @doc "The system prompt section that explains the Dyn layer and its tools to the agent."
+  @spec agent_guide() :: String.t()
+  def agent_guide do
+    """
+    ## Changing yourself: the Dyn layer
+
+    You can add your own tools and screens. They live in the Dyn layer: Elixir sources you \
+    edit in a staging copy with `dyn_files`, `dyn_read`, `dyn_write`, `dyn_edit`, `dyn_delete` \
+    and `dyn_reset` (back to what runs now). The loop, sessions, sign-in, the core tools and \
+    the rescue screen are the Core: you can't change them.
+
+    Rules (a static check enforces them and reports file:line):
+    - Each `.ex` file holds one or more `defmodule Operator.Dyn.<Name>`, nothing else at the \
+    top level. Refer to your other modules as `Operator.Dyn.<Name>` (an `alias` is fine).
+    - No file, OS, node or code-loading access: no `File`, `Path`, `System.cmd`, `Port`, \
+    `:os`, `Code`, `Module`, `:code`, `Node`; no tracing, suspending or listing processes; no \
+    `:persistent_term.put`; no macros; no `apply`/`spawn` on a module held in a variable. No \
+    Operator modules except `Operator.Core.Tool`; of Mob only the UI modules.
+    - A tool: `@behaviour Operator.Core.Tool` with `name/0` (lowercase, unique, not a core \
+    tool's), `description/0`, `parameter_schema/0` (JSON Schema, string keys), \
+    `run(args, ctx)` returning `{:ok, result}` or `{:error, reason}`, and a `selftest/0` \
+    returning `:ok` (required; keep it pure and fast).
+    - A screen: `use Mob.Screen` with `mount/3` and `render/1` (a `~MOB` template); it must \
+    mount on an empty socket and render. `selftest/0` is optional for screens and other modules.
+
+    The cycle: `dyn_propose` (with a one-line rationale) checks, compiles and selftests the \
+    staging copy as a new generation and shows its diff. Nothing changes yet: the human \
+    approves it on the phone with a fingerprint; you can't activate it yourself. Once active \
+    it is on probation: 3 crashes within 60 s, or an app launch that dies, revert it to the \
+    previous generation automatically. `dyn_status` shows what runs, the pending proposal and \
+    recent crash reports: read them, fix the sources, propose again.
+    """
+  end
 
   defp with_dir(keeper, default, fun) do
     case Registry.config(keeper) do

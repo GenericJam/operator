@@ -5,12 +5,13 @@ defmodule Operator.Core.Dyn.Keeper do
   the registry table (`Operator.Core.Dyn.Registry`) and is the only writer
   of the `current` pointer.
 
-  **Activation** (`activate/3`, approval required) flips the pointer, then
-  swaps the registry: a crash between the two leaves the old pointer, or
-  the new pointer and a registry the next start rebuilds from it. The new
-  generation is on **probation** until it has run 60 s without a Dyn crash
-  (`quiet`) and a later app start reached stable (`restarted`); then it is
-  proven.
+  **Activation** (`activate/3`, approval required) loads the generation,
+  flips the pointer, then swaps the registry: a crash between the two
+  leaves the old pointer, or the new pointer and a registry the next start
+  rebuilds from it. The new generation is on **probation** until it has
+  run 60 s without a Dyn crash (`quiet`) and a later app start reached
+  stable (`restarted`); then it is proven. An approval token is accepted
+  once (see `Operator.Core.Dyn.Approval`).
 
   **Crashes.** Dyn processes are watched (`watch/3`: tool calls through
   `Operator.Core.ToolRunner`, screens through the `mount/3` wrapper the
@@ -18,30 +19,46 @@ defmodule Operator.Core.Dyn.Keeper do
   log and sent to subscribers as `{:operator_dyn, %{type: :crash, ...}}`.
   3 crashes of the current generation within 60 s while it is on probation
   revert it to its parent (`%{type: :reverted, crashes: [...]}`, the crash
-  reports the agent fixes from). A proven generation's crashes are only
-  reported.
+  reports the agent fixes from): the parent is loaded first (generation 0,
+  no Dyn at all, if the parent can't be), then the pointer flips. If the
+  pointer can't be written, `:revert_failed` is reported and the crashes
+  stay counted, so the next one tries again. A proven generation's crashes
+  are only reported.
 
   **Launches** (`boot/1`, once per app start). `boot.json` counts the
-  launches since the last one that reached stable (`mark_stable/1`; in the
-  app: the first frame plus `:stable_delay_ms`). If the previous launch
-  never got there and the current generation is still unproven, it is
-  reverted before anything loads (boot probation). Two such launches in a
-  row: **safe mode**, the Core boots without any Dyn module and
-  `Operator.Core.Dyn.safe_mode?/0` says so; activations and reverts then
-  only move the pointer, for the next launch.
+  launches since the last one that reached stable (`mark_stable/1`). In the
+  app a launch is stable once its first frame was drawn and then either
+  `:stable_delay_ms` passed or the app went to the background (the user
+  left it: a quick close is not a failed launch; a crash before the first
+  frame or within the delay is). If the previous launch never got there and
+  the current generation is still unproven, it is reverted before anything
+  loads (boot probation). Two such launches in a row: **safe mode**, the
+  Core boots without any Dyn module and `Operator.Core.Dyn.safe_mode?/0`
+  says so; activations and reverts then only move the pointer, for the
+  next launch. A generation that can't be loaded (say its rebuild for a new
+  app version fails its selftests) is reported as `:load_failed`, the
+  launch runs without it, and it goes back on probation. The pointer only
+  ever names a generation that was active once (`:probation`, `:proven`,
+  or `:candidate` / `:reverted` caught between the pointer and manifest
+  writes); anything else falls back to generation 0.
 
   **Old generations** stay loaded while anything may run them: the current
   one, its parent (instant revert), the pending candidate, and any
   generation with a live watched process; the rest are unloaded with
   `Operator.Core.Dyn.Compiler.unload/1`, retried every `:gc_retry_ms`.
 
+  **Proposals** per launch are capped (`:max_proposals`, and none while
+  the atom table is over 80 % full): every proposal creates atoms (module
+  names `Operator.Dyn.G<n>.*`, parsed identifiers) and atoms are never
+  freed.
+
   Options (defaults from `config :operator, Operator.Core.Dyn`): `:name`
   (also the registry table's name), `:dir`, `:approval`
   (`Operator.Core.Dyn.Approval.Biometric`), `:probation_ms` (60 000),
   `:crash_limit` (3), `:crash_window_ms` (60 000), `:stable_delay_ms`
-  (10 000), `:gc_retry_ms` (30 000), and the compile / selftest limits
-  (`:compile_timeout_ms`, `:compile_max_heap_mb`, `:selftest_timeout_ms`,
-  `:selftest_max_heap_mb`).
+  (10 000), `:gc_retry_ms` (30 000), `:max_proposals` (50), and the
+  compile / selftest limits (`:compile_timeout_ms`, `:compile_max_heap_mb`,
+  `:selftest_timeout_ms`, `:selftest_max_heap_mb`).
   """
   use GenServer
 
@@ -58,7 +75,8 @@ defmodule Operator.Core.Dyn.Keeper do
     crash_limit: 3,
     crash_window_ms: 60_000,
     stable_delay_ms: 10_000,
-    gc_retry_ms: 30_000
+    gc_retry_ms: 30_000,
+    max_proposals: 50
   ]
   @build_opts [
     :compile_timeout_ms,
@@ -66,6 +84,8 @@ defmodule Operator.Core.Dyn.Keeper do
     :selftest_timeout_ms,
     :selftest_max_heap_mb
   ]
+  # Mob.Device `:app` events that mean the user left the app.
+  @left [:will_resign_active, :did_enter_background, :will_terminate]
 
   @type boot_report :: %{
           mode: :normal | :safe,
@@ -93,9 +113,17 @@ defmodule Operator.Core.Dyn.Keeper do
   @spec boot(GenServer.server()) :: boot_report()
   def boot(server), do: GenServer.call(server, :boot, :infinity)
 
+  @doc "Counts a proposal against this launch's cap; `{:error, :proposal_limit}` once it's reached."
+  @spec reserve_proposal(GenServer.server()) :: :ok | {:error, :proposal_limit}
+  def reserve_proposal(server), do: GenServer.call(server, :reserve_proposal)
+
   @doc "Records a proposal that passed (see `Operator.Core.Dyn.propose/2`); supersedes the previous one."
   @spec candidate(GenServer.server(), Generation.t(), [module()]) :: :ok | {:error, :superseded}
   def candidate(server, gen, mods), do: GenServer.call(server, {:candidate, gen, mods})
+
+  @doc "Drops the pending candidate `n` (unloads it; no approval needed)."
+  @spec discard(GenServer.server(), pos_integer()) :: :ok | {:error, :not_pending}
+  def discard(server, n), do: GenServer.call(server, {:discard, n})
 
   @spec activate(GenServer.server(), pos_integer(), Approval.token()) ::
           {:ok, Generation.t()} | {:error, term()}
@@ -157,6 +185,7 @@ defmodule Operator.Core.Dyn.Keeper do
     }
 
     :ets.insert(table, {:config, config})
+    subscribe_device()
 
     s = %{
       name: name,
@@ -171,8 +200,11 @@ defmodule Operator.Core.Dyn.Keeper do
       current_parent: nil,
       booted: nil,
       booted_on_probation: false,
+      rendered: false,
       stable: false,
       stable_timer: nil,
+      proposals: 0,
+      used: MapSet.new(),
       pending: nil,
       loaded: %{},
       old: [],
@@ -211,77 +243,42 @@ defmodule Operator.Core.Dyn.Keeper do
     {:reply, report, s}
   end
 
+  def handle_call(:reserve_proposal, _from, s) do
+    if s.proposals < s.opts.max_proposals and not atoms_near_limit?(),
+      do: {:reply, :ok, remember_launch(%{s | proposals: s.proposals + 1})},
+      else: {:reply, {:error, :proposal_limit}, s}
+  end
+
   def handle_call({:candidate, gen, mods}, _from, s) do
     if s.pending != nil and s.pending > gen.n do
-      supersede(s, gen.n, mods)
+      drop(s, gen.n, mods, :superseded)
       {:reply, {:error, :superseded}, s}
     else
-      if s.pending, do: supersede(s, s.pending, Map.get(s.loaded, s.pending, []))
+      if s.pending, do: drop(s, s.pending, Map.get(s.loaded, s.pending, []), :superseded)
       s = %{s | pending: gen.n, loaded: Map.put(Map.delete(s.loaded, s.pending), gen.n, mods)}
       broadcast(s, %{type: :candidate, gen: gen.n, rationale: gen.rationale})
       {:reply, :ok, s}
     end
   end
 
-  def handle_call({:activate, n, token}, _from, s) do
-    with :ok <- approve(s, {:activate, n}, token),
-         {:ok, gen} <- fetch(s, n),
-         :ok <- expect(gen.status == :candidate, {:not_a_candidate, gen.status}),
-         :ok <-
-           expect(gen.parent == s.current, {:stale, %{parent: gen.parent, current: s.current}}),
-         {:ok, s} <- ensure_loaded(s, gen),
-         :ok <- flip(s, n) do
-      gen = %{
-        gen
-        | status: :probation,
-          activated_at: Generation.now(),
-          quiet: false,
-          restarted: false
-      }
+  def handle_call({:discard, n}, _from, %{pending: n} = s) when is_integer(n) do
+    drop(s, n, Map.get(s.loaded, n, []), :discarded)
+    {:reply, :ok, %{s | pending: nil, loaded: Map.delete(s.loaded, n)}}
+  end
 
-      persist(s, gen)
-      s = %{s | pending: if(s.pending == n, do: nil, else: s.pending)}
-      s = s |> switch(gen) |> start_quiet()
-      broadcast(s, %{type: :activated, gen: n, parent: gen.parent})
-      {:reply, {:ok, gen}, gc_soon(s)}
-    else
-      {:error, _} = error -> {:reply, error, s}
+  def handle_call({:discard, _n}, _from, s), do: {:reply, {:error, :not_pending}, s}
+
+  def handle_call({:activate, n, token}, _from, s) do
+    case approve(s, {:activate, n}, token) do
+      {:ok, s} -> activate(s, n)
+      {error, s} -> {:reply, error, s}
     end
   end
 
   def handle_call({:revert_to, n, token}, _from, s) do
-    with :ok <- approve(s, {:revert_to, n}, token),
-         {:ok, gen} <- fetch(s, n),
-         :ok <- expect(n != s.current, :already_current),
-         :ok <- expect(Generation.ever_active?(gen), {:never_active, gen.status}),
-         {:ok, s} <- ensure_loaded(s, gen),
-         :ok <- flip(s, n) do
-      from = s.current
-      reason = "reverted by hand to generation #{n}"
-      if s.current_status == :probation, do: mark_reverted(s, from, reason)
-
-      gen =
-        if gen.status == :reverted do
-          gen = %{
-            gen
-            | status: :probation,
-              activated_at: Generation.now(),
-              quiet: false,
-              restarted: false,
-              reason: nil
-          }
-
-          persist(s, gen)
-          gen
-        else
-          gen
-        end
-
-      s = s |> switch(gen) |> start_quiet()
-      report(s, %{type: :reverted, from: from, to: n, reason: reason, crashes: []})
-      {:reply, {:ok, gen}, gc_soon(s)}
-    else
-      {:error, _} = error -> {:reply, error, s}
+    case approve(s, {:revert_to, n}, token) do
+      {:ok, s} -> revert_to(s, n)
+      {error, s} -> {:reply, error, s}
     end
   end
 
@@ -316,14 +313,19 @@ defmodule Operator.Core.Dyn.Keeper do
   end
 
   @impl true
-  def handle_cast(:first_render, %{stable: false, stable_timer: nil} = s),
-    do:
-      {:noreply, %{s | stable_timer: Process.send_after(self(), :stable, s.opts.stable_delay_ms)}}
+  def handle_cast(:first_render, %{stable: false, stable_timer: nil} = s) do
+    timer = Process.send_after(self(), :stable, s.opts.stable_delay_ms)
+    {:noreply, remember_launch(%{s | rendered: true, stable_timer: timer})}
+  end
 
   def handle_cast(:first_render, s), do: {:noreply, s}
 
   @impl true
   def handle_info(:stable, s), do: {:noreply, stable(%{s | stable_timer: nil})}
+
+  # The user left a launch that had drawn its first frame: it got going.
+  def handle_info({:mob_device, event}, %{rendered: true} = s) when event in @left,
+    do: {:noreply, stable(s)}
 
   def handle_info({:quiet, n, ref}, %{quiet: ref, current: n} = s) do
     s = %{s | quiet: nil}
@@ -351,10 +353,78 @@ defmodule Operator.Core.Dyn.Keeper do
 
   def handle_info(_message, s), do: {:noreply, s}
 
+  # ── activation and reverts by hand ──
+
+  defp activate(s, n) do
+    with {:ok, gen} <- fetch(s, n),
+         :ok <- expect(gen.status == :candidate, {:not_a_candidate, gen.status}),
+         :ok <-
+           expect(gen.parent == s.current, {:stale, %{parent: gen.parent, current: s.current}}),
+         {:ok, s, gen} <- ensure_loaded(s, gen),
+         :ok <- flip(s, n) do
+      gen = %{
+        gen
+        | status: :probation,
+          activated_at: Generation.now(),
+          quiet: false,
+          restarted: false
+      }
+
+      persist(s, gen)
+      s = %{s | pending: if(s.pending == n, do: nil, else: s.pending)}
+      s = s |> switch(gen) |> start_quiet()
+      broadcast(s, %{type: :activated, gen: n, parent: gen.parent})
+      {:reply, {:ok, gen}, gc_soon(s)}
+    else
+      {:error, _} = error -> {:reply, error, s}
+    end
+  end
+
+  defp revert_to(s, n) do
+    with {:ok, gen} <- fetch(s, n),
+         :ok <- expect(n != s.current, :already_current),
+         :ok <- expect(Generation.ever_active?(gen), {:never_active, gen.status}),
+         {:ok, s, gen} <- ensure_loaded(s, gen),
+         :ok <- flip(s, n) do
+      from = s.current
+      reason = "reverted by hand to generation #{n}"
+      if s.current_status == :probation, do: mark_reverted(s, from, reason)
+      gen = if gen.status == :reverted, do: reactivate(s, gen), else: gen
+      s = s |> switch(gen) |> start_quiet()
+      report(s, %{type: :reverted, from: from, to: n, reason: reason, crashes: []})
+      {:reply, {:ok, gen}, gc_soon(s)}
+    else
+      {:error, _} = error -> {:reply, error, s}
+    end
+  end
+
+  defp reactivate(s, gen) do
+    gen = %{
+      gen
+      | status: :probation,
+        activated_at: Generation.now(),
+        quiet: false,
+        restarted: false,
+        reason: nil
+    }
+
+    persist(s, gen)
+    gen
+  end
+
   # ── launches ──
 
   defp launch(s, failed) do
-    s = %{s | mode: :normal, stable: false, booted: nil, booted_on_probation: false}
+    s = %{
+      s
+      | mode: :normal,
+        stable: false,
+        rendered: false,
+        booted: nil,
+        booted_on_probation: false,
+        proposals: 0
+    }
+
     gen = current_generation(s)
 
     {s, gen, reverted} =
@@ -364,6 +434,7 @@ defmodule Operator.Core.Dyn.Keeper do
         {s, gen, nil}
       end
 
+    unless Store.staging?(s.dir), do: Store.reset_staging(s.dir, Store.sources(s.dir, gen.n))
     s = %{s | current: gen.n, current_status: gen.status, current_parent: gen.parent}
 
     s =
@@ -376,8 +447,9 @@ defmodule Operator.Core.Dyn.Keeper do
     {s, reverted}
   end
 
-  # The pointed-at generation; one the pointer reached without its manifest
-  # saying so (a crash between the two writes) is unproven.
+  # The pointed-at generation. One the pointer reached without its manifest
+  # saying so (a crash between the two writes) is unproven; one that was
+  # never approved can't be current at all.
   defp current_generation(s) do
     n = Store.current(s.dir)
 
@@ -385,15 +457,25 @@ defmodule Operator.Core.Dyn.Keeper do
       {:ok, %{status: status} = gen} when status in [:probation, :proven] ->
         gen
 
-      {:ok, gen} ->
+      {:ok, %{status: status} = gen} when status in [:candidate, :reverted] ->
         gen = %{gen | status: :probation, quiet: false, restarted: false}
         persist(s, gen)
         gen
 
+      {:ok, gen} ->
+        invalid_pointer(s, n, "is #{gen.status}")
+
       {:error, _} ->
-        Logger.error("[dyn] the current pointer names generation #{n}, which has no manifest")
-        Generation.empty()
+        invalid_pointer(s, n, "has no manifest")
     end
+  end
+
+  defp invalid_pointer(s, n, why) do
+    reason = "the current pointer names generation #{n}, which #{why}; using generation 0"
+    Logger.error("[dyn] " <> reason)
+    _ = flip(s, 0)
+    report(s, %{type: :load_failed, gen: n, reason: reason})
+    Generation.empty()
   end
 
   defp boot_revert(s, gen) do
@@ -436,25 +518,32 @@ defmodule Operator.Core.Dyn.Keeper do
     :ets.insert(s.table, {:mode, :normal})
 
     case ensure_loaded(s, gen) do
-      {:ok, s} ->
+      {:ok, s, gen} ->
         %{s | booted: gen.n, booted_on_probation: gen.status == :probation} |> switch(gen)
 
       {:error, {:load_failed, reason}} ->
         report(s, %{type: :load_failed, gen: gen.n, reason: reason})
         :ets.insert(s.table, {:generation, gen.n, %{}})
-        s
+
+        if gen.status == :proven,
+          do: persist(s, %{gen | status: :probation, quiet: false, restarted: false}),
+          else: :ok
+
+        %{s | current_status: :probation}
     end
   end
 
   defp stable(%{stable: true} = s), do: s
 
   defp stable(s) do
+    if s.stable_timer, do: Process.cancel_timer(s.stable_timer)
+
     case Store.put_boot_markers(s.dir, %{boot_attempts: 0, stable: true}) do
       :ok -> :ok
       {:error, e} -> Logger.error("[dyn] can't write launch markers: #{inspect(e)}")
     end
 
-    s = remember_launch(%{s | stable: true})
+    s = remember_launch(%{s | stable: true, stable_timer: nil})
 
     with true <- s.mode == :normal and s.booted_on_probation and s.booted == s.current,
          :probation <- s.current_status,
@@ -489,12 +578,22 @@ defmodule Operator.Core.Dyn.Keeper do
   end
 
   defp remember_launch(s) do
-    launch = Map.take(s, [:mode, :booted, :booted_on_probation, :stable])
+    launch = Map.take(s, [:mode, :booted, :booted_on_probation, :stable, :rendered, :proposals])
     :persistent_term.put(launch_key(s), launch)
     s
   end
 
   defp launch_key(s), do: {__MODULE__, s.name, s.dir}
+
+  defp subscribe_device do
+    if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
+    :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp atoms_near_limit?,
+    do: :erlang.system_info(:atom_count) > :erlang.system_info(:atom_limit) * 0.8
 
   # ── generations ──
 
@@ -505,14 +604,15 @@ defmodule Operator.Core.Dyn.Keeper do
     end
   end
 
-  defp ensure_loaded(%{mode: :safe} = s, _gen), do: {:ok, s}
+  # The generation as loaded: a rebuild for a new runtime changes it.
+  defp ensure_loaded(%{mode: :safe} = s, gen), do: {:ok, s, gen}
 
   defp ensure_loaded(s, gen) do
     if gen.n == 0 or Map.has_key?(s.loaded, gen.n) do
-      {:ok, s}
+      {:ok, s, gen}
     else
       case Compiler.load_generation(s.dir, gen, s.build) do
-        {:ok, mods, _gen} -> {:ok, %{s | loaded: Map.put(s.loaded, gen.n, mods)}}
+        {:ok, mods, gen} -> {:ok, %{s | loaded: Map.put(s.loaded, gen.n, mods)}, gen}
         {:error, reason} -> {:error, {:load_failed, reason}}
       end
     end
@@ -566,14 +666,25 @@ defmodule Operator.Core.Dyn.Keeper do
     :ok
   end
 
-  defp supersede(s, n, mods) do
+  # A candidate that won't run: superseded by a newer one, or discarded.
+  defp drop(s, n, mods, status) do
     Compiler.purge(mods)
-    _ = Store.update_generation(s.dir, n, &%{&1 | status: :superseded})
-    broadcast(s, %{type: :superseded, gen: n})
+    _ = Store.update_generation(s.dir, n, &%{&1 | status: status})
+    broadcast(s, %{type: status, gen: n})
   end
 
-  defp approve(_s, _subject, nil), do: {:error, :approval_required}
-  defp approve(s, subject, token), do: s.approval.verify(token, subject)
+  defp approve(s, _subject, nil), do: {{:error, :approval_required}, s}
+
+  defp approve(s, subject, token) do
+    if MapSet.member?(s.used, token) do
+      {{:error, :approval_used}, s}
+    else
+      case s.approval.verify(token, subject) do
+        :ok -> {:ok, %{s | used: MapSet.put(s.used, token)}}
+        error -> {error, s}
+      end
+    end
+  end
 
   defp expect(true, _error), do: :ok
   defp expect(false, error), do: {:error, error}
@@ -632,31 +743,45 @@ defmodule Operator.Core.Dyn.Keeper do
     now = System.monotonic_time(:millisecond)
     window = s.opts.crash_window_ms
     recent = [{now, entry} | Enum.filter(s.crashes, fn {t, _} -> now - t < window end)]
+    s = %{s | crashes: recent}
 
     if length(recent) >= s.opts.crash_limit do
       crashes = recent |> Enum.reverse() |> Enum.map(&elem(&1, 1))
       reason = "#{length(recent)} crashes within #{div(window, 1000)} s on probation"
       revert(s, reason, crashes)
     else
-      start_quiet(%{s | crashes: recent})
+      start_quiet(s)
     end
   end
 
+  # Load the target first (the parent, or no Dyn at all), then flip.
   defp revert(s, reason, crashes) do
     from = s.current
-    to = s.current_parent || 0
+    {:ok, s, target} = load_first(s, Enum.uniq([s.current_parent || 0, 0]))
 
-    with :ok <- flip(s, to),
-         {:ok, target} <- fetch(s, to),
-         {:ok, s} <- ensure_loaded(s, target) do
-      mark_reverted(s, from, reason)
-      s = s |> switch(target) |> start_quiet()
-      report(s, %{type: :reverted, from: from, to: to, reason: reason, crashes: crashes})
-      gc_soon(s)
+    case flip(s, target.n) do
+      :ok ->
+        mark_reverted(s, from, reason)
+        s = s |> switch(target) |> start_quiet()
+        report(s, %{type: :reverted, from: from, to: target.n, reason: reason, crashes: crashes})
+        gc_soon(s)
+
+      {:error, e} ->
+        Logger.error("[dyn] couldn't revert generation #{from}: #{inspect(e)}")
+        report(s, %{type: :revert_failed, gen: from, to: target.n, reason: inspect(e)})
+        s
+    end
+  end
+
+  # Generation 0 always loads (there is nothing to load).
+  defp load_first(s, [n | rest]) do
+    with {:ok, gen} <- fetch(s, n),
+         {:ok, s, gen} <- ensure_loaded(s, gen) do
+      {:ok, s, gen}
     else
       error ->
-        Logger.error("[dyn] couldn't revert generation #{from}: #{inspect(error)}")
-        s
+        report(s, %{type: :load_failed, gen: n, reason: inspect(error)})
+        load_first(s, rest)
     end
   end
 

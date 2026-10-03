@@ -144,6 +144,20 @@ defmodule Operator.Core.Dyn.Store do
   @spec staged(Path.t()) :: %{String.t() => String.t()}
   def staged(root), do: read_tree(staging_dir(root))
 
+  @doc "Has staging been set up (it is created from the current generation once)?"
+  @spec staging?(Path.t()) :: boolean()
+  def staging?(root), do: File.dir?(staging_dir(root))
+
+  @spec stage_read(Path.t(), String.t()) :: {:ok, String.t()} | {:error, :bad_path | :not_found}
+  def stage_read(root, rel) do
+    with {:ok, rel} <- valid_rel(rel) do
+      case File.read(Path.join(staging_dir(root), rel)) do
+        {:ok, source} -> {:ok, source}
+        {:error, _} -> {:error, :not_found}
+      end
+    end
+  end
+
   @doc "Replaces the staging copy with `sources` (normally the current generation's)."
   @spec reset_staging(Path.t(), %{String.t() => String.t()}) :: :ok
   def reset_staging(root, sources) do

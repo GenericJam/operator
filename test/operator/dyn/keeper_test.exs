@@ -58,7 +58,7 @@ defmodule Operator.Core.Dyn.KeeperTest do
     n
   end
 
-  test "activation needs an approval for that very generation", %{tmp_dir: dir} do
+  test "activation needs an approval for that very generation, used once", %{tmp_dir: dir} do
     start_keeper(dir)
     %{n: n} = propose!(%{"weather.ex" => tool("Weather", "weather")})
 
@@ -71,15 +71,35 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert Store.current(dir) == 0
     assert Dyn.tools() == []
     assert {:ok, %{status: :candidate}} = Dyn.generation(n)
+
+    # A revert token pulls a generation back once, not whenever it's replayed.
+    {:ok, token} = Dyn.request_approval({:activate, n})
+    assert {:ok, _} = Dyn.activate(n, token)
+    {:ok, back} = Dyn.request_approval({:revert_to, 0})
+    assert {:ok, _} = Dyn.revert_to(0, back)
+    {:ok, again} = Dyn.request_approval({:revert_to, n})
+    assert {:ok, _} = Dyn.revert_to(n, again)
+    assert Dyn.revert_to(0, back) == {:error, :approval_used}
+    assert Store.current(dir) == n
   end
 
-  test "the production approval refuses until the biometric prompt is wired", %{tmp_dir: dir} do
-    start_keeper(dir, approval: Operator.Core.Dyn.Approval.Biometric)
+  test "the production approval: only a fresh fingerprint confirmation of that subject",
+       %{tmp_dir: dir} do
+    alias Operator.Core.Dyn.Approval.Biometric
+
+    start_supervised!(Biometric)
+    start_keeper(dir, approval: Biometric)
     %{n: n} = propose!(%{"weather.ex" => tool("Weather", "weather")})
 
     assert Dyn.request_approval({:activate, n}) == {:error, :approval_required}
-    assert Dyn.activate(n, {:test_approval, {:activate, n}}) == {:error, :approval_required}
-    assert Store.current(dir) == 0
+
+    assert Dyn.activate(n, {:test_approval, {:activate, n}, make_ref()}) ==
+             {:error, :invalid_approval}
+
+    :ok = Biometric.confirm({:activate, n})
+    assert {:ok, token} = Dyn.request_approval({:activate, n})
+    assert {:ok, %{status: :probation}} = Dyn.activate(n, token)
+    assert Store.current(dir) == n
   end
 
   test "activation flips pointer and registry together; a failed pointer write changes neither",
@@ -100,6 +120,8 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert {:ok, %{status: :candidate}} = Dyn.generation(n2)
 
     File.rm_rf!(Path.join(dir, "current.tmp"))
+    assert Dyn.activate(n2, token) == {:error, :approval_used}
+    {:ok, token} = Dyn.request_approval({:activate, n2})
     assert {:ok, %{status: :probation, parent: ^n1}} = Dyn.activate(n2, token)
     assert Store.current(dir) == n2
     {:ok, g2} = Dyn.lookup({:tool, "weather"})
@@ -216,19 +238,22 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert [{"weather", _}] = Dyn.tools()
   end
 
-  test "an old generation is unloaded only once nothing runs its code", %{tmp_dir: dir} do
+  test "an old generation is unloaded only once nothing runs its code, anywhere on a stack",
+       %{tmp_dir: dir} do
     start_keeper(dir)
 
+    # wait/0 is in Process.sleep/1 (not Dyn code) but returns into the module.
     src = fn tag ->
-      "defmodule Operator.Dyn.Waiter do\n  def wait do\n    receive do\n      :go -> #{inspect(tag)}\n    end\n  end\nend\n"
+      "defmodule Operator.Dyn.Waiter do\n  def wait do\n    :ok = Process.sleep(400)\n    #{inspect(tag)}\n  end\nend\n"
     end
 
     n1 = activate!(%{"waiter.ex" => src.("one")})
     {:ok, g1} = Dyn.lookup({:module, "Waiter"})
-    waiter = Task.async(fn -> g1.wait() end)
+    test = self()
+    waiter = spawn(fn -> send(test, {:waited, g1.wait()}) end)
 
     eventually(fn ->
-      Process.info(waiter.pid, :current_function) == {:current_function, {g1, :wait, 0}}
+      Process.info(waiter, :current_function) == {:current_function, {Process, :sleep, 1}}
     end)
 
     n2 = activate!(%{"waiter.ex" => src.("two")})
@@ -236,12 +261,144 @@ defmodule Operator.Core.Dyn.KeeperTest do
     Process.sleep(150)
     assert Compiler.loaded(n1) == [g1]
 
-    send(waiter.pid, :go)
-    assert Task.await(waiter) == "one"
+    assert_receive {:waited, "one"}, 1_000
     eventually(fn -> Compiler.loaded(n1) == [] end)
 
     # The current generation and its parent (instant revert) stay.
     assert Compiler.loaded(n2) != []
     assert Compiler.loaded(n3) != []
+  end
+
+  test "a pending candidate can be discarded without approval", %{tmp_dir: dir} do
+    start_keeper(dir)
+    :ok = Dyn.subscribe()
+    %{n: n} = propose!(%{"weather.ex" => tool("Weather", "weather")})
+
+    assert Dyn.discard(n + 1) == {:error, :not_pending}
+    assert Dyn.discard(n) == :ok
+    assert %{gen: ^n} = await_dyn(:discarded)
+    assert %{pending: nil, generation: 0} = Dyn.status()
+    assert Compiler.loaded(n) == []
+    assert {:ok, %{status: :discarded}} = Dyn.generation(n)
+    {:ok, token} = Dyn.request_approval({:activate, n})
+    assert {:error, {:not_a_candidate, :discarded}} = Dyn.activate(n, token)
+  end
+
+  test "proposals per launch are capped (atoms are never freed)", %{tmp_dir: dir} do
+    start_keeper(dir, max_proposals: 2)
+    :ok = Dyn.stage_put("a.ex", "defmodule Operator.Dyn.A do\n  def x, do: File.rm(\"/\")\nend\n")
+    assert {:error, %{stage: :check}} = Dyn.propose("one")
+    assert {:error, %{stage: :check}} = Dyn.propose("two")
+    assert Dyn.propose("three") == {:error, :proposal_limit}
+
+    # A new launch starts counting again.
+    relaunch(dir, max_proposals: 2)
+    assert {:error, %{stage: :check}} = Dyn.propose("four")
+  end
+
+  test "the auto-revert loads its target before moving the pointer", %{tmp_dir: dir} do
+    start_keeper(dir)
+    n1 = activate!(%{"weather.ex" => tool("Weather", "weather")})
+    n2 = activate!(tools())
+    # Only the current generation is loaded after a relaunch; its parent's
+    # binaries no longer match their manifest.
+    relaunch(dir, stable: true)
+
+    File.write!(
+      Path.join([dir, "gens", "#{n1}", "ebin", "Elixir.Operator.Dyn.G#{n1}.Weather.beam"]),
+      "junk"
+    )
+
+    :ok = Dyn.subscribe()
+
+    # The pointer can't be written: the crashes stay counted and nothing moves.
+    File.mkdir_p!(Path.join(dir, "current.tmp"))
+    for _ <- 1..3, do: call_tool("boom")
+    assert %{gen: ^n2, to: 0} = await_dyn(:revert_failed)
+    assert %{generation: ^n2, status: :probation} = Dyn.status()
+    assert Store.current(dir) == n2
+
+    # The next crash tries again; the broken parent is skipped for generation 0.
+    File.rm_rf!(Path.join(dir, "current.tmp"))
+    call_tool("boom")
+    assert %{from: ^n2, to: 0} = await_dyn(:reverted)
+    assert Store.current(dir) == 0
+    assert %{generation: 0} = Dyn.status()
+    assert Enum.any?(Dyn.log(), &(&1.type == "load_failed" and &1.gen == n1))
+  end
+
+  test "a launch that drew its first frame and then went to the background got going",
+       %{tmp_dir: dir} do
+    start_keeper(dir, stable_delay_ms: 60_000)
+    n = activate!(%{"weather.ex" => tool("Weather", "weather")})
+    assert %{generation: ^n} = relaunch(dir, stable: true, stable_delay_ms: 60_000)
+
+    # Leaving before the first frame counts as a failed launch ...
+    send(Keeper, {:mob_device, :did_enter_background})
+    assert %{generation: ^n} = Dyn.status()
+    assert %{boot_attempts: 1, stable: false} = Store.boot_markers(dir)
+
+    # ... leaving after it doesn't: the user closed a working app.
+    Keeper.first_render(Keeper, nil)
+    send(Keeper, {:mob_device, :did_enter_background})
+    _ = Dyn.status()
+    assert %{boot_attempts: 0, stable: true} = Store.boot_markers(dir)
+
+    assert %{generation: ^n, reverted: nil, failed_launches: 0} =
+             relaunch(dir, stable_delay_ms: 60_000)
+  end
+
+  test "the pointer never makes a generation current that wasn't approved", %{tmp_dir: dir} do
+    start_keeper(dir)
+
+    :ok =
+      Dyn.stage_put(
+        "a.ex",
+        "defmodule Operator.Dyn.A do\n  def x, do: %Operator.Dyn.Nope{}\nend\n"
+      )
+
+    assert {:error, %{stage: :compile, n: bad}} = Dyn.propose("broken")
+    :ok = Store.put_current(dir, bad)
+
+    assert %{generation: 0, mode: :normal} = relaunch(dir, stable: true)
+    assert Store.current(dir) == 0
+    assert {:ok, %{status: :rejected}} = Dyn.generation(bad)
+    assert [%{type: "load_failed", gen: ^bad}] = Dyn.log()
+  end
+
+  test "binaries rebuilt for a new app version are selftested before they load",
+       %{tmp_dir: dir} do
+    start_keeper(dir, probation_ms: 20)
+    # Dyn code may only name Dyn modules, so the flag is a plain atom.
+    flag = :operator_dyn_keeper_test_fail_selftest
+    on_exit(fn -> :persistent_term.erase(flag) end)
+
+    selftest =
+      "if :persistent_term.get(#{inspect(flag)}, false), do: {:error, :broken}, else: :ok"
+
+    n =
+      prove!(dir, %{"weather.ex" => tool("Weather", "weather", selftest: selftest)},
+        probation_ms: 20
+      )
+
+    built_for = fn runtime ->
+      {:ok, _} = Store.update_generation(dir, n, &%{&1 | runtime: runtime})
+    end
+
+    # Rebuilt and passing: it loads, back on probation (its code is new).
+    built_for.("an older app")
+    assert %{generation: ^n, status: :probation} = relaunch(dir, stable: true, probation_ms: 20)
+    assert [{"weather", _}] = Dyn.tools()
+    assert {:ok, %{status: :probation, runtime: runtime}} = Dyn.generation(n)
+    assert runtime == Compiler.runtime()
+
+    # Rebuilt and failing: reported, not loaded, still on probation.
+    built_for.("an older app")
+    :persistent_term.put(flag, true)
+    assert %{generation: ^n, status: :probation} = relaunch(dir, stable: true, probation_ms: 20)
+    assert Dyn.tools() == []
+    assert Compiler.loaded(n) == []
+    assert %{type: "load_failed", gen: ^n, reason: reason} = List.last(Dyn.log())
+    assert reason =~ "failed its selftests after a rebuild"
   end
 end

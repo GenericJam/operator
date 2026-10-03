@@ -34,6 +34,7 @@ defmodule Operator.Core.Dyn.CheckTest do
         def screen, do: Notes
         def up(list), do: Enum.map(list, &String.upcase/1)
         def call, do: apply(String, :upcase, ["a"])
+        def setting, do: :persistent_term.get(:operator_dyn_setting, :default)
       end
       """
     }
@@ -70,7 +71,23 @@ defmodule Operator.Core.Dyn.CheckTest do
       {":\"Elixir.System\".halt()", "write module names as aliases"},
       {~s|String.to_atom("Elixir.System")|, "String.to_atom"},
       {"&System.halt/0", "System.halt"},
-      {"Mob.Test.tap(:x, :y)", "Mob.Test"}
+      {"Mob.Test.tap(:x, :y)", "Mob.Test"},
+      {":erlang.suspend_process(pid)", ":erlang.suspend_process"},
+      {":erlang.resume_process(pid)", ":erlang.resume_process"},
+      {":erlang.trace(pid, true, [:call])", ":erlang.trace"},
+      {":erlang.trace_pattern({:m, :f, :_}, true)", ":erlang.trace_pattern"},
+      {":erlang.trace_delivered(pid)", ":erlang.trace_delivered"},
+      {":erlang.system_monitor(pid, [:busy_port])", ":erlang.system_monitor"},
+      {":erlang.system_profile(pid, [:runnable_procs])", ":erlang.system_profile"},
+      {":seq_trace.set_token(:label, 1)", ":seq_trace"},
+      {":dbg.tracer()", ":dbg"},
+      {":erts_debug.df(:m)", ":erts_debug"},
+      {":erts_internal.purge_module(:m, :prepare)", ":erts_internal"},
+      {":observer_backend.sys_info()", ":observer_backend"},
+      {":persistent_term.put(:k, 1)", ":persistent_term.put"},
+      {":persistent_term.erase(:k)", ":persistent_term.erase"},
+      {"Process.list()", "Process.list"},
+      {":erlang.processes()", ":erlang.processes"}
     ]
 
     for {body, expected} <- banned do
