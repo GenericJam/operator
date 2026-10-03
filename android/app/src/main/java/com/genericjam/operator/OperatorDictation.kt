@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
+import kotlinx.coroutines.delay
 
 /**
  * The composer's mic: Android's `SpeechRecognizer` behind a chip, a
@@ -60,6 +61,7 @@ object OperatorDictation {
         SpeechRecognizer.ERROR_AUDIO -> "audio"
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "busy"
         SpeechRecognizer.ERROR_CLIENT -> "client"
+        12, 13 -> "language" // ERROR_LANGUAGE_NOT_SUPPORTED / _UNAVAILABLE (API 31)
         else -> "error_$code"
     }
 }
@@ -78,7 +80,10 @@ private class Dictation(private val context: Context) {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // Online, explicitly: without the offline language pack (the Moto G
+            // 2021 has none for en-CA) it fails at once with LANGUAGE_UNAVAILABLE.
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, holdSilenceMs)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, holdSilenceMs)
@@ -120,6 +125,14 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
         if (face != null) FontFamily(face) else FontFamily.Monospace
     }
 
+    // The Google recognizer sometimes streams partials, then ends with an empty
+    // final (or ERROR_NO_MATCH): the last partial is then the transcript.
+    var lastPartial by remember { mutableStateOf("") }
+    // The finger is down: the recognizer's own end-of-speech doesn't end a hold.
+    var held by remember { mutableStateOf(false) }
+    // Bumped per press, so a stale watchdog can't end a later session.
+    var session by remember { mutableStateOf(0) }
+
     val listener = remember {
         object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
@@ -128,23 +141,40 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
             }
 
             override fun onEndOfSpeech() {
+                if (held) return
                 phase = Phase.PROCESSING
                 currentSend("state", mapOf("state" to "processing"))
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
                 val text = firstResult(partialResults)
-                if (text.isNotEmpty()) currentSend("partial", mapOf("text" to text))
+                if (text.isNotEmpty()) {
+                    lastPartial = text
+                    currentSend("partial", mapOf("text" to text))
+                }
             }
 
             override fun onResults(results: Bundle?) {
                 phase = Phase.IDLE
-                currentSend("final", mapOf("text" to firstResult(results)))
+                val text = firstResult(results).ifEmpty { lastPartial }
+                lastPartial = ""
+                currentSend("final", mapOf("text" to text))
                 currentSend("state", mapOf("state" to "idle"))
             }
 
             override fun onError(error: Int) {
+                // A press released too soon was cancelled (and hinted) already.
+                if (phase == Phase.IDLE) return
                 phase = Phase.IDLE
+                val heard = lastPartial
+                lastPartial = ""
+                if (heard.isNotEmpty() &&
+                    (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                ) {
+                    currentSend("final", mapOf("text" to heard))
+                    currentSend("state", mapOf("state" to "idle"))
+                    return
+                }
                 // Holding RECORD_AUDIO and still refused: the recognition
                 // service (the Google app) has no microphone access itself.
                 val reason =
@@ -176,6 +206,7 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
             }
             else -> {
                 phase = Phase.LISTENING
+                lastPartial = ""
                 dictation.start(listener)
                 true
             }
@@ -194,16 +225,39 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
                 detectTapGestures(
                     onPress = {
                         if (phase == Phase.IDLE && begin()) {
+                            val mine = ++session
+                            held = true
                             val pressedAt = System.currentTimeMillis()
                             tryAwaitRelease()
-                            if (System.currentTimeMillis() - pressedAt < 300) {
-                                dictation.cancel()
-                                phase = Phase.IDLE
-                                currentSend("hint", emptyMap())
-                                currentSend("state", mapOf("state" to "idle"))
-                            } else {
-                                phase = Phase.PROCESSING
-                                dictation.stop()
+                            held = false
+                            // The recognizer may have finished (or failed) while held.
+                            if (phase != Phase.IDLE) {
+                                if (System.currentTimeMillis() - pressedAt < 300) {
+                                    phase = Phase.IDLE
+                                    dictation.cancel()
+                                    currentSend("hint", emptyMap())
+                                    currentSend("state", mapOf("state" to "idle"))
+                                } else {
+                                    phase = Phase.PROCESSING
+                                    currentSend("state", mapOf("state" to "processing"))
+                                    dictation.stop()
+                                    // stopListening can take 10-20 s to report back (the
+                                    // Google service waits out its own silence timer):
+                                    // give the final 2 s, then end with what was heard.
+                                    delay(2_000)
+                                    if (session == mine && phase == Phase.PROCESSING) {
+                                        phase = Phase.IDLE
+                                        dictation.cancel()
+                                        val heard = lastPartial
+                                        lastPartial = ""
+                                        if (heard.isNotEmpty()) {
+                                            currentSend("final", mapOf("text" to heard))
+                                        } else {
+                                            currentSend("error", mapOf("reason" to "no_speech"))
+                                        }
+                                        currentSend("state", mapOf("state" to "idle"))
+                                    }
+                                }
                             }
                         }
                     },

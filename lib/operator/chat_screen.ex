@@ -896,6 +896,10 @@ defmodule Operator.ChatScreen do
   defp dictation_error("no_speech"), do: "Didn't catch that: hold mic while you speak"
   defp dictation_error("network"), do: "Dictation needs the network (no offline speech model)"
   defp dictation_error("unavailable"), do: "No speech recognizer on this phone"
+
+  defp dictation_error("language"),
+    do: "The speech recognizer has no model for this language: check Google's voice settings"
+
   defp dictation_error("busy"), do: "The speech recognizer is busy: try again"
 
   defp dictation_error("permission"),
