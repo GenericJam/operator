@@ -1,0 +1,37 @@
+/_build/
+/deps/
+/doc/
+/.fetch
+*.ez
+*.beam
+*.o
+*.so
+*.a
+erl_crash.dump
+
+# Machine-local Mob config overrides (mob.exs itself is project config — commit it)
+mob.local.exs
+
+# Signing secrets — NEVER commit
+android/keystore.properties
+android/*.keystore
+
+# Native build caches / outputs
+android/app/src/main/assets/otp.zip
+android/local.properties
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+ios/zig-out/
+ios/.zig-cache/
+**/.zig-cache/
+_build/mob_release/
+
+# macOS
+.DS_Store
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
