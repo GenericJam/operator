@@ -3,17 +3,12 @@
 # The activated plugins' tier-3/4 contributions, read at boot by Mob.Plugins.
 # Regenerated whenever `config :mob, :plugins` changes (the deploy/regen hook).
 %{
-  nifs: [:mob_biometric_nif, :mob_background_nif, :mob_location_nif,
-   :mob_notify_nif, :mob_camera_nif, :mob_photos_nif],
-  plugins: [:mob_biometric, :mob_background, :mob_location, :mob_notify,
-   :mob_camera, :mob_photos],
+  nifs: [:mob_background_nif, :mob_location_nif, :mob_notify_nif,
+   :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif],
+  plugins: [:mob_background, :mob_location, :mob_notify, :mob_camera,
+   :mob_photos, :mob_scanner],
   settings: [],
   screens: [
-    %{
-      module: MobBiometric.DemoScreen,
-      plugin: :mob_biometric,
-      default_route: "/mob_biometric/demo"
-    },
     %{
       module: MobLocation.DemoScreen,
       plugin: :mob_location,
