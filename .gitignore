@@ -38,3 +38,6 @@ _build/mob_release/
 
 # ExUnit @tag :tmp_dir output
 /tmp/
+
+# Copied from priv/fonts by mob_dev on every native build
+/android/app/src/main/res/font/

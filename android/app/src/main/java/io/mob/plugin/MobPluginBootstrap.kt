@@ -16,6 +16,9 @@ object MobPluginBootstrap {
         io.mob.biometric.MobBiometricBridge.register()
         handOff(io.mob.biometric.MobBiometricBridge, activity)
         collectPermissionProvider(io.mob.biometric.MobBiometricBridge)
+        io.mob.background.MobBackgroundBridge.register()
+        handOff(io.mob.background.MobBackgroundBridge, activity)
+        collectPermissionProvider(io.mob.background.MobBackgroundBridge)
     }
 
     // Returns the first plugin-supplied Android permission mapping for `cap`,

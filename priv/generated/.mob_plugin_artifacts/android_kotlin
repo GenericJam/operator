@@ -1,1 +1,2 @@
 android/app/src/main/java/io/mob/biometric/MobBiometricBridge.kt
+android/app/src/main/java/io/mob/background/MobBackgroundBridge.kt
