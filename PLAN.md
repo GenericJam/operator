@@ -76,6 +76,29 @@ would rather not, so it's the fallback, used only if one of these holds:
 If it comes to that, only the transcript moves into the WebView; the input
 field, approvals and the rest of the app stay native.
 
+## Transcript rendering contract (phone ⇄ omp)
+
+A session moves between the phone and omp, so what the model writes must
+render well in both. The contract is **omp's own Markdown subset**
+(`pi-tui/src/components/markdown.ts`): headings, paragraphs, bold, italic,
+strikethrough, inline code, fenced code blocks with a language, links,
+lists, tables, blockquotes, rules, a few HTML tags, and `$…$` math. No
+phone-only markup (no custom colour tags).
+- **Phone renderer** (`Operator.Core.Term`) implements that subset; anything
+  it can't render degrades to readable plain text, never raw syntax.
+- **Colour** comes from role (user / assistant / tool / error / notice) and
+  construct (code, headings, links) in the theme, never from the model text.
+- **Tool calls and results** render from the structured session entries, as
+  omp's tool renderers do, not from the model's prose.
+- Tested against a real (redacted) omp transcript: no raw markup survives.
+
+**Copying.** Fields meant to be copied are **fenced code blocks**: the
+system prompt tells the model to put commands, values, URLs, IDs and
+snippets in them; the phone shows a Copy button on each, and in omp they're
+ordinary code blocks. Anything else can still be copied: long-press copies a
+whole message, "Copy last reply" sits by the input, and drag-to-select for
+any text arrives with MOB-374.
+
 ## Build order
 
 1. **Core loop** (in progress): pi's turn loop on req_llm (OpenRouter),
