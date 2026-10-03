@@ -68,6 +68,7 @@ defmodule Operator.ChatScreen do
        notifications_asked: false,
        proposal: pending_proposal(),
        approving: nil,
+       activated: nil,
        phone: %{},
        foreground: true
      )
@@ -141,8 +142,11 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
-  def handle_info(:clear_toast, socket),
+  # Only the toast it was set for: a newer one keeps its full time.
+  def handle_info({:clear_toast, text}, %{assigns: %{toast: text}} = socket),
     do: {:noreply, socket |> Mob.Socket.assign(:toast, nil) |> refresh()}
+
+  def handle_info({:clear_toast, _older}, socket), do: {:noreply, socket}
 
   # ── composer ──
 
@@ -301,7 +305,10 @@ defmodule Operator.ChatScreen do
 
     socket = if gone, do: Mob.Socket.assign(socket, :proposal, nil), else: socket
 
-    case dyn_line(event) do
+    # This screen just activated it and said so already.
+    own = event[:type] == :activated and event[:gen] == socket.assigns.activated
+
+    case if(own, do: nil, else: dyn_line(event)) do
       nil -> {:noreply, refresh(socket)}
       line -> {:noreply, toast(socket, line)}
     end
@@ -337,7 +344,7 @@ defmodule Operator.ChatScreen do
          {:ok, _gen} <- Dyn.activate(n, token) do
       {:noreply,
        socket
-       |> Mob.Socket.assign(:proposal, nil)
+       |> Mob.Socket.assign(proposal: nil, activated: n)
        |> toast(
          "Generation #{n} is live, on probation: it reverts by itself if it keeps crashing"
        )}
@@ -823,7 +830,7 @@ defmodule Operator.ChatScreen do
   # scrolls it into view (and one the user scrolled up stays put). Longer
   # text stays longer (~20 characters a second).
   defp toast(socket, text) do
-    Process.send_after(self(), :clear_toast, max(@toast_ms, String.length(text) * 50))
+    Process.send_after(self(), {:clear_toast, text}, max(@toast_ms, String.length(text) * 50))
     socket |> Mob.Socket.assign(:toast, text) |> repaint()
   end
 

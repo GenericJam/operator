@@ -38,9 +38,13 @@ defmodule Operator.ChatScreenTest do
         view = render_info(view, msg)
         if type == until, do: view, else: pump(view, until, timeout)
 
-      timer when timer in [:flush, :stick, :clear_toast] ->
+      timer when timer in [:flush, :stick] ->
         view = render_info(view, timer)
         if timer == until, do: view, else: pump(view, until, timeout)
+
+      {:clear_toast, _text} = timer ->
+        view = render_info(view, timer)
+        if until == :clear_toast, do: view, else: pump(view, until, timeout)
 
       {:llm_request, _, _} ->
         pump(view, until, timeout)
@@ -458,6 +462,12 @@ defmodule Operator.ChatScreenTest do
       assert_received {:confirmed, {:activate, ^n}}
       assert %{generation: ^n, status: :probation} = Operator.Core.Dyn.status()
       refute button?(view, "approve")
+      assert text(view) =~ "Generation #{n} is live"
+
+      # the Keeper's own event for it doesn't replace (or cut short) that toast
+      view = render_info(view, dyn_event(:activated))
+      assert text(view) =~ "Generation #{n} is live"
+      view = render_info(view, {:clear_toast, "Generation #{n} activated (on probation)"})
       assert text(view) =~ "Generation #{n} is live"
     end
 
