@@ -17,8 +17,9 @@ unusable host-wide). Evidence files are in `docs/spike/`.
 | Compile a Mob.Screen on device, load it, navigate to it | **Yes**. |
 | ExUnit-free selftest on device | **Yes**; failing selftests and syntax errors are refused and not persisted. |
 | Survive a restart (persist source, recompile at boot) | **Yes**. |
-| OpenRouter PKCE, localhost callback | **Works** (Chrome → BEAM listener on `127.0.0.1:51423` → exchange to openrouter.ai), with one Android 15 catch (below). Real sign-in **pending Kevin**. |
-| Streamed model call, tool-call round trip | **Not run**: needs the key (pending sign-in). Code ready: `Operator.Diag.stream/1`, `Operator.Diag.tool_roundtrip/1`. |
+| OpenRouter PKCE, localhost callback | **Works on a real phone** (Moto G 2021, 2026-10-02): Kevin signed in; Chrome → BEAM listener on `127.0.0.1:51423` → exchange to openrouter.ai in 1 attempt, 1046 ms. |
+| Streamed model call | **Works** on the phone (`claude-haiku-4.5` via OpenRouter: 3 chunks, $0.00014). The default free model (`gemma-4-31b-it:free`) was rate-limited upstream (429, Google's shared pool). |
+| Tool-call round trip | **Works with req_llm directly** (model called `add_numbers(1234, 4321)`, phone ran it, answer "5555"; 2 turns, 2.4 s, $0.0017). **Fails through jido_ai's ReAct runner**: see "jido_ai + OpenRouter" below. |
 
 ## Numbers
 
@@ -49,7 +50,28 @@ boot: 191 MB (`:erlang.memory(:total)`, with the full catalog).
 43-line screen 57–82 ms; 224-line screen 180–280 ms. The first compile after
 a launch is 1–2 s slower (compiler modules load cold).
 
-**OAuth exchange**: transport works; real latency pending.
+**OAuth exchange**: 1046 ms, first attempt, on the Moto G 2021.
+
+## jido_ai + OpenRouter: second turn fails
+
+jido_ai 2.3.0's ReAct runner (`reasoning/react/runner.ex`,
+`maybe_put_previous_response_id/2`) records the response id of every model
+reply and sends it back as `provider_options: [previous_response_id: …]` on
+the next turn. Only OpenAI-family providers accept that option; req_llm's
+OpenRouter provider validates provider options strictly (NimbleOptions), so
+every second turn (i.e. every tool call) fails with `unknown options
+[:previous_response_id]`. There is no switch to turn it off, a
+`request_transformer` can only merge options (not delete one), and req_llm
+has no "ignore unknown provider options" mode. Upstream `main` has the same
+code (checked 2026-10-02). Options: (a) fix upstream (only set it when the
+model's provider schema has `:previous_response_id`) and use a fork until it
+ships; (b) run Operator's own loop on req_llm (proven above) and use Jido
+for actions/agents only. (b) also gives the omp-style control we want
+(steering, checkpoints, the session as plain text).
+
+Also: req_llm's default `max_tokens` for Claude Haiku is 64000, which a
+small OpenRouter balance can't cover (402 "can only afford 8000"). Always
+pass `max_tokens`.
 
 ## What broke and how it's fixed
 
@@ -115,24 +137,14 @@ a launch is 1–2 s slower (compiler modules load cold).
 - `mob.exs` now has `beam_flags: "-S 0:0"` (all cores) from the scheduler
   test; battery impact unmeasured.
 
-## Resume the sign-in (pending)
+## Sign-in (done 2026-10-02)
 
-1. `agent-lease acquire <name> --serial emulator-5554` (boot `Pixel_8_arm`
-   if needed: `emulator -avd Pixel_8_arm -no-snapshot-load &`), then
-   `mix mob.connect --no-iex --no-restart --only emulator-5554`.
-2. Chrome on the emulator has first-run disabled
-   (`/data/local/tmp/chrome-command-line`).
-3. Kevin: open Operator, tap **Sign in with OpenRouter**, sign in, approve,
-   then switch back to Operator (recents). Fallback: **Sign in (show code to
-   paste)**, paste the code, **Submit pasted code**.
-4. Check: `scripts/rpc.sh 'IO.inspect(:rpc.call(n, Operator.OpenRouter.OAuth, :status, []))'`
-   until `phase: :signed_in` (shows `exchange_ms`, never the key).
-5. Model calls (Operator in the foreground):
-   `scripts/rpc.sh 'IO.inspect(:rpc.call(n, Operator.Diag, :stream, [], 120_000))'`
-   and `… Operator.Diag, :tool_roundtrip, [], 180_000 …`. Default model
-   `openrouter:google/gemma-4-31b-it:free`; pass e.g.
-   `["openrouter:openai/gpt-5-nano"]` if free models are rate-limited, or
-   `["openrouter:anthropic/claude-haiku-4.5"]`.
+Kevin signed in on the Moto G 2021 with **Sign in with OpenRouter** (the
+localhost callback; no paste needed). Check with
+`OPERATOR_SERIAL=ZY22DP6HFL scripts/rpc.sh 'IO.inspect(:rpc.call(n, Operator.OpenRouter.OAuth, :status, []))'`
+(shows `phase`, `exchange_ms` and a key fingerprint, never the key). The key
+is in the app's data dir (secure store still to do). On the emulator the
+app is still signed out.
 
 ## Recommended architecture for the real build
 
