@@ -171,6 +171,12 @@ regenerates the tracked plugin bootstrap / bridge Kotlin; commit those):
    error (e.g. a bad model), `put_voice(:everything)` / `:off` over rpc.
 4. iOS: not tested.
 
+**Verified 2026-10-03** (Android 15 emulator, `scripts/bgnet.sh`): without
+the foreground service, Android freezes the backgrounded app outright (no
+dist, no network); with it, an HTTPS request 75 s after backgrounding with
+the screen off returned 200 in under a second. The Moto G 2021 runs
+Android 11, which has no such restriction.
+
 ## Speech to text (quick entry)
 
 Talking is faster than typing on a phone, and the agent already talks back
