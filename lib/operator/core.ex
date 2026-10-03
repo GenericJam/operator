@@ -15,6 +15,7 @@ defmodule Operator.Core do
   """
   use Supervisor
 
+  alias Operator.Core.Current
   alias Operator.Core.Dyn
 
   @default_model "openrouter:anthropic/claude-haiku-4.5"
@@ -52,6 +53,10 @@ defmodule Operator.Core do
   @doc "Starts a fresh session (same model as the current one) and makes it current."
   @spec new_session() :: pid()
   defdelegate new_session(), to: Operator.Core.Current
+
+  @doc "Opens a session file (from omp, say) and makes it current (`Operator.Core.Current.open/2`)."
+  @spec open_session(Path.t()) :: {:ok, pid()} | {:error, term()}
+  def open_session(path), do: Current.open(path)
 
   @spec system_prompt() :: String.t()
   def system_prompt do
@@ -100,6 +105,15 @@ defmodule Operator.Core.Current do
   @spec new_session(GenServer.server()) :: pid()
   def new_session(server \\ __MODULE__), do: GenServer.call(server, :new_session)
 
+  @doc """
+  Opens the session file at `path` and makes it current. A file outside
+  the sessions dir (one from omp, say) is copied in first, so the phone
+  appends to its own copy. A session last run on a model Operator can't
+  call (not `openrouter:`) continues on the default model.
+  """
+  @spec open(Path.t(), GenServer.server()) :: {:ok, pid()} | {:error, term()}
+  def open(path, server \\ __MODULE__), do: GenServer.call(server, {:open, path})
+
   @doc "Subscribes the caller to the current loop and every later one (see the moduledoc)."
   @spec watch(GenServer.server()) :: :ok
   def watch(server \\ __MODULE__), do: GenServer.call(server, {:watch, self()})
@@ -137,6 +151,22 @@ defmodule Operator.Core.Current do
       start(%{s | pid: nil, ref: nil}, {Session.new(s.dir, model, Operator.Paths.data_dir()), []})
 
     {:reply, s.pid, s}
+  end
+
+  def handle_call({:open, path}, _from, s) do
+    with {:ok, path} <- into_dir(path, s.dir),
+         {:ok, session, entries} <- Session.open(path, Operator.Core.default_model()) do
+      session =
+        if String.starts_with?(session.model, "openrouter:"),
+          do: session,
+          else: %{session | model: Operator.Core.default_model()}
+
+      if s.pid, do: stop_loop(s)
+      s = start(%{s | pid: nil, ref: nil}, {session, entries})
+      {:reply, {:ok, s.pid}, s}
+    else
+      {:error, _} = error -> {:reply, error, s}
+    end
   end
 
   def handle_call({:watch, pid}, _from, s) do
@@ -180,6 +210,16 @@ defmodule Operator.Core.Current do
 
   defp open_or_new(s),
     do: {Session.new(s.dir, Operator.Core.default_model(), Operator.Paths.data_dir()), []}
+
+  defp into_dir(path, dir) do
+    if Path.dirname(Path.expand(path)) == Path.expand(dir) do
+      {:ok, path}
+    else
+      dest = Path.join(dir, Path.basename(path))
+
+      with :ok <- File.mkdir_p(dir), :ok <- File.cp(path, dest), do: {:ok, dest}
+    end
+  end
 
   # Real loops get the daily cost cap, kept next to the tools' data dir.
   defp start(s, {session, entries}) do

@@ -45,6 +45,7 @@ defmodule Operator.ChatScreen do
   @stick_ms 60
   @stick_retries 4
   @stick_retry_ms 150
+  @attach_stick_ms 300
   @toast_ms 1_500
   @window 300
   @max_native 200
@@ -407,6 +408,18 @@ defmodule Operator.ChatScreen do
   def handle_info({:change, :model_draft, value}, socket),
     do: {:noreply, Mob.Socket.assign(socket, :model_draft, value)}
 
+  # A session file brought over from omp (scripts/session.sh push).
+  def handle_info({:open_session, path}, socket) do
+    case Operator.Core.open_session(path) do
+      {:ok, loop} ->
+        Loop.unsubscribe(socket.assigns.loop)
+        {:noreply, socket |> attach(loop) |> toast("Opened #{Path.basename(path)}")}
+
+      {:error, reason} ->
+        {:noreply, toast(socket, "Couldn't open #{Path.basename(path)}: #{inspect(reason)}")}
+    end
+  end
+
   def handle_info({:tap, :save_model}, socket) do
     model = String.trim(socket.assigns.model_draft || "")
     model = if String.contains?(model, ":"), do: model, else: "openrouter:" <> model
@@ -464,7 +477,11 @@ defmodule Operator.ChatScreen do
     socket =
       if snap.streaming, do: socket |> start_stream() |> buffer(snap.streaming), else: socket
 
+    # The first runs before the new transcript reaches the native list (it
+    # may scroll the old one to its end, which counts as done); the second
+    # once the new rows are laid out.
     send(self(), :stick)
+    Process.send_after(self(), :stick, @attach_stick_ms)
     refresh(socket)
   end
 
