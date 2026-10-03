@@ -1,4 +1,24 @@
-# Agent Instructions
+# Operator — agent instructions
+
+Operator (`com.genericjam.operator`) is a mob app (Elixir on the phone's own
+BEAM) that is an omp-style coding agent running entirely on the phone: a
+Jido.AI ReAct loop, the session stored on device, phone tools, and
+self-modification (it compiles new screens/tools for itself, gated by tests
+and a biometric approval). The model is reached through OpenRouter (OAuth
+PKCE sign-in). Read `docs/SPIKE.md` first: it records what was proven on an
+emulator, the numbers, and the recommended architecture.
+
+## Working on it
+
+- Follow `~/AGENTS.md` (device leases via `agent-lease`, Muster, commits).
+- Build/run: `mix mob.deploy --native --android --device <serial>` after a
+  native/plugin/dep change; `mix mob.deploy --android --device <serial>` for
+  BEAM-only changes. Android emulators only for now (iOS untested).
+- Drive the running app over dist: `mix mob.connect --no-iex --no-restart`,
+  then `scripts/rpc.sh '<elixir>'` (see the script header).
+- Never print or commit the OpenRouter key; it lives on the device only.
+
+# Beads
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
