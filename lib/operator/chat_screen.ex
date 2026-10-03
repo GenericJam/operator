@@ -348,7 +348,10 @@ defmodule Operator.ChatScreen do
   end
 
   def handle_info({:biometric, result}, %{assigns: %{approving: {_, n}}} = socket) do
-    why = if result == :not_available, do: "no fingerprint available", else: "the check failed"
+    why =
+      if result == :not_available,
+        do: "no fingerprint to check (none enrolled on this phone, or locked out)",
+        else: "the check failed"
 
     {:noreply,
      socket
