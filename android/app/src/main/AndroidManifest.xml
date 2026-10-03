@@ -65,6 +65,12 @@
     <!-- mob:plugin-permissions BEGIN (managed — regenerated each build; do not edit) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <!-- mob:plugin-permissions END -->
     <application
         android:label="Operator"
@@ -112,5 +118,20 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- mob:plugin-components BEGIN (managed — regenerated each build; do not edit) -->
+        <service android:name="io.mob.notify.MobFirebaseService"
+            android:exported="false">
+            <intent-filter android:priority="-1">
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <receiver android:name="io.mob.notify.MobNotifyBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <!-- mob:plugin-components END -->
     </application>
 </manifest>

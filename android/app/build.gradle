@@ -172,5 +172,7 @@ dependencies {
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
     // mob:plugin-deps BEGIN (managed — regenerated each build; do not edit)
     implementation "androidx.biometric:biometric:1.1.0"
+    implementation "com.google.android.gms:play-services-location:21.0.1"
+    implementation "com.google.firebase:firebase-messaging:24.0.0"
     // mob:plugin-deps END
 }
