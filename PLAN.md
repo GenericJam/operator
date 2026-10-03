@@ -224,7 +224,7 @@ message.
 
 ## Build order
 
-1. **Core loop** (done, device-verified): pi's turn loop on req_llm (OpenRouter),
+1. **Core loop** (done, device-verified): pi's turn loop on req_llm (first OpenRouter, now the Anthropic/OpenAI subscription logins, step 7),
    steering/follow-up/stop, parallel tools with ordered results, omp/pi-format
    JSONL sessions, terminal-style chat screen (own parser, streaming, stick
    to bottom, copy). Verify on the Moto G.
@@ -236,7 +236,8 @@ message.
 2b. **Speech to text** (section above): mic chip with live partials into
    the composer; long-press to talk and send (or steer). Built; verified on
    the Android 15 emulator up to recognition (no audio played at night);
-   on the Moto G 2021 the Google app's own mic permission is denied (op-i2w).
+   on the Moto G 2021 the Google app's own mic permission is denied, a
+   phone setting (op-i2w).
 3. **Self-modification**: generations with versioned module names, static
    check, selftests, screen-lock approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn
@@ -248,12 +249,12 @@ message.
    Moto has no fingerprint enrolled. Approval now takes the screen lock
    (fingerprint, face, PIN, pattern or password: the app's own
    `OperatorApproval.kt` prompt, chat card and rescue revert; mob_biometric
-   dropped), not yet device-verified. The theme artifact is done (`Operator.Dyn.Theme`
+   dropped); verified on the Android 15 emulator with a PIN. The theme artifact is done (`Operator.Dyn.Theme`
    with `overrides/0`, applied by `Operator.Core.DynTheme`; a warm theme
    proposed, fingerprint-approved and drawn on the emulator), and automatic
    revert was seen on the emulator (a Dyn tool crashing 3 times through
    ToolRunner: generation 3 reverted to 2, the tool gone). Not yet: the
-   agent writing a change itself (no OpenRouter credit left). Phone tools
+   agent writing a change itself (needs a provider login). Phone tools
    become Dyn-replaceable by shipping them in a seed generation (a Core
    tool's name can't be taken by a Dyn tool).
 4. **Phone tools, context management**: camera/photos/location/notifications/
@@ -270,3 +271,12 @@ message.
 6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
    background). Secure-store key done on Android (EncryptedSharedPreferences,
    migrated and verified on the Moto); iOS not started.
+7. **Provider logins** (Kevin, 2026-10-03: OpenRouter removed). `/login
+   anthropic` (Claude Pro/Max) and `/login openai` (ChatGPT/Codex) run omp's
+   PKCE flows on the phone (browser -> localhost listener, or paste
+   `code#state`); credentials pi-shaped in the secure store, refreshed by
+   `Operator.Auth`. From the Mac: `mix operator.login anthropic|openai`
+   prints an encrypted QR plus six words; Diagnostics -> Scan login QR on
+   the phone. Built and reviewed (reviewer subagent: SHIP after fixes);
+   the browser opening claude.ai verified on the Moto; the sign-in itself,
+   a streamed reply and the QR transfer need Kevin's accounts.
