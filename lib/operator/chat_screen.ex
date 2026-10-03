@@ -4,16 +4,21 @@ defmodule Operator.ChatScreen do
   `Operator.Core.Loop`.
 
   A transcript `:lazy_list` fills the screen (virtualized natively; one item
-  per line, each a `:wrap` of styled text from `Operator.Core.Term`), a
-  status line on top, the composer pinned at the bottom: Send while idle,
-  Steer while the agent runs, plus Stop. Streamed deltas are buffered and
-  painted at most every #{100} ms; completed messages keep their rows, only
-  the streaming reply's last line is re-parsed. Only the last `@window`
-  lines are rendered ("show earlier" extends it). The list follows new
-  output unless the user scrolled up (`Operator.ChatScreen.Follow`).
+  per line, each a `:wrap` of styled text from `Operator.Core.Term`, or with
+  the `:native` renderer one native Markdown view per prose stretch of a
+  reply), a status line on top, the composer pinned at the bottom: Send
+  while idle, Steer while the agent runs, plus Stop. Streamed deltas are
+  buffered and painted at most every #{100} ms; completed messages keep
+  their rows, only the streaming reply is re-rendered. Only the last
+  `@window` rows (at most `@max_native` of them native views: each takes
+  one of mob's 256 native component slots) are rendered ("show earlier"
+  extends it). The list follows new output unless the user scrolled up
+  (`Operator.ChatScreen.Follow`).
 
-  Long-press a line to copy its whole message; `[copy]` on a code fence
-  copies that block; "copy last reply" copies the last assistant message.
+  Long-press a line to copy its whole message (native Markdown rows select
+  text instead: long-press, drag the handles, Copy); `[copy]` on a code
+  fence copies that block; "copy last reply" copies the last assistant
+  message. The `md:` chip switches the renderer (`Term.put_renderer/1`).
   """
   use Mob.Screen
 
@@ -29,6 +34,7 @@ defmodule Operator.ChatScreen do
   @stick_ms 60
   @toast_ms 1_500
   @window 300
+  @max_native 200
   @list_id "transcript"
 
   def mount(params, _session, socket) do
@@ -164,6 +170,13 @@ defmodule Operator.ChatScreen do
 
   def handle_info({:tap, :diagnostics}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.HomeScreen)}
+
+  def handle_info({:tap, :toggle_renderer}, socket) do
+    Term.put_renderer(if Term.renderer() == :native, do: :term, else: :native)
+    owner = self()
+    done_rev = Enum.map(socket.assigns.done_rev, &message(&1.entry, &1.key, owner))
+    {:noreply, socket |> Mob.Socket.assign(:done_rev, done_rev) |> refresh()}
+  end
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
@@ -313,27 +326,42 @@ defmodule Operator.ChatScreen do
   end
 
   @doc false
-  # The last `n` rows of the transcript: finished messages (`done_rev`,
-  # newest first) followed by the streaming reply's rows. Returns
-  # `{rows, hidden_count}`, rows in display order.
-  @spec window([map()], [map()], pos_integer()) :: {[map()], non_neg_integer()}
-  def window(done_rev, stream_rows, n) do
-    start = Enum.take(stream_rows, -n)
-
-    {rows, _count, hidden} =
-      Enum.reduce(done_rev, {start, length(start), length(stream_rows) - length(start)}, fn
-        %{rows: rows}, {acc, count, hidden} ->
-          room = n - count
-          len = length(rows)
-
-          cond do
-            room <= 0 -> {acc, count, hidden + len}
-            len <= room -> {rows ++ acc, count + len, hidden}
-            true -> {Enum.take(rows, -room) ++ acc, n, hidden + len - room}
-          end
-      end)
+  # The last `n` rows of the transcript, at most `max_native` of them native
+  # views: finished messages (`done_rev`, newest first) followed by the
+  # streaming reply's rows. Returns `{rows, hidden_count}`, rows in display
+  # order.
+  @spec window([map()], [map()], pos_integer(), pos_integer()) :: {[map()], non_neg_integer()}
+  def window(done_rev, stream_rows, n, max_native \\ @max_native) do
+    {rows, _budget, hidden} =
+      Enum.reduce(
+        done_rev,
+        take_tail(stream_rows, {[], {n, max_native}, 0}),
+        fn %{rows: rows}, acc -> take_tail(rows, acc) end
+      )
 
     {rows, hidden}
+  end
+
+  # Prepends as many of `rows`' last rows as the budget allows; once it runs
+  # out, everything older is hidden.
+  defp take_tail(rows, {acc, {0, _} = budget, hidden}), do: {acc, budget, hidden + length(rows)}
+
+  defp take_tail(rows, {acc, budget, hidden}) do
+    rows
+    |> Enum.reverse()
+    |> Enum.reduce({acc, budget, hidden}, fn
+      _row, {acc, {0, _} = budget, hidden} ->
+        {acc, budget, hidden + 1}
+
+      %{type: :native_view}, {acc, {_room, 0}, hidden} ->
+        {acc, {0, 0}, hidden + 1}
+
+      %{type: :native_view} = row, {acc, {room, natives}, hidden} ->
+        {[row | acc], {room - 1, natives - 1}, hidden}
+
+      row, {acc, {room, natives}, hidden} ->
+        {[row | acc], {room - 1, natives}, hidden}
+    end)
   end
 
   defp earlier_row(hidden) do
@@ -431,7 +459,8 @@ defmodule Operator.ChatScreen do
       text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2),
       chip("new", :new_session, t),
       chip("model", :edit_model, t),
-      chip("diag", :diagnostics, t)
+      chip("diag", :diagnostics, t),
+      chip("md:#{Term.renderer(t)}", :toggle_renderer, t)
     ])
   end
 

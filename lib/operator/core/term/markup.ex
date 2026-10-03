@@ -5,7 +5,7 @@ defmodule Operator.Core.Term.Markup do
   reads the same on the phone and in omp. Blocks: headings, paragraphs,
   fenced code (``` or ~~~, with a language), `-`/`*`/`+` and `1.` lists
   (task boxes too), `>` quotes, `---` rules, pipe tables, `$$` math.
-  Inline: `**strong**` / `__strong__`, `*em*` / `_em_`, `~~del~~`,
+  Inline: `**strong**` / `__strong__`, `*em*` / `_em_`, `***both***`, `~~del~~`,
   `` `code` ``, `[links](url)`, `<autolinks>` and bare URLs, `![images](…)`,
   `$math$`, HTML entities, and the HTML tags models use (`<br>`, `<code>`,
   `<b>`/`<strong>`, `<i>`/`<em>`; every other tag is dropped, its text kept).
@@ -250,6 +250,7 @@ defmodule Operator.Core.Term.Markup do
     end
   end
 
+  defp tokenize(<<"***", rest::binary>>, buf, acc), do: mark(:bold_italic, "***", rest, buf, acc)
   defp tokenize(<<"**", rest::binary>>, buf, acc), do: mark(:bold, "**", rest, buf, acc)
   defp tokenize(<<"__", rest::binary>>, buf, acc), do: mark(:bold_u, "__", rest, buf, acc)
   defp tokenize(<<"~~", rest::binary>>, buf, acc), do: mark(:del, "~~", rest, buf, acc)
@@ -394,33 +395,55 @@ defmodule Operator.Core.Term.Markup do
 
   # ── pairing: matched markers become {:on | :off, style} ──
 
+  # `matches` maps a marker's index to its events: one for an ordinary
+  # marker, up to two for a `***` run (it opens or closes bold and italic).
   defp pair(tokens) do
     indexed = Enum.with_index(tokens)
 
     {matches, _stack} =
       Enum.reduce(indexed, {%{}, []}, fn
+        {{:mark, :bold_italic, can_open, can_close, _}, i}, {m, stack} ->
+          {m, stack, left} =
+            if can_close, do: close_run(m, stack, i), else: {m, stack, [:bold, :italic]}
+
+          # outer bold first, so the inner italic is on top of the stack
+          stack = if can_open, do: Enum.reduce(left, stack, &[{&1, i} | &2]), else: stack
+          {m, stack}
+
         {{:mark, kind, can_open, can_close, _}, i}, {m, stack} ->
           case can_close && pop_to(stack, kind) do
-            {opener, rest} ->
-              {Map.merge(m, %{opener => {:on, style(kind)}, i => {:off, style(kind)}}), rest}
-
-            _ when can_open ->
-              {m, [{kind, i} | stack]}
-
-            _ ->
-              {m, stack}
+            {opener, rest} -> {match(m, opener, i, style(kind)), rest}
+            _ when can_open -> {m, [{kind, i} | stack]}
+            _ -> {m, stack}
           end
 
         _, acc ->
           acc
       end)
 
-    Enum.map(indexed, fn {token, i} ->
-      case matches do
-        %{^i => match} -> match
-        _ -> unmatched(token)
-      end
+    Enum.flat_map(indexed, fn {token, i} ->
+      events = Map.get(matches, i, [])
+      events ++ leftover(token, events)
     end)
+  end
+
+  defp match(m, opener, closer, style) do
+    m
+    |> Map.update(opener, [{:on, style}], &[{:on, style} | &1])
+    |> Map.update(closer, [{:off, style}], &[{:off, style} | &1])
+  end
+
+  # A closing `***` closes whatever bold / italic is open, innermost first
+  # (`**a *b***`, `***a***`); returns the kinds it left unclosed.
+  defp close_run(m, stack, i, left \\ [:bold, :italic]) do
+    case Enum.find(stack, fn {k, _} -> k in left end) do
+      {kind, _} ->
+        {opener, rest} = pop_to(stack, kind)
+        close_run(match(m, opener, i, kind), rest, i, List.delete(left, kind))
+
+      nil ->
+        {m, stack, left}
+    end
   end
 
   defp style(kind) when kind in [:bold, :bold_u], do: :bold
@@ -428,18 +451,26 @@ defmodule Operator.Core.Term.Markup do
   defp style(:code_tag), do: :code
   defp style(:del), do: :del
 
+  # Openers above the match are dropped (they can no longer nest), except
+  # the other half of the same `***` run.
   defp pop_to(stack, kind) do
     case Enum.split_while(stack, fn {k, _} -> k != kind end) do
-      {_above, [{^kind, i} | rest]} -> {i, rest}
+      {above, [{^kind, i} | rest]} -> {i, Enum.filter(above, &(elem(&1, 1) == i)) ++ rest}
       _ -> nil
     end
   end
 
-  # A single `*` / `_` that pairs with nothing is ordinary text; doubled
-  # markers and HTML tags that pair with nothing are dropped.
-  defp unmatched({:mark, kind, _, _, raw}) when kind in [:italic, :italic_u], do: {:text, raw}
-  defp unmatched({:mark, _, _, _, _}), do: {:text, ""}
-  defp unmatched(token), do: token
+  # A single `*` / `_` that pairs with nothing is ordinary text (so is the
+  # italic half of a `***`); doubled markers and HTML tags that pair with
+  # nothing are dropped.
+  defp leftover({:mark, kind, _, _, raw}, []) when kind in [:italic, :italic_u],
+    do: [{:text, raw}]
+
+  defp leftover({:mark, :bold_italic, _, _, _}, events),
+    do: if(Enum.any?(events, &(elem(&1, 1) == :italic)), do: [], else: [{:text, "*"}])
+
+  defp leftover({:mark, _, _, _, _}, _events), do: []
+  defp leftover(token, _events), do: [token]
 
   # ── segments ──
 

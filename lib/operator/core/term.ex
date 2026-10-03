@@ -17,10 +17,20 @@ defmodule Operator.Core.Term do
   will restyle its own terminal later (a Dyn generation provides a theme).
   A style is a map with any of `:color` / `:background` (palette names),
   `:bold`, `:italic`, `:prefix` (roles only).
+
+  Two renderers for an assistant reply's Markdown, picked by the theme's
+  `:renderer` (`renderer/1`): `:term` lays it out with our own parser, row
+  per line; `:native` (the default on Android) gives each prose stretch one
+  `Operator.Core.MarkdownView` row, a native Markdown view (Markwon on
+  Android) that wraps inline styles and selects text natively. Fenced code
+  blocks (and `$$` math) stay `:term` rows either way, so each code block
+  keeps its Copy button. Every other entry renders the same in both.
   """
 
+  alias Operator.Core.MarkdownView
   alias Operator.Core.Session
   alias Operator.Core.Term.Markup
+  alias Operator.Core.Term.Stream, as: TermStream
 
   @key {__MODULE__, :theme}
   @nbsp "\u00A0"
@@ -99,7 +109,9 @@ defmodule Operator.Core.Term do
       # How much of a tool result / thinking the transcript shows.
       tool_result_lines: 3,
       thinking_lines: 3,
-      max_line_chars: 160
+      max_line_chars: 160,
+      # :native | :term | :auto (native on Android, term elsewhere)
+      renderer: :auto
     }
   end
 
@@ -112,6 +124,36 @@ defmodule Operator.Core.Term do
   def put_theme(overrides) do
     :persistent_term.put(@key, deep_merge(default_theme(), overrides))
     install()
+  end
+
+  @doc """
+  The renderer for assistant Markdown: the theme's `:renderer`, or for
+  `:auto` the native view on Android and our own parser elsewhere (iOS has
+  no native view yet; host tests).
+  """
+  @spec renderer(map()) :: :native | :term
+  def renderer(theme \\ theme())
+  def renderer(%{renderer: r}) when r in [:native, :term], do: r
+  def renderer(_theme), do: if(platform() == :android, do: :native, else: :term)
+
+  @doc "Switches the renderer in the active theme (the rest of it is kept)."
+  @spec put_renderer(:native | :term | :auto) :: :ok
+  def put_renderer(renderer) when renderer in [:native, :term, :auto],
+    do: :persistent_term.put(@key, %{theme() | renderer: renderer})
+
+  # Asked once (off the phone the NIF fails to load, and warns, per call).
+  defp platform do
+    with nil <- :persistent_term.get({__MODULE__, :platform}, nil) do
+      p = detect_platform()
+      :persistent_term.put({__MODULE__, :platform}, p)
+      p
+    end
+  end
+
+  defp detect_platform do
+    :mob_nif.platform()
+  rescue
+    _ in [UndefinedFunctionError, ErlangError] -> :host
   end
 
   @doc "Registers the theme's fonts (`:term`, `:term_bold`, …) as Mob.Theme font tokens."
@@ -139,19 +181,41 @@ defmodule Operator.Core.Term do
 
   @doc """
   The rows for one session entry. `key` prefixes the row ids (stable across
-  re-renders); `owner` is the screen pid that gets each row's long press
-  (`{:long_press, {:copy, key}}`) and each code block's Copy tap
-  (`{:tap, {:copy_code, key, n}}`).
+  re-renders, and between a reply's streaming rows and its final ones);
+  `owner` is the screen pid that gets each row's long press
+  (`{:long_press, {:copy, key}}`; native Markdown rows select text instead)
+  and each code block's Copy tap (`{:tap, {:copy_code, key, n}}`).
   """
   @spec entry_rows(map(), String.t(), pid() | nil, map()) :: [map()]
-  def entry_rows(entry, key, owner, theme \\ theme()) do
-    entry |> entry_lines(theme) |> to_rows(key, owner, theme)
+  def entry_rows(entry, key, owner, theme \\ theme())
+
+  def entry_rows(
+        %{"type" => "message", "message" => %{"role" => "assistant"} = m},
+        key,
+        owner,
+        theme
+      ) do
+    md = Session.text(m["content"])
+    body = if md == "", do: [], else: body_lines(Markup.parse(md), String.split(md, "\n"), theme)
+
+    to_rows(thinking_lines(m, theme), key, owner, theme, "#{key}.k") ++
+      to_rows(body, key, owner, theme) ++
+      to_rows(call_lines(m, theme), key, owner, theme, "#{key}.c")
   end
 
-  @doc "Rows for assistant text still streaming (only its tail is re-parsed)."
-  @spec stream_rows(Operator.Core.Term.Stream.t(), String.t(), pid() | nil, map()) :: [map()]
+  def entry_rows(entry, key, owner, theme),
+    do: entry |> entry_lines(theme) |> to_rows(key, owner, theme)
+
+  @doc """
+  Rows for assistant text still streaming (the term renderer re-parses only
+  its tail; the native view gets the text so far).
+  """
+  @spec stream_rows(TermStream.t(), String.t(), pid() | nil, map()) :: [map()]
   def stream_rows(stream, key, owner, theme \\ theme()) do
-    stream |> Operator.Core.Term.Stream.lines() |> markdown(theme) |> to_rows(key, owner, theme)
+    stream
+    |> TermStream.lines()
+    |> body_lines(TermStream.raw_lines(stream), theme)
+    |> to_rows(key, owner, theme)
   end
 
   @doc "A one-off row (status lines like \"Copied\")."
@@ -177,53 +241,24 @@ defmodule Operator.Core.Term do
   def plain_text(_entry), do: ""
 
   @doc """
-  The rendered text of rows, one string per row: what the user sees, for
-  tests and diagnostics.
+  The rendered text of rows, one string per row: what the user sees (a
+  native Markdown row: its Markdown), for tests and diagnostics.
   """
   @spec rows_text([map()]) :: [String.t()]
   def rows_text(rows),
     do:
-      Enum.map(rows, fn r ->
-        r.children |> Enum.map_join("", & &1.props.text) |> String.replace(@nbsp, " ")
+      Enum.map(rows, fn
+        %{type: :native_view, props: %{text: md}} ->
+          md
+
+        r ->
+          r.children |> Enum.map_join("", & &1.props.text) |> String.replace(@nbsp, " ")
       end)
 
-  # An entry → render lines: {:line, segs} | {:code, segs} | {:fence, lang, n}.
+  # An entry → render lines: {:line, segs} | {:code, segs} | {:fence, lang, n}
+  # | {:native, markdown}. Assistant messages render in parts (`entry_rows/4`).
   defp entry_lines(%{"type" => "message", "message" => %{"role" => "user"} = m}, theme),
     do: prefixed(Session.text(m["content"]), theme.roles.user)
-
-  defp entry_lines(%{"type" => "message", "message" => %{"role" => "assistant"} = m}, theme) do
-    thinking =
-      case Session.thinking(m) do
-        "" ->
-          []
-
-        t ->
-          t
-          |> clip(theme.thinking_lines, theme.max_line_chars)
-          |> Enum.map(&{:line, [{&1, theme.roles.thinking}]})
-      end
-
-    text =
-      case Session.text(m["content"]) do
-        "" -> []
-        md -> md |> Markup.parse() |> markdown(theme)
-      end
-
-    calls =
-      for c <- Session.tool_calls(m) do
-        style = theme.roles.tool_call
-
-        {:line,
-         [
-           {style.prefix, style},
-           {c["name"], Map.put(style, :bold, true)},
-           {"(#{args_summary(c["arguments"])})", style}
-         ]}
-      end
-
-    errors = if m["errorMessage"], do: prefixed(m["errorMessage"], theme.roles.error), else: []
-    thinking ++ text ++ calls ++ errors
-  end
 
   defp entry_lines(%{"type" => "message", "message" => %{"role" => "toolResult"} = m}, theme) do
     style = if m["isError"], do: theme.roles.tool_error, else: theme.roles.tool_result
@@ -256,6 +291,76 @@ defmodule Operator.Core.Term do
     do: prefixed("model: #{model}", theme.roles.notice)
 
   defp entry_lines(_entry, _theme), do: []
+
+  defp thinking_lines(m, theme) do
+    case Session.thinking(m) do
+      "" ->
+        []
+
+      t ->
+        t
+        |> clip(theme.thinking_lines, theme.max_line_chars)
+        |> Enum.map(&{:line, [{&1, theme.roles.thinking}]})
+    end
+  end
+
+  defp call_lines(m, theme) do
+    calls =
+      for c <- Session.tool_calls(m) do
+        style = theme.roles.tool_call
+
+        {:line,
+         [
+           {style.prefix, style},
+           {c["name"], Map.put(style, :bold, true)},
+           {"(#{args_summary(c["arguments"])})", style}
+         ]}
+      end
+
+    errors = if m["errorMessage"], do: prefixed(m["errorMessage"], theme.roles.error), else: []
+    calls ++ errors
+  end
+
+  # A reply's Markdown (parsed lines and their source, one for one) → render
+  # lines, by the theme's renderer.
+  defp body_lines(parsed, raw, theme) do
+    case renderer(theme) do
+      :term -> parsed |> markdown(0, theme) |> elem(0)
+      :native -> native_lines(parsed, raw, theme)
+    end
+  end
+
+  # Prose stretches become one native Markdown view each; fenced code (an
+  # unclosed fence runs to the end, as while streaming) and `$$` math stay
+  # term rows, numbered as `Markup.code_block/2` counts them.
+  defp native_lines(parsed, raw, theme) do
+    {out, _blocks} =
+      parsed
+      |> Enum.zip(raw)
+      |> Enum.chunk_by(fn {line, _raw} -> term_line?(line) end)
+      |> Enum.flat_map_reduce(0, fn [{first, _} | _] = chunk, n ->
+        if term_line?(first),
+          do: chunk |> Enum.map(&elem(&1, 0)) |> markdown(n, theme),
+          else: {prose(chunk), n}
+      end)
+
+    out
+  end
+
+  defp term_line?({kind, _}) when kind in [:fence_open, :code, :math], do: true
+  defp term_line?(delimiter), do: delimiter in [:fence_close, :math_delim]
+
+  # Blank lines at either end of a stretch only add height.
+  defp prose(chunk) do
+    lines =
+      chunk
+      |> Enum.drop_while(&match?({:blank, _}, &1))
+      |> Enum.reverse()
+      |> Enum.drop_while(&match?({:blank, _}, &1))
+      |> Enum.reverse()
+
+    if lines == [], do: [], else: [{:native, Enum.map_join(lines, "\n", &elem(&1, 1))}]
+  end
 
   defp args_summary(args) when is_map(args) and map_size(args) > 0 do
     args
@@ -291,17 +396,15 @@ defmodule Operator.Core.Term do
     do: if(String.length(line) > max, do: String.slice(line, 0, max) <> "…", else: line)
 
   # Parsed Markdown lines → render lines. Consecutive table lines are laid
-  # out together (columns padded to the widest cell, monospace).
-  defp markdown(lines, theme) do
-    {out, _blocks} =
-      lines
-      |> Enum.chunk_by(&table_line?/1)
-      |> Enum.flat_map_reduce(0, fn
-        [first | _] = chunk, n ->
-          if table_line?(first), do: {table(chunk, theme), n}, else: md_lines(chunk, n, theme)
-      end)
-
-    out
+  # out together (columns padded to the widest cell, monospace). `n` numbers
+  # the code blocks; returns `{render_lines, next_n}`.
+  defp markdown(lines, n, theme) do
+    lines
+    |> Enum.chunk_by(&table_line?/1)
+    |> Enum.flat_map_reduce(n, fn
+      [first | _] = chunk, n ->
+        if table_line?(first), do: {table(chunk, theme), n}, else: md_lines(chunk, n, theme)
+    end)
   end
 
   defp md_lines(lines, n, theme) do
@@ -398,22 +501,69 @@ defmodule Operator.Core.Term do
     end)
   end
 
-  defp to_rows(lines, key, owner, theme) do
+  # Row ids are "<prefix>.<i>"; `key` tags the copy events.
+  defp to_rows(lines, key, owner, theme, prefix \\ nil) do
+    prefix = prefix || key
+
     lines
     |> Enum.with_index()
     |> Enum.map(fn
       {{:fence, lang, n}, i} ->
         label = {"─ " <> if(lang == "", do: "code", else: lang) <> " ", theme.markup.code_header}
         copy = {" Copy ", theme.markup.copy, owner && {owner, {:copy_code, key, n}}}
-        row([label, copy], "#{key}.#{i}", owner, key, theme, theme.markup.code_header)
+        row([label, copy], "#{prefix}.#{i}", owner, key, theme, theme.markup.code_header)
 
       {{:code, segs}, i} ->
-        row(segs, "#{key}.#{i}", owner, key, theme, theme.markup.code_block)
+        row(segs, "#{prefix}.#{i}", owner, key, theme, theme.markup.code_block)
 
       {{:line, segs}, i} ->
-        row(segs, "#{key}.#{i}", owner, key, theme)
+        row(segs, "#{prefix}.#{i}", owner, key, theme)
+
+      {{:native, md}, i} ->
+        native_row(md, "#{prefix}.#{i}", theme)
     end)
   end
+
+  # Mob.UI.native_view ids are atoms (one per row slot, reused by every
+  # session: keys restart at "m0").
+  defp native_row(md, id, theme) do
+    props =
+      theme
+      |> markdown_props()
+      |> Map.merge(%{id: String.to_atom(id), text: md})
+
+    Mob.UI.native_view(MarkdownView, props)
+  end
+
+  @doc """
+  The theme as `Operator.Core.MarkdownView` props (everything but `:id` and
+  `:text`): colours as ARGB integers, sizes in sp, Android font resource
+  names for the four faces.
+  """
+  @spec markdown_props(map()) :: map()
+  def markdown_props(theme \\ theme()) do
+    m = theme.markup
+
+    %{
+      text_size: theme.text_size,
+      line_height: theme.line_height,
+      text_color: color(theme, theme.roles.assistant.color),
+      heading_color: color(theme, m.heading.color),
+      link_color: color(theme, m.link.color),
+      code_color: color(theme, m.code.color),
+      code_background: color(theme, m.code_block.background),
+      quote_color: color(theme, m.quote.color),
+      rule_color: color(theme, m.hr.color),
+      selection_color: color(theme, m.copy.color),
+      font_regular: font_name(theme.fonts.term),
+      font_bold: font_name(theme.fonts.term_bold),
+      font_italic: font_name(theme.fonts.term_italic),
+      font_bold_italic: font_name(theme.fonts.term_bold_italic)
+    }
+  end
+
+  defp font_name(%{android: name}), do: name
+  defp font_name(name) when is_binary(name), do: name
 
   defp row(segs, id, owner, key, theme, row_style \\ %{}) do
     props = %{id: id, fill_width: true}

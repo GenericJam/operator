@@ -212,6 +212,9 @@ class MainActivity : ComponentActivity() {
         // io.mob.plugin.MobActivityAware. Must run before the BEAM starts.
         io.mob.plugin.MobPluginBootstrap.registerAll(this)
 
+        // Operator's native views (Mob.UI.native_view components).
+        OperatorMarkdown.register()
+
         // Forward launcher-supplied env vars into the BEAM process. Set BEFORE
         // nativeStartBeam below so the BEAM (and Mob.Dist in particular) sees
         // them when it reads getenv()/System.get_env/1.

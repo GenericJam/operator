@@ -76,6 +76,19 @@ Transport options (to decide when we build it):
    This gives true inline styling and selection natively, so Operator no
    longer depends on **MOB-374** (still useful for other apps). Our parser
    stays as the fallback and for anywhere a native view isn't available.
+
+   **Status (2a, Android, 2026-10-03): built, host-tested, APK compiles;
+   not yet verified on the Moto G.** `Operator.Core.MarkdownView` (Elixir
+   component) + `OperatorMarkdown.kt` (Markwon 4.6.2: core, tables,
+   strikethrough, linkify, html; JetBrains Mono real faces for bold /
+   italic / bold-italic; registered in `MainActivity`). Each prose stretch
+   of a reply is one native view; fenced code blocks and `$$` math stay
+   Term rows so Copy-per-block survives; the streaming reply's views grow
+   in place (stable ids). The theme's `renderer: :native | :term | :auto`
+   picks it (`:auto` = native on Android only); the `md:` chip in the chat
+   header toggles it for the running app (not persisted). At most 200
+   native views are in the window (mob has 256 component slots; a view
+   without one renders nothing). iOS stays on Term until its view exists.
 3. Rust is available if we ever want one parser for both platforms: mob
    builds Rustler NIFs statically (`mix mob.add_nif <name> --type
    rustler`), so MDEx/comrak could run on device; not needed with step 2.
@@ -177,9 +190,10 @@ phone-only markup (no custom colour tags).
 **Copying.** Fields meant to be copied are **fenced code blocks**: the
 system prompt tells the model to put commands, values, URLs, IDs and
 snippets in them; the phone shows a Copy button on each, and in omp they're
-ordinary code blocks. Anything else can still be copied: long-press copies a
-whole message, "Copy last reply" sits by the input, and drag-to-select for
-any text arrives with MOB-374.
+ordinary code blocks. Anything else can still be copied: "Copy last reply"
+sits by the input; with the native renderer any text is drag-selectable
+(long-press, handles, Copy), and on Term rows long-press copies a whole
+message.
 
 ## Build order
 

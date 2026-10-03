@@ -219,6 +219,42 @@ defmodule Operator.ChatScreenTest do
     assert Enum.count(assigns(view).visible) == 601
   end
 
+  test "the window holds at most max_native native views (mob has 256 component slots)" do
+    n = fn id -> %{type: :native_view, props: %{id: id}} end
+    t = fn id -> %{type: :wrap, props: %{id: id}} end
+    older = %{rows: [n.(:b1), n.(:b2)]}
+    newer = %{rows: [t.("a1"), n.(:a2)]}
+
+    assert ChatScreen.window([newer, older], [n.(:s)], 10, 3) ==
+             {[n.(:b2), t.("a1"), n.(:a2), n.(:s)], 1}
+
+    assert ChatScreen.window([newer, older], [n.(:s)], 2, 3) == {[n.(:a2), n.(:s)], 3}
+  end
+
+  test "the md chip switches to native Markdown views; code blocks keep Copy", %{tmp_dir: dir} do
+    on_exit(fn -> :persistent_term.erase({Operator.Core.Term, :theme}) end)
+    reply = "Run **this**:\n```sh\nmix test\n```\nthen *done*"
+    %{view: view} = mount_chat(dir, [[{:text, reply}]])
+    assert button?(view, "md:term")
+
+    view = view |> render_info({:tap, :toggle_renderer}) |> send_text("how?")
+    assert button?(view, "md:native")
+    view = pump(view, :agent_end)
+
+    assert ["Run **this**:", "then *done*"] =
+             view |> find_all(:native_view) |> Enum.map(& &1.props.text)
+
+    %{key: key} = Enum.find(assigns(view).done_rev, &(&1.entry["message"]["role"] == "assistant"))
+    render_info(view, {:tap, {:copy_code, key, 0}})
+    assert_received {:clipboard, "mix test"}
+
+    # back to our own parser: the finished messages re-render
+    view = render_info(view, {:tap, :toggle_renderer})
+    assert find_all(view, :native_view) == []
+    assert text(view) =~ "Run"
+    assert %{props: %{font: :term_italic}} = find(view, :text, text: "done")
+  end
+
   test "the model can be changed while idle", %{tmp_dir: dir} do
     %{view: view, loop: loop} = mount_chat(dir, [])
 

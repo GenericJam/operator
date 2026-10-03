@@ -166,6 +166,23 @@ The transcript renders the GitHub-flavoured Markdown subset omp's terminal
 renders (`pi-tui/src/components/markdown.ts`), so a session reads the same in
 both; colour comes from role and construct only (`Operator.Core.Term`).
 
+Two renderers for an assistant reply (`Term.renderer/1`, the theme's
+`:renderer`): on Android each prose stretch is a native Markdown view
+(`Operator.Core.MarkdownView`, a `Mob.UI.native_view` drawn by Markwon in a
+selectable `TextView`, `OperatorMarkdown.kt`); fenced code blocks and `$$`
+math stay Term rows (Copy button per block). Elsewhere, and one flag away
+(`renderer: :term`, the chat header's `md:` chip), our own parser renders
+the whole reply. Native-view constraints from mob: ids are atoms (one per
+row slot, reused across sessions), each view is a process plus one of 256
+native component slots (the chat window caps native views at 200), and the
+factory gets no layout modifier (the view fills the row width itself).
+Links in a native view go to the BEAM (`"open_link"`) and only http(s) /
+mailto open, since the text is the model's. Where Markwon differs from
+Term: inline `$…$` math shows as written (no math support), and while a
+reply streams an unclosed `**` shows until its closer arrives (Term drops
+it); bold / italic still use the real JetBrains Mono faces (custom spans,
+not Markwon's synthesized bold and skew).
+
 Fonts: the terminal uses JetBrains Mono (OFL 1.1, `priv/fonts/`, licence in
 `OFL.txt`) with one real face per style (`:term`, `:term_bold`,
 `:term_italic`, `:term_bold_italic` Mob.Theme tokens); Term picks the face

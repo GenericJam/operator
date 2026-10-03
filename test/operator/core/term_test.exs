@@ -1,6 +1,7 @@
 defmodule Operator.Core.TermTest do
   use ExUnit.Case, async: true
 
+  alias Operator.Core.MarkdownView
   alias Operator.Core.Session
   alias Operator.Core.Term
   alias Operator.Core.Term.Markup
@@ -37,6 +38,24 @@ defmodule Operator.Core.TermTest do
                {" and ", []},
                {"strong", [:bold]}
              ]
+    end
+
+    test "*** is bold italic, alone or closing / opening separate markers" do
+      assert Markup.inline("a ***both*** b") == [
+               {"a ", []},
+               {"both", [:bold, :italic]},
+               {" b", []}
+             ]
+
+      assert Markup.inline("**a *b***") == [{"a ", [:bold]}, {"b", [:bold, :italic]}]
+      assert Markup.inline("***a* b**") == [{"a", [:bold, :italic]}, {" b", [:bold]}]
+      assert Markup.inline("***a** b*") == [{"a", [:bold, :italic]}, {" b", [:italic]}]
+      # unclosed while streaming: like an unclosed ** plus a lone *
+      assert Markup.inline("***bol") == [{"*bol", []}]
+
+      entry = Session.assistant(%{text: "***x***", stop_reason: "stop"}, "openrouter:x/y")
+      [row] = Term.entry_rows(entry, "m0", self(), Term.default_theme())
+      assert [%{props: %{text: "x", font: :term_bold_italic}}] = row.children
     end
 
     test "links show their text and a muted URL; bare URLs and autolinks are links" do
@@ -253,6 +272,108 @@ defmodule Operator.Core.TermTest do
       [row] = Term.entry_rows(Session.user("hi"), "m0", self())
       assert [%{text_color: 0xFF00FF00}] = texts(row)
     end
+  end
+
+  describe "native renderer" do
+    setup do
+      %{theme: %{Term.default_theme() | renderer: :native}}
+    end
+
+    defp reply(text, extra \\ %{}),
+      do:
+        Session.assistant(Map.merge(%{text: text, stop_reason: "stop"}, extra), "openrouter:x/y")
+
+    defp shape(rows) do
+      Enum.map(rows, fn
+        %{type: :native_view, props: p} -> {:native, p.id, p.text}
+        %{props: %{id: id}} = r -> {:term, id, r |> List.wrap() |> Term.rows_text() |> hd()}
+      end)
+    end
+
+    test "prose stretches become native views; code blocks stay term rows with Copy", %{
+      theme: t
+    } do
+      text =
+        "Intro **x**\n\n```sh\nmix test\n```\n\nThen:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n" <>
+          "```\nb\n```\n$$\nE = mc^2\n$$\nEnd"
+
+      rows = Term.entry_rows(reply(text), "m1", self(), t)
+
+      assert shape(rows) == [
+               {:native, :"m1.0", "Intro **x**"},
+               {:term, "m1.1", "─ sh  Copy "},
+               {:term, "m1.2", "mix test"},
+               {:native, :"m1.3", "Then:\n\n| a | b |\n|---|---|\n| 1 | 2 |"},
+               {:term, "m1.4", "─ code  Copy "},
+               {:term, "m1.5", "b"},
+               {:term, "m1.6", "E = mc^2"},
+               {:native, :"m1.7", "End"}
+             ]
+
+      # each Copy addresses the block Markup.code_block/2 returns
+      copies =
+        for r <- rows, c <- r.children, tap = c.props[:on_tap], do: tap
+
+      owner = self()
+      assert [{^owner, {:copy_code, "m1", 0}}, {^owner, {:copy_code, "m1", 1}}] = copies
+      assert Markup.code_block(text, 0) == "mix test" and Markup.code_block(text, 1) == "b"
+
+      # native rows carry the theme and select text instead of copying on long press
+      [native | _] = rows
+      assert native.props.module == MarkdownView
+      assert Map.drop(native.props, [:module, :id, :text]) == Term.markdown_props(t)
+      refute Map.has_key?(native.props, :on_long_press)
+      assert Term.markdown_props(t).font_bold_italic == "jetbrainsmono_bolditalic"
+      assert Term.markdown_props(t).heading_color == Term.color(t, "heading")
+    end
+
+    test "streaming: the open fence is code to the end; ids match the final rows", %{theme: t} do
+      chunks = ["Hi ", "**there**\n\n```eli", "xir\nIO.puts 1\nmo", "re"]
+      stream = Enum.reduce(chunks, TermStream.new(), &TermStream.feed(&2, &1))
+
+      assert shape(Term.stream_rows(stream, "m2", self(), t)) == [
+               {:native, :"m2.0", "Hi **there**"},
+               {:term, "m2.1", "─ elixir  Copy "},
+               {:term, "m2.2", "IO.puts 1"},
+               {:term, "m2.3", "more"}
+             ]
+
+      # the finished reply (thinking and tool calls added) keeps the text rows' ids
+      call = %{"id" => "c", "name" => "notes", "arguments" => %{}}
+      text = Enum.join(chunks) <> "\n```"
+      final = reply(text, %{thinking: "hmm", tool_calls: [call]})
+      ids = final |> Term.entry_rows("m2", self(), t) |> Enum.map(& &1.props.id)
+      assert ids == ["m2.k.0", :"m2.0", "m2.1", "m2.2", "m2.3", "m2.c.0"]
+    end
+
+    test "the term renderer is one flag away and the default off Android", %{theme: t} do
+      text = "Intro **x**\n```sh\nmix test\n```"
+      term = %{t | renderer: :term}
+      rows = Term.entry_rows(reply(text), "m3", self(), term)
+      refute Enum.any?(rows, &(&1.type == :native_view))
+      assert Term.rows_text(rows) == ["Intro x", "─ sh  Copy ", "mix test"]
+
+      assert Term.renderer(t) == :native
+      assert Term.renderer(term) == :term
+      # host tests: no NIF, so :auto picks the parser
+      assert Term.renderer(Term.default_theme()) == :term
+    end
+  end
+
+  test "the native view forwards its props and opens only web and mail links" do
+    props = %{module: MarkdownView, id: :"m0.0", text: "*hi*", text_size: 13}
+    {:ok, socket} = MarkdownView.mount(props, Mob.Socket.new(MarkdownView))
+    assert MarkdownView.render(socket.assigns) == %{text: "*hi*", text_size: 13}
+
+    assert MarkdownView.openable?("https://x.dev/a")
+    assert MarkdownView.openable?("mailto:k@x.dev")
+    refute MarkdownView.openable?("intent://scan#Intent;end")
+    refute MarkdownView.openable?("javascript:alert(1)")
+    refute MarkdownView.openable?("file:///data/x")
+
+    # a refused link never reaches the NIF (which isn't loaded here)
+    assert {:noreply, ^socket} =
+             MarkdownView.handle_event("open_link", %{"url" => "file:///x"}, socket)
   end
 
   test "a real omp transcript renders with no raw Markdown left" do
