@@ -229,16 +229,26 @@ message.
 2. **Native Markdown view per reply** (Markwon on Android first) and
    **background runs on Android** (`mob_background` during a run, progress
    notification, network verified past 60 s) plus **spoken updates**
-   (`Mob.Speech`). Done and device-verified, except the notification
-   permission request and an in-app voice setting.
-2b. **Speech to text** (section above): mic button with live partials into
-   the composer; long-press to talk and send (or steer).
+   (`Mob.Speech`). Done and device-verified, including the notification
+   permission ask (first send) and the `[voice:…]` setting.
+2b. **Speech to text** (section above): mic chip with live partials into
+   the composer; long-press to talk and send (or steer). Built; verified on
+   the Android 15 emulator up to recognition (no audio played at night);
+   on the Moto G 2021 the Google app's own mic permission is denied (op-i2w).
 3. **Self-modification**: generations with versioned module names, static
    check, selftests, biometric approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn
-   artifact.
+   artifact. Engine built and booted on the Moto (generation 0); the chat
+   screen's proposal card (fingerprint approve / deny) and the agent's
+   `dyn_*` tools are next; approval testing needs Kevin's finger. Phone
+   tools become Dyn-replaceable by shipping them in a seed generation (a
+   Core tool's name can't be taken by a Dyn tool).
 4. **Phone tools, context management**: camera/photos/location/notifications/
-   http; output budget + artifacts; compaction; cost cap.
+   http; output budget + artifacts; compaction; cost cap. Done and
+   device-verified: output budget + `read_artifact`, compaction (pi's soft
+   method, pi-shaped entries), daily cost cap ($1.00 default). Built:
+   `http_get`, `clipboard`. Not started: camera, photos, location,
+   notifications (each needs its mob plugin).
 5. **Session transfer omp ⇄ phone** (this document's compatibility section),
    starting with export/import files, then Muster as the relay.
 6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
