@@ -19,19 +19,30 @@ defmodule Operator.ChatScreen do
   text instead: long-press, drag the handles, Copy); `[copy]` on a code
   fence copies that block; "copy last reply" copies the last assistant
   message. The `md:` chip switches the renderer (`Term.put_renderer/1`).
+
+  On Android the composer has a mic (`Operator.Core.DictationButton`):
+  dictated text streams into the draft after what was already typed;
+  long-press it to talk and send. `[voice:…]` cycles what the agent says
+  aloud (`Operator.Core.Settings.voice/0`). The first send asks for the
+  notification permission (the background-run notification needs it on
+  Android 13+).
   """
   use Mob.Screen
 
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
+  alias Operator.Core.DictationButton
   alias Operator.Core.Loop
   alias Operator.Core.Session
+  alias Operator.Core.Settings
   alias Operator.Core.Term
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
 
   @flush_ms 100
   @stick_ms 60
+  @stick_retries 4
+  @stick_retry_ms 150
   @toast_ms 1_500
   @window 300
   @max_native 200
@@ -39,10 +50,17 @@ defmodule Operator.ChatScreen do
 
   def mount(params, _session, socket) do
     loop = Map.get(params, :loop) || Operator.Core.current()
+    settings_dir = Map.get(params, :settings_dir) || Operator.Paths.data_dir()
 
     {:ok,
      socket
      |> Mob.Socket.assign(window: @window, draft: "", model_draft: nil, toast: nil)
+     |> Mob.Socket.assign(
+       settings_dir: settings_dir,
+       voice: Settings.voice(settings_dir),
+       dictation_base: nil,
+       notifications_asked: false
+     )
      |> attach(loop)}
   end
 
@@ -89,12 +107,22 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  def handle_info(:stick, socket) do
+  def handle_info(:stick, socket), do: handle_info({:stick, @stick_retries}, socket)
+
+  # Native rows get their height only once laid out, and right after mount
+  # the list isn't even registered yet, so a stick can land short of the
+  # end or not happen: check, and retry a few times while following.
+  def handle_info({:stick, retries}, socket) do
     native = Native.impl()
 
-    with %{} = info <- native.scroll_info(@list_id) do
-      {x, y} = Follow.bottom(info)
-      native.scroll_to(@list_id, x, y)
+    if socket.assigns.following do
+      with %{} = info <- native.scroll_info(@list_id) do
+        {x, y} = Follow.bottom(info)
+        native.scroll_to(@list_id, x, y)
+      end
+
+      if retries > 0 and short_of_end?(native.scroll_info(@list_id)),
+        do: Process.send_after(self(), {:stick, retries - 1}, @stick_retry_ms)
     end
 
     {:noreply, socket}
@@ -114,6 +142,60 @@ defmodule Operator.ChatScreen do
   def handle_info({:tap, :stop}, socket) do
     Loop.stop(socket.assigns.loop)
     {:noreply, socket}
+  end
+
+  # ── dictation (Operator.Core.DictationButton) ──
+
+  def handle_info({:dictation, "state", %{"state" => "listening"}}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :dictation_base, dictation_base(socket))}
+
+  def handle_info({:dictation, "state", %{"state" => "idle"}}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :dictation_base, nil)}
+
+  def handle_info({:dictation, "state", _processing}, socket), do: {:noreply, socket}
+
+  def handle_info({:dictation, "partial", %{"text" => text}}, socket) do
+    base = dictation_base(socket)
+    {:noreply, Mob.Socket.assign(socket, draft: append(base, text), dictation_base: base)}
+  end
+
+  def handle_info({:dictation, "final", %{"text" => text} = payload}, socket) do
+    draft = append(dictation_base(socket), text)
+    socket = Mob.Socket.assign(socket, draft: draft, dictation_base: nil)
+    if payload["send"] == true, do: send_draft(socket), else: {:noreply, socket}
+  end
+
+  def handle_info({:dictation, "needs_permission", _}, socket) do
+    Native.impl().request_permission(:microphone)
+    {:noreply, toast(socket, "Allow the microphone, then tap mic again")}
+  end
+
+  def handle_info({:dictation, "error", %{"reason" => reason}}, socket),
+    do: {:noreply, toast(socket, dictation_error(reason))}
+
+  def handle_info({:dictation, _event, _payload}, socket), do: {:noreply, socket}
+
+  def handle_info({:permission, :microphone, :granted}, socket),
+    do: {:noreply, toast(socket, "Microphone allowed: tap mic to talk")}
+
+  def handle_info({:permission, :microphone, _denied}, socket),
+    do: {:noreply, toast(socket, "No microphone access: allow it in Settings to dictate")}
+
+  def handle_info({:permission, _capability, _result}, socket), do: {:noreply, socket}
+
+  # ── voice ──
+
+  def handle_info({:tap, :cycle_voice}, socket) do
+    voices = Settings.voices()
+
+    next =
+      Enum.at(
+        voices,
+        rem(Enum.find_index(voices, &(&1 == socket.assigns.voice)) + 1, length(voices))
+      )
+
+    :ok = Settings.put_voice(next, socket.assigns.settings_dir)
+    {:noreply, socket |> Mob.Socket.assign(:voice, next) |> toast("Voice: #{voice_hint(next)}")}
   end
 
   # ── copy ──
@@ -315,6 +397,12 @@ defmodule Operator.ChatScreen do
     socket |> Mob.Socket.assign(following: following, last_offset: offset) |> refresh()
   end
 
+  # Unknown (no list yet) or reported not at the end; a list that doesn't
+  # report `at_end` (iOS pixel views) is taken as done.
+  defp short_of_end?(%{at_end: at_end}), do: not at_end
+  defp short_of_end?(%{}), do: false
+  defp short_of_end?(_unavailable), do: true
+
   defp refresh(socket) do
     a = socket.assigns
     owner = self()
@@ -400,9 +488,50 @@ defmodule Operator.ChatScreen do
           {:error, :running} -> Loop.steer(socket.assigns.loop, text)
         end
 
-        {:noreply, Mob.Socket.assign(socket, draft: "", following: true)}
+        {:noreply, socket |> ask_notifications() |> Mob.Socket.assign(draft: "", following: true)}
     end
   end
+
+  # Once per screen: a run may go on in the background, and its notification
+  # needs this on Android 13+ (granted without asking before that).
+  defp ask_notifications(%{assigns: %{notifications_asked: true}} = socket), do: socket
+
+  defp ask_notifications(socket) do
+    Native.impl().request_permission(:notifications)
+    Mob.Socket.assign(socket, :notifications_asked, true)
+  end
+
+  # Dictation lands after what was in the draft when it started.
+  defp dictation_base(socket), do: socket.assigns.dictation_base || socket.assigns.draft
+
+  @doc false
+  # The draft with dictated `text` after `base` (one space between).
+  @spec append(String.t(), String.t()) :: String.t()
+  def append(base, text) do
+    case {String.trim_trailing(base), String.trim(text)} do
+      {"", said} -> said
+      {_typed, ""} -> base
+      {typed, said} -> typed <> " " <> said
+    end
+  end
+
+  defp dictation_error("no_speech"), do: "Didn't catch that: tap mic and speak"
+  defp dictation_error("network"), do: "Dictation needs the network (no offline speech model)"
+  defp dictation_error("unavailable"), do: "No speech recognizer on this phone"
+  defp dictation_error("busy"), do: "The speech recognizer is busy: try again"
+
+  defp dictation_error("permission"),
+    do: "No microphone access: allow it in Settings to dictate"
+
+  defp dictation_error("service_permission"),
+    do:
+      "The phone's speech service has no microphone access: allow it for the Google app (Settings › Apps › Google › Permissions)"
+
+  defp dictation_error(reason), do: "Dictation failed (#{reason})"
+
+  defp voice_hint(:off), do: "silent"
+  defp voice_hint(:important), do: "speaks when a run ends"
+  defp voice_hint(:everything), do: "speaks every reply"
 
   defp copy(socket, text) when is_binary(text) and text != "" do
     case Native.impl().clipboard_put(text) do
@@ -413,9 +542,12 @@ defmodule Operator.ChatScreen do
 
   defp copy(socket, _nothing), do: toast(socket, "Nothing to copy")
 
+  # The toast is the transcript's last row: repaint, so a following list
+  # scrolls it into view (and one the user scrolled up stays put). Longer
+  # text stays longer (~20 characters a second).
   defp toast(socket, text) do
-    Process.send_after(self(), :clear_toast, @toast_ms)
-    socket |> Mob.Socket.assign(:toast, text) |> refresh()
+    Process.send_after(self(), :clear_toast, max(@toast_ms, String.length(text) * 50))
+    socket |> Mob.Socket.assign(:toast, text) |> repaint()
   end
 
   # The full text of message `key` (`:plain` for the clipboard, `:raw` for markup).
@@ -485,18 +617,23 @@ defmodule Operator.ChatScreen do
         font: :term_italic,
         text_size: t.text_size - 2
       ),
-      %{
-        type: :text,
-        props: %{
-          text: "[copy last reply]",
-          on_tap: {self(), :copy_last},
-          font: :term,
-          text_size: t.text_size - 2,
-          text_color: Term.color(t, "accent")
-        },
-        children: []
-      }
+      footer_link("[voice:#{a.voice}]", :cycle_voice, t),
+      footer_link("[copy last reply]", :copy_last, t)
     ])
+  end
+
+  defp footer_link(label, tag, t) do
+    %{
+      type: :text,
+      props: %{
+        text: label,
+        on_tap: {self(), tag},
+        font: :term,
+        text_size: t.text_size - 2,
+        text_color: Term.color(t, "accent")
+      },
+      children: []
+    }
   end
 
   defp composer(a, t) do
@@ -510,10 +647,28 @@ defmodule Operator.ChatScreen do
         field(a.draft, if(running, do: "› steer the agent…", else: "› ask Operator…"), :draft, t,
           weight: 1,
           on_submit: {self(), :draft}
-        ),
-        chip(send_label, :send, t, "user")
-      ] ++ stop
+        )
+      ] ++ mic(t) ++ [chip(send_label, :send, t, "user")] ++ stop
     )
+  end
+
+  # Speech to text; only Android has the native view so far.
+  defp mic(t) do
+    if Term.platform() == :android do
+      [
+        Mob.UI.native_view(DictationButton,
+          id: :dictation,
+          notify: self(),
+          text_color: Term.color(t, "fg"),
+          active_color: Term.color(t, "error"),
+          background: Term.color(t, "code_bg"),
+          text_size: t.text_size - 1,
+          font: Term.markdown_props(t).font_regular
+        )
+      ]
+    else
+      []
+    end
   end
 
   defp bar_row(t, children) do

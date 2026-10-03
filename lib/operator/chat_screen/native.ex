@@ -9,6 +9,8 @@ defmodule Operator.ChatScreen.Native do
   @callback clipboard_put(String.t()) :: :ok | {:error, term()}
   @callback scroll_info(String.t()) :: map() | {:error, term()}
   @callback scroll_to(String.t(), float(), float()) :: :ok | {:error, term()}
+  @doc "Asks the OS for a permission; the answer comes as `{:permission, capability, result}`."
+  @callback request_permission(atom()) :: :ok | {:error, term()}
 
   @behaviour __MODULE__
 
@@ -18,6 +20,14 @@ defmodule Operator.ChatScreen.Native do
   @impl true
   def clipboard_put(text) do
     _ = :mob_nif.clipboard_put(text)
+    :ok
+  rescue
+    _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}
+  end
+
+  @impl true
+  def request_permission(capability) do
+    _ = :mob_nif.request_permission(capability)
     :ok
   rescue
     _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}

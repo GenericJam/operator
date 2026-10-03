@@ -21,6 +21,12 @@ defmodule Operator.Test.FakeNative do
     :ok
   end
 
+  @impl true
+  def request_permission(capability) do
+    send(self(), {:requested_permission, capability})
+    :ok
+  end
+
   @doc "A lazy list (Android, item indexes) showing items `first..first+visible-1` of `total`."
   def index_info(first, visible, total) do
     %{

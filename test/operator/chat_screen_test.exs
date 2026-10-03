@@ -25,7 +25,7 @@ defmodule Operator.ChatScreenTest do
   defp mount_chat(dir, script, opts \\ []) do
     %{loop: loop} = ctx = start_loop(dir, script, opts)
     :ok = Loop.unsubscribe(loop)
-    Map.put(ctx, :view, mount_screen(ChatScreen, %{loop: loop}))
+    Map.put(ctx, :view, mount_screen(ChatScreen, %{loop: loop, settings_dir: dir}))
   end
 
   # Feed loop events and the screen's own timers to it until `until` (an
@@ -193,6 +193,22 @@ defmodule Operator.ChatScreenTest do
       # rows replaced under the reader nudged px back, still at the end: keep following
       assert {true, _} = Follow.decide(at.(5, 1, 6, 900, true), true, {5.0, 1900.0})
     end
+
+    test "a stick that lands short of the end (rows not laid out yet) retries", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      # right after mount the list isn't registered yet
+      Process.put(:fake_scroll_info, {:error, :not_found})
+      render_info(view, :stick)
+      assert_receive {:stick, 3}, 500
+
+      Process.put(:fake_scroll_info, FakeNative.index_info(0, 3, 3, 0, false))
+      render_info(view, {:stick, 3})
+      assert_receive {:stick, 2}, 500
+
+      Process.put(:fake_scroll_info, FakeNative.index_info(2, 1, 3, 646, true))
+      render_info(view, {:stick, 3})
+      refute_receive {:stick, _}, 300
+    end
   end
 
   test "copying: long-press a line, a code block's Copy, copy last reply", %{tmp_dir: dir} do
@@ -284,5 +300,92 @@ defmodule Operator.ChatScreenTest do
     assert Loop.snapshot(loop).model == "openrouter:openai/gpt-5-mini"
     # status and cost first, the model's short name last (the line is cut at the end)
     assert text(view) =~ "idle · $0.0000 · 0 tok · gpt-5-mini"
+  end
+
+  describe "dictation" do
+    test "streams after what was typed, the final text replaces the partials", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+
+      view =
+        view
+        |> render_info({:change, :draft, "fix the "})
+        |> render_info({:dictation, "state", %{"state" => "listening"}})
+        |> render_info({:dictation, "partial", %{"text" => "flaky"}})
+        |> render_info({:dictation, "partial", %{"text" => "flaky test"}})
+
+      assert assigns(view).draft == "fix the flaky test"
+
+      view =
+        view
+        |> render_info({:dictation, "final", %{"text" => "flaky test please", "send" => false}})
+        |> render_info({:dictation, "state", %{"state" => "idle"}})
+
+      assert assigns(view).draft == "fix the flaky test please"
+
+      # a second dictation appends to the edited draft, not the old base
+      view =
+        view
+        |> render_info({:change, :draft, "fix the flaky test please, then"})
+        |> render_info({:dictation, "state", %{"state" => "listening"}})
+        |> render_info({:dictation, "final", %{"text" => "commit", "send" => false}})
+
+      assert assigns(view).draft == "fix the flaky test please, then commit"
+    end
+
+    test "long-press dictation sends when done; nothing heard leaves the draft", %{tmp_dir: dir} do
+      %{view: view, loop: loop} = mount_chat(dir, [[{:text, "ok"}]])
+
+      view =
+        view
+        |> render_info({:dictation, "state", %{"state" => "listening"}})
+        |> render_info({:dictation, "final", %{"text" => "", "send" => false}})
+
+      assert assigns(view).draft == ""
+
+      view =
+        view
+        |> render_info({:dictation, "state", %{"state" => "listening"}})
+        |> render_info({:dictation, "final", %{"text" => "say hi", "send" => true}})
+        |> pump(:agent_end)
+
+      assert assigns(view).draft == ""
+
+      assert Enum.any?(
+               Loop.snapshot(loop).entries,
+               &(&1["message"]["role"] == "user" and
+                   hd(&1["message"]["content"])["text"] == "say hi")
+             )
+    end
+
+    test "no microphone permission: asks the OS, then says what to do", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      view = render_info(view, {:dictation, "needs_permission", %{}})
+      assert_received {:requested_permission, :microphone}
+      assert text(view) =~ "tap mic again"
+
+      view = render_info(view, {:dictation, "error", %{"reason" => "no_speech"}})
+      assert text(view) =~ "Didn't catch that"
+    end
+  end
+
+  test "the first send asks for notifications, once", %{tmp_dir: dir} do
+    %{view: view} = mount_chat(dir, [[{:text, "a"}], [{:text, "b"}]])
+    view = view |> send_text("one") |> pump(:agent_end)
+    assert_received {:requested_permission, :notifications}
+    view |> send_text("two") |> pump(:agent_end)
+    refute_received {:requested_permission, :notifications}
+  end
+
+  test "[voice:…] cycles off → important → everything and persists it", %{tmp_dir: dir} do
+    %{view: view} = mount_chat(dir, [])
+    assert text(view) =~ "[voice:important]"
+
+    view = render_info(view, {:tap, :cycle_voice})
+    assert text(view) =~ "[voice:everything]"
+    assert Operator.Core.Settings.voice(dir) == :everything
+
+    view = render_info(view, {:tap, :cycle_voice})
+    assert text(view) =~ "[voice:off]"
+    assert Operator.Core.Settings.voice(dir) == :off
   end
 end

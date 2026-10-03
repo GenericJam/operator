@@ -868,8 +868,28 @@ object MobBridge {
      */
     @JvmStatic
     fun scrollInfo(id: String): String? {
-        val h = scrollHandlesById[id] ?: return null
+        // Compose state is read on the main thread: from the NIF thread, a
+        // list whose first composition hasn't been applied yet throws
+        // "Reading a state that was created after the snapshot was taken"
+        // and takes the app down.
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return scrollInfoNow(id)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var result: String? = null
+        mainScope.launch {
+            try {
+                result = scrollInfoNow(id)
+            } catch (e: Throwable) {
+                result = null
+            } finally {
+                latch.countDown()
+            }
+        }
+        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        return result
+    }
 
+    private fun scrollInfoNow(id: String): String? {
+        val h = scrollHandlesById[id] ?: return null
         h.scrollState?.let { s ->
             val vp = h.viewportPx.toDouble()
             val maxV = s.maxValue.toDouble()

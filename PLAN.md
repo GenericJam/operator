@@ -222,14 +222,17 @@ message.
 
 ## Build order
 
-1. **Core loop** (in progress): pi's turn loop on req_llm (OpenRouter),
+1. **Core loop** (done, device-verified): pi's turn loop on req_llm (OpenRouter),
    steering/follow-up/stop, parallel tools with ordered results, omp/pi-format
    JSONL sessions, terminal-style chat screen (own parser, streaming, stick
    to bottom, copy). Verify on the Moto G.
 2. **Native Markdown view per reply** (Markwon on Android first) and
    **background runs on Android** (`mob_background` during a run, progress
    notification, network verified past 60 s) plus **spoken updates**
-   (`Mob.Speech`).
+   (`Mob.Speech`). Done and device-verified, except the notification
+   permission request and an in-app voice setting.
+2b. **Speech to text** (section above): mic button with live partials into
+   the composer; long-press to talk and send (or steer).
 3. **Self-modification**: generations with versioned module names, static
    check, selftests, biometric approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn

@@ -141,8 +141,9 @@ defmodule Operator.Core.Term do
   def put_renderer(renderer) when renderer in [:native, :term, :auto],
     do: :persistent_term.put(@key, %{theme() | renderer: renderer})
 
-  # Asked once (off the phone the NIF fails to load, and warns, per call).
-  defp platform do
+  @doc "`:android`, `:ios`, or `:host` off the phone (asked once: off the phone the NIF fails to load, and warns, per call)."
+  @spec platform() :: :android | :ios | :host
+  def platform do
     with nil <- :persistent_term.get({__MODULE__, :platform}, nil) do
       p = detect_platform()
       :persistent_term.put({__MODULE__, :platform}, p)
