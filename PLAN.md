@@ -80,6 +80,17 @@ Transport options (to decide when we build it):
    builds Rustler NIFs statically (`mix mob.add_nif <name> --type
    rustler`), so MDEx/comrak could run on device; not needed with step 2.
 
+**Fallback: a self-hosted WebView** (`Mob.UI.webview/1`, local HTML/JS only,
+talking to the app through mob's `postMessage` bridge). It already solves
+selection, inline styling, scrollbars and even ANSI (xterm.js), but Kevin
+would rather not, so it's the fallback, used only if one of these holds:
+- the native transcript can't keep up with streaming on the Moto G (dropped
+  frames or input lag a throttle can't fix);
+- MOB-374 turns out impractical on one platform (e.g. iOS range selection);
+- Operator needs real terminal emulation (running programs that emit ANSI).
+If it comes to that, only the transcript moves into the WebView; the input
+field, approvals and the rest of the app stay native.
+
 ## Background processing (Android is the main target)
 
 Operator isn't going to an app store yet, so **Android comes first** and iOS
@@ -111,17 +122,6 @@ gets the best it can without store review.
 - **Coming back to the app** shows what happened while away (the transcript
   is the record), and a notification is posted when a backgrounded run
   finishes or needs approval (biometric approval needs the app in front).
-
-**Fallback: a self-hosted WebView** (`Mob.UI.webview/1`, local HTML/JS only,
-talking to the app through mob's `postMessage` bridge). It already solves
-selection, inline styling, scrollbars and even ANSI (xterm.js), but Kevin
-would rather not, so it's the fallback, used only if one of these holds:
-- the native transcript can't keep up with streaming on the Moto G (dropped
-  frames or input lag a throttle can't fix);
-- MOB-374 turns out impractical on one platform (e.g. iOS range selection);
-- Operator needs real terminal emulation (running programs that emit ANSI).
-If it comes to that, only the transcript moves into the WebView; the input
-field, approvals and the rest of the app stay native.
 
 ## Transcript rendering contract (phone ⇄ omp)
 
