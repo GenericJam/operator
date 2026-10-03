@@ -96,9 +96,8 @@ defmodule Mix.Tasks.Operator.HandoffTest do
               }}
   end
 
-  test "a long handoff is shown over several codes, in order", %{tmp_dir: tmp} do
-    summary = Base.encode64(:crypto.strong_rand_bytes(3_000))
-
+  # The fixture session with a later handoff of `summary` appended.
+  defp with_handoff(tmp, summary) do
     entry =
       Jason.encode!(%{
         "type" => "compaction",
@@ -110,6 +109,12 @@ defmodule Mix.Tasks.Operator.HandoffTest do
 
     path = Path.join(tmp, "long.jsonl")
     File.write!(path, File.read!(@with_handoff) <> entry <> "\n")
+    path
+  end
+
+  test "a long handoff is shown over several codes, in order", %{tmp_dir: tmp} do
+    summary = Base.encode64(:crypto.strong_rand_bytes(3_000))
+    path = with_handoff(tmp, summary)
 
     {links, prompts} = run_task([path])
     total = length(links)
@@ -121,6 +126,16 @@ defmodule Mix.Tasks.Operator.HandoffTest do
 
     assert {:ok, %{summary: ^summary}} =
              Handoff.assemble(hd(parts).id, Enum.map(parts, & &1.data))
+  end
+
+  test "a handoff the phone would refuse is refused before any code is shown", %{tmp_dir: tmp} do
+    path = with_handoff(tmp, String.duplicate("- step\n", 2_500))
+
+    error = assert_raise Mix.Error, fn -> run_task([path]) end
+    assert error.message =~ "is 2501 lines, 17.5 kB"
+    assert error.message =~ "too long for the phone"
+    refute_received {:mix_shell, :prompt, _}
+    refute_received {:mix_shell, :info, _}
   end
 
   test "no handoff in the newest session: run /handoff in omp first", %{cwd: cwd, dir: dir} do

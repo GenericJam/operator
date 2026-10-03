@@ -14,7 +14,8 @@ defmodule Mix.Tasks.Operator.Handoff do
   the last one exits. Scan them with the phone's camera or any QR app (they
   open Operator), or with Diagnostics → Scan QR, in any order. Once the last
   one is in, the phone starts a new session that opens with the handoff;
-  type what to do next.
+  type what to do next. A handoff over the phone's limit (2,000 lines,
+  64 kB) is refused before any code is shown.
 
   The default session is the newest `*.jsonl` in omp's sessions directory
   for the working directory: `~/.omp/agent/sessions/` (or
@@ -59,9 +60,25 @@ defmodule Mix.Tasks.Operator.Handoff do
 
   defp handoff!(path) do
     case read_handoff(path) do
-      {:ok, handoff} -> handoff
+      {:ok, handoff} -> fits!(handoff, path)
       {:error, :no_handoff} -> Mix.raise("No handoff in #{path}: run /handoff in omp first.")
       {:error, reason} -> Mix.raise("Can't read #{path}: #{:file.format_error(reason)}")
+    end
+  end
+
+  # Refused here, before any QR is drawn, when the phone would refuse it.
+  defp fits!(%{summary: summary} = handoff, path) do
+    case Handoff.check(handoff) do
+      :ok ->
+        handoff
+
+      {:error, :too_large} ->
+        lines = length(String.split(summary, "\n"))
+        kb = :erlang.float_to_binary(byte_size(summary) / 1000, decimals: 1)
+
+        Mix.raise(
+          "The handoff in #{path} is #{lines} lines, #{kb} kB. " <> Handoff.message(:too_large)
+        )
     end
   end
 

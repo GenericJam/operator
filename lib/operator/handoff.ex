@@ -23,15 +23,27 @@ defmodule Operator.Handoff do
   runs over the same handoff give the same links, and the joined chunks
   are checked against it. `p` counts from 1.
 
+  Limits, the same on both sides (`check/1`): the summary is at most 2,000
+  lines and 64,000 bytes, since the chat draws every line of it as a row,
+  and a few hundred bytes of QR can deflate into a million lines; the
+  title and the project path are one line each, clipped to 200 and 1,000
+  bytes. `encode/1` refuses a handoff the phone would refuse, and the
+  phone stops inflating past what such a handoff can take.
+
   Pure: no processes.
   """
 
   @prefix "operator://handoff?id="
   @max_link 1200
   @max_parts 99
-  # Inflated payloads past this are refused: a crafted QR set mustn't
-  # inflate into something the phone can't hold.
-  @max_payload 2_000_000
+  @max_summary_lines 2_000
+  @max_summary_bytes 64_000
+  @max_title 200
+  @max_cwd 1_000
+  # The largest JSON a handoff within the limits encodes to (JSON escapes a
+  # control character in 6 bytes), with room to spare. The phone stops
+  # inflating past it.
+  @max_payload 512_000
 
   @type t :: %{
           title: String.t() | nil,
@@ -40,24 +52,30 @@ defmodule Operator.Handoff do
           created: integer() | nil
         }
   @type part :: %{id: String.t(), index: pos_integer(), total: pos_integer(), data: String.t()}
-  @type reason :: :not_handoff | :bad_link | :mixed_parts | :corrupt | :unsupported_version
+  @type reason :: :not_handoff | :bad_link | :corrupt | :too_large | :unsupported_version
 
   @doc """
   The links for a handoff (`:summary`, plus optional `:title`, `:cwd` and
-  `:created`, ms; default now), in order. Raises `ArgumentError` when it
-  needs more than #{@max_parts} codes.
+  `:created`, ms; default now), in order. Raises `ArgumentError` for a
+  handoff the phone won't take (`check/1`), or one that needs more than
+  #{@max_parts} codes.
   """
   @spec encode(map()) :: [String.t()]
   def encode(%{summary: summary} = handoff) when is_binary(summary) do
-    payload = %{
-      "v" => 1,
-      "title" => handoff[:title],
-      "cwd" => handoff[:cwd],
-      "summary" => summary,
-      "created" => handoff[:created] || System.os_time(:millisecond)
-    }
+    if check(handoff) != :ok, do: raise(ArgumentError, message(:too_large))
 
-    deflated = :zlib.compress(Jason.encode!(payload))
+    json =
+      Jason.encode!(%{
+        "v" => 1,
+        "title" => line(handoff[:title], @max_title),
+        "cwd" => line(handoff[:cwd], @max_cwd),
+        "summary" => summary,
+        "created" => handoff[:created] || System.os_time(:millisecond)
+      })
+
+    if byte_size(json) > @max_payload, do: raise(ArgumentError, message(:too_large))
+
+    deflated = :zlib.compress(json)
     id = id(deflated)
     chunks = deflated |> Base.url_encode64(padding: false) |> chunks(1)
     total = length(chunks)
@@ -67,6 +85,18 @@ defmodule Operator.Handoff do
 
     for {chunk, i} <- Enum.with_index(chunks, 1),
         do: "#{@prefix}#{id}&p=#{i}&n=#{total}&d=#{chunk}"
+  end
+
+  @doc """
+  Whether the phone takes a handoff: its summary is at most
+  #{@max_summary_lines} lines and #{@max_summary_bytes} bytes.
+  """
+  @spec check(map()) :: :ok | {:error, :too_large}
+  def check(%{summary: summary}) when is_binary(summary) do
+    if byte_size(summary) <= @max_summary_bytes and
+         length(:binary.matches(summary, "\n")) < @max_summary_lines,
+       do: :ok,
+       else: {:error, :too_large}
   end
 
   @doc "Reads one link; `{:error, :not_handoff}` for anything that isn't a handoff link."
@@ -94,10 +124,10 @@ defmodule Operator.Handoff do
 
   @doc """
   Joins a complete set's chunks (in part order) back into the handoff,
-  checking them against the set's `id`.
+  checking them against the set's `id`, and the handoff against `check/1`.
   """
   @spec assemble(String.t(), [String.t()]) ::
-          {:ok, t()} | {:error, :corrupt | :unsupported_version}
+          {:ok, t()} | {:error, :corrupt | :too_large | :unsupported_version}
   def assemble(id, chunks) do
     with {:ok, deflated} <- Base.url_decode64(Enum.join(chunks), padding: false),
          ^id <- id(deflated),
@@ -105,6 +135,7 @@ defmodule Operator.Handoff do
          {:ok, %{} = payload} <- Jason.decode(json) do
       decode(payload)
     else
+      {:error, :too_large} = error -> error
       _ -> {:error, :corrupt}
     end
   end
@@ -127,11 +158,13 @@ defmodule Operator.Handoff do
   def message(:not_handoff), do: "That QR isn't an Operator handoff."
   def message(:bad_link), do: "That handoff code didn't read right: scan it again."
 
-  def message(:mixed_parts),
-    do: "That code doesn't belong with the ones scanned so far: run mix operator.handoff again."
-
   def message(:corrupt),
-    do: "That handoff didn't decode: run mix operator.handoff again and scan every code."
+    do: "That handoff didn't decode: scan every code again."
+
+  def message(:too_large),
+    do:
+      "That handoff is too long for the phone (at most 2,000 lines and 64 kB): " <>
+        "run /handoff in omp again with a narrower focus."
 
   def message(:unsupported_version),
     do: "That handoff comes from a newer Operator: update the app, then scan again."
@@ -158,20 +191,36 @@ defmodule Operator.Handoff do
   end
 
   defp decode(%{"v" => 1, "summary" => summary} = payload) when is_binary(summary) do
-    {:ok,
-     %{
-       title: string(payload["title"]),
-       cwd: string(payload["cwd"]),
-       summary: summary,
-       created: if(is_integer(payload["created"]), do: payload["created"])
-     }}
+    handoff = %{
+      title: line(payload["title"], @max_title),
+      cwd: line(payload["cwd"], @max_cwd),
+      summary: summary,
+      created: if(is_integer(payload["created"]), do: payload["created"])
+    }
+
+    with :ok <- check(handoff), do: {:ok, handoff}
   end
 
   defp decode(%{"v" => v}) when is_integer(v) and v > 1, do: {:error, :unsupported_version}
   defp decode(_payload), do: {:error, :corrupt}
 
-  defp string(s) when is_binary(s) and s != "", do: s
-  defp string(_), do: nil
+  # The first line, at most `max` bytes (cut at a character boundary); nil
+  # for nothing.
+  defp line(s, max) when is_binary(s) do
+    case s |> String.split(["\r\n", "\n", "\r"], parts: 2) |> hd() |> cut(max) do
+      "" -> nil
+      line -> line
+    end
+  end
+
+  defp line(_s, _max), do: nil
+
+  defp cut(s, max) when byte_size(s) <= max, do: s
+
+  defp cut(s, max) do
+    part = binary_part(s, 0, max)
+    if String.valid?(part), do: part, else: cut(part, max - 1)
+  end
 
   defp inflate(deflated) do
     z = :zlib.open()
@@ -190,7 +239,7 @@ defmodule Operator.Handoff do
     size = size + IO.iodata_length(out)
 
     cond do
-      size > @max_payload -> :error
+      size > @max_payload -> {:error, :too_large}
       status == :finished -> {:ok, IO.iodata_to_binary([acc, out])}
       true -> inflate(z, :zlib.safeInflate(z, []), [acc, out], size)
     end

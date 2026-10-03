@@ -2,8 +2,9 @@ defmodule Operator.Handoff.Inbox do
   @moduledoc """
   Collects the parts of a handoff (`Operator.Handoff.parse/1`) until its
   set is complete: in any order, a part already in is ignored, sets with
-  different ids don't mix. A set no part has joined for 30 minutes is
-  dropped.
+  different ids don't mix. A part that gives its set another part count
+  starts the set over from that part, so a bad scan can't lock the real
+  codes out.
 
   A process rather than state in a screen: parts come from whichever
   screen is showing when a link arrives (the chat, or the scanner), and a
@@ -11,8 +12,14 @@ defmodule Operator.Handoff.Inbox do
   process owns the sets and keeps them on disk, `<data dir>/
   handoff_inbox.json`, rewritten on every change.
 
+  Links can come from anyone's QR, so what is kept is bounded: a set no
+  part has joined for 30 minutes is dropped (checked at start, with every
+  part and every minute), and past 8 sets or 512,000 bytes of parts the
+  sets least recently joined go first.
+
   Options: `:name` (default `#{inspect(__MODULE__)}`), `:dir` (default
-  `Operator.Paths.data_dir/0`).
+  `Operator.Paths.data_dir/0`), `:clock` (a function giving the time in
+  ms), `:max_bytes`, `:prune_ms`.
   """
   use GenServer
 
@@ -21,6 +28,9 @@ defmodule Operator.Handoff.Inbox do
   require Logger
 
   @expire_ms 30 * 60_000
+  @prune_ms 60_000
+  @max_sets 8
+  @max_bytes 512_000
   @file_name "handoff_inbox.json"
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -30,67 +40,117 @@ defmodule Operator.Handoff.Inbox do
   @doc """
   Adds a part. `{:partial, received, total}` while parts are missing (a
   duplicate leaves the count as it was); the last one gives the assembled
-  handoff and clears its set. `opts`: `:server`, `:now` (ms, for the
-  30-minute expiry).
+  handoff and clears its set. `opts`: `:server`.
   """
   @spec put(Handoff.part(), keyword()) ::
           {:partial, pos_integer(), pos_integer()}
           | {:complete, Handoff.t()}
-          | {:error, :mixed_parts | :corrupt | :unsupported_version}
-  def put(part, opts \\ []) do
-    now = Keyword.get_lazy(opts, :now, fn -> System.os_time(:millisecond) end)
-    GenServer.call(Keyword.get(opts, :server, __MODULE__), {:put, part, now})
-  end
+          | {:error, :corrupt | :too_large | :unsupported_version}
+  def put(part, opts \\ []),
+    do: GenServer.call(Keyword.get(opts, :server, __MODULE__), {:put, part})
 
   @impl true
   def init(opts) do
-    dir = Keyword.get_lazy(opts, :dir, &Operator.Paths.data_dir/0)
-    path = Path.join(dir, @file_name)
-    {:ok, %{path: path, sets: load(path)}}
+    path = Path.join(Keyword.get_lazy(opts, :dir, &Operator.Paths.data_dir/0), @file_name)
+
+    s = %{
+      path: path,
+      sets: load(path),
+      clock: Keyword.get(opts, :clock, fn -> System.os_time(:millisecond) end),
+      max_bytes: Keyword.get(opts, :max_bytes, @max_bytes),
+      prune_ms: Keyword.get(opts, :prune_ms, @prune_ms)
+    }
+
+    {:ok, s |> prune() |> bound(nil) |> save() |> schedule()}
   end
 
   @impl true
-  def handle_call({:put, part, now}, _from, s) do
-    sets = for {id, set} <- s.sets, now - set["seen"] <= @expire_ms, into: %{}, do: {id, set}
-    set = Map.get(sets, part.id, %{"total" => part.total, "parts" => %{}})
+  def handle_call({:put, part}, _from, s) do
+    s = prune(s)
 
-    if set["total"] == part.total do
-      parts = Map.put_new(set["parts"], Integer.to_string(part.index), part.data)
-      set = %{set | "parts" => parts} |> Map.put("seen", now)
-      {reply, sets} = add(sets, part.id, set)
-      {:reply, reply, %{s | sets: save(s.path, sets)}}
-    else
-      {:reply, {:error, :mixed_parts}, %{s | sets: save(s.path, sets)}}
-    end
+    # Another part count under the same id: not this set's part, or the
+    # set holds a bad scan. Either way this part starts it over.
+    set =
+      case Map.get(s.sets, part.id) do
+        %{"total" => total} = set when total == part.total -> set
+        _none_or_another_count -> %{"total" => part.total, "parts" => %{}}
+      end
+
+    parts = Map.put_new(set["parts"], Integer.to_string(part.index), part.data)
+    set = set |> Map.put("parts", parts) |> Map.put("seen", s.clock.())
+    {reply, s} = add(s, part.id, set)
+    {:reply, reply, save(s)}
   end
 
-  defp add(sets, id, %{"total" => total, "parts" => parts}) when map_size(parts) == total do
+  @impl true
+  def handle_info(:prune, s) do
+    before = s.sets
+    s = prune(s)
+    s = if s.sets == before, do: s, else: save(s)
+    {:noreply, schedule(s)}
+  end
+
+  defp add(s, id, %{"total" => total, "parts" => parts}) when map_size(parts) == total do
     chunks = for i <- 1..total, do: Map.fetch!(parts, Integer.to_string(i))
+    sets = Map.delete(s.sets, id)
 
     case Handoff.assemble(id, chunks) do
-      {:ok, handoff} -> {{:complete, handoff}, Map.delete(sets, id)}
-      {:error, _} = error -> {error, Map.delete(sets, id)}
+      {:ok, handoff} -> {{:complete, handoff}, %{s | sets: sets}}
+      {:error, _} = error -> {error, %{s | sets: sets}}
     end
   end
 
-  defp add(sets, id, set),
-    do: {{:partial, map_size(set["parts"]), set["total"]}, Map.put(sets, id, set)}
+  defp add(s, id, set) do
+    s = bound(%{s | sets: Map.put(s.sets, id, set)}, id)
+    {{:partial, map_size(set["parts"]), set["total"]}, s}
+  end
+
+  # ── limits ──
+
+  defp prune(s) do
+    now = s.clock.()
+    %{s | sets: Map.filter(s.sets, fn {_id, set} -> now - set["seen"] <= @expire_ms end)}
+  end
+
+  # Drops the sets least recently joined, never `keep`, until within the limits.
+  defp bound(s, keep) do
+    over? = map_size(s.sets) > @max_sets or bytes(s.sets) > s.max_bytes
+    others = Map.delete(s.sets, keep)
+
+    if over? and others != %{} do
+      {oldest, _set} = Enum.min_by(others, fn {id, set} -> {set["seen"], id} end)
+      bound(%{s | sets: Map.delete(s.sets, oldest)}, keep)
+    else
+      s
+    end
+  end
+
+  defp bytes(sets) do
+    for {_id, set} <- sets, {_i, data} <- set["parts"], reduce: 0 do
+      acc -> acc + byte_size(data)
+    end
+  end
+
+  defp schedule(s) do
+    Process.send_after(self(), :prune, s.prune_ms)
+    s
+  end
 
   # ── the file ──
 
   # Written whole, through a temporary file, so a kill mid-write leaves the
   # previous version.
-  defp save(path, sets) when map_size(sets) == 0 do
-    _ = File.rm(path)
-    sets
+  defp save(%{sets: sets} = s) when map_size(sets) == 0 do
+    _ = File.rm(s.path)
+    s
   end
 
-  defp save(path, sets) do
-    tmp = path <> ".tmp"
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(tmp, Jason.encode!(sets))
-    File.rename!(tmp, path)
-    sets
+  defp save(s) do
+    tmp = s.path <> ".tmp"
+    File.mkdir_p!(Path.dirname(s.path))
+    File.write!(tmp, Jason.encode!(s.sets))
+    File.rename!(tmp, s.path)
+    s
   end
 
   defp load(path) do
