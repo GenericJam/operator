@@ -10,7 +10,7 @@ defmodule Operator.Core.ToolRegistry do
   alias Operator.Core.Tool
 
   @table __MODULE__
-  @core_tools [Operator.Core.Tools.Notes]
+  @core_tools [Operator.Core.Tools.Notes, Operator.Core.Tools.ReadArtifact]
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)

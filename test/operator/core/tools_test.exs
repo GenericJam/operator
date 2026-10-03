@@ -21,7 +21,7 @@ defmodule Operator.Core.ToolsTest do
 
   test "the registry offers core tools and takes new ones at runtime" do
     start_supervised!(ToolRegistry)
-    assert ToolRegistry.list() == [Notes]
+    assert ToolRegistry.list() == [Notes, Operator.Core.Tools.ReadArtifact]
     assert {:ok, Notes} = ToolRegistry.lookup("notes")
 
     assert :ok = ToolRegistry.register(Operator.Test.Tools.Echo)

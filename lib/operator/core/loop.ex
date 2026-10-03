@@ -27,6 +27,7 @@ defmodule Operator.Core.Loop do
   """
   use GenServer, restart: :temporary
 
+  alias Operator.Core.Artifacts
   alias Operator.Core.Budget
   alias Operator.Core.Events
   alias Operator.Core.LLM
@@ -523,7 +524,7 @@ defmodule Operator.Core.Loop do
     ctx = %{
       session_id: s.session.id,
       call_id: call["id"],
-      data_dir: s.opts[:data_dir] || Operator.Paths.data_dir()
+      data_dir: data_dir(s)
     }
 
     task =
@@ -542,6 +543,8 @@ defmodule Operator.Core.Loop do
 
   defp pump(s), do: s
 
+  defp data_dir(s), do: s.opts[:data_dir] || Operator.Paths.data_dir()
+
   defp tool_done(s, ref, result) do
     %{idx: i, timer: timer} = s.run.batch.running[ref]
     if timer, do: Process.cancel_timer(timer)
@@ -552,6 +555,9 @@ defmodule Operator.Core.Loop do
         {:ok, text} -> {text, false}
         {:error, text} -> {text, true}
       end
+
+    # Over the output budget: head + tail for the model, the rest an artifact.
+    text = Artifacts.limit(text, data_dir(s), s.session.id, call["id"])
 
     emit(s, %{
       type: :tool_execution_end,
