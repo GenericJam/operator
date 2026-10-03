@@ -171,6 +171,25 @@ regenerates the tracked plugin bootstrap / bridge Kotlin; commit those):
    error (e.g. a bad model), `put_voice(:everything)` / `:off` over rpc.
 4. iOS: not tested.
 
+## Speech to text (quick entry)
+
+Talking is faster than typing on a phone, and the agent already talks back
+(`Mob.Speech`), so input should work by voice too. mob has no speech
+recognition today (`Mob.Speech` only speaks).
+- **Works now, no code:** the keyboard's own mic (Gboard on the Moto)
+  dictates into the composer.
+- **Built in (Android first):** a mic button next to Send. Tap to talk:
+  Android `SpeechRecognizer` (prefer on-device recognition when available;
+  `RECORD_AUDIO` permission requested on first use) streams partial results
+  into the composer live; stopping (tap again, or silence) leaves the text
+  for a quick edit. Long-press the mic = talk and send immediately (or
+  steer, if a run is going). App-local Kotlin + a component event bridge,
+  like the Markdown view.
+- **iOS later:** `SFSpeechRecognizer` (needs the speech + microphone usage
+  strings in Info.plist).
+- If it proves generally useful, lift it into a mob plugin (needs Kevin's
+  OK for a Hex release).
+
 ## Transcript rendering contract (phone ⇄ omp)
 
 A session moves between the phone and omp, so what the model writes must
