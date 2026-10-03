@@ -135,11 +135,36 @@ screen. Shape from `pi-agent-core/src/agent-loop.ts`:
   recent tail), and retry once on a context-overflow error.
 
 ### Session = plain text
-Append-only JSONL per session (pi's format, trimmed): `message` (user /
-assistant with tool calls / tool result), `custom_message` (asides, crash
-reports, approvals), `model_change`, `compaction_summary`, `generation`
-(activated / reverted, with id). Resuming = replaying it. Being plain text
-keeps the door open to handing a session to another host later.
+Append-only JSONL per session, resumed by replaying it. Being plain text
+keeps the door open to handing a session to another host.
+
+### Session format (changed in step 1: omp/pi's own, not a trimmed copy)
+Sessions must move between omp on a computer and Operator on the phone, so
+the file **is** pi's format; the types live in
+`pi-coding-agent/src/session/session-entries.ts` (`CURRENT_SESSION_VERSION`
+3) and `pi-ai`'s `AgentMessage` / `Usage`. Operator does not define its own:
+
+- Line 1: `{"type":"session","version":3,"id":<UUIDv7>,"timestamp","cwd","title","titleSource"}`;
+  file name `<ISO time>_<id>.jsonl` under `<data dir>/sessions`, as omp names them.
+- Every entry: `type`, `id` (8 hex), `parentId` (a tree; Operator appends a
+  linear chain, the last entry is the leaf), ISO `timestamp`.
+- Written by Operator: `model_change` (`"openrouter/<model>"`, first and on
+  switches), `message` with pi's user / assistant (`text`/`thinking`/
+  `toolCall` content, `api`/`provider`/`model`, `usage`, `stopReason`,
+  `errorMessage`) / `toolResult` shapes, and `custom_message`
+  (`operator.notice` / `operator.error` / `operator.aside`).
+- Read: every entry is kept (omp's `custom`, `compaction`, `title_change`,
+  `credential_pin`, …; Operator only appends). The model context walks the
+  leaf's branch and uses `message` and `custom_message` entries, like pi's
+  `buildSessionContext`; compaction entries are ignored until step 3.
+  `custom_message` goes to the model as a user message (pi sends it as a
+  developer message, which OpenRouter's chat API has no slot for).
+- Planned entries from §2 (`generation`) will be pi `custom` entries, which
+  omp carries but ignores.
+
+The transcript renders the GitHub-flavoured Markdown subset omp's terminal
+renders (`pi-tui/src/components/markdown.ts`), so a session reads the same in
+both; colour comes from role and construct only (`Operator.Core.Term`).
 
 ## 4. Tools in v1
 

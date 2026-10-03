@@ -38,8 +38,11 @@ defmodule Operator.KeyStore do
   @spec fingerprint() :: String.t() | nil
   def fingerprint do
     case get() do
-      {:ok, key} -> :crypto.hash(:sha256, key) |> Base.encode16(case: :lower) |> binary_part(0, 12)
-      :error -> nil
+      {:ok, key} ->
+        :crypto.hash(:sha256, key) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+
+      :error ->
+        nil
     end
   end
 

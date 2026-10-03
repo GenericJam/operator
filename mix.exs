@@ -10,9 +10,13 @@ defmodule Operator.MixProject do
       deps: deps(),
       aliases: aliases(),
       erlc_paths: ["src"],
+      elixirc_paths: elixirc_paths(Mix.env()),
       erlc_options: [:debug_info]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   def application do
     [extra_applications: [:logger]]

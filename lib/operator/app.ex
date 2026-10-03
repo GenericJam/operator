@@ -3,9 +3,11 @@ defmodule Operator.App do
 
   use Mob.App
 
+  alias Operator.Core.Term
+
   @impl Mob.App
   def navigation(_platform) do
-    stack(:main, root: Operator.HomeScreen)
+    stack(:main, root: Operator.ChatScreen)
   end
 
   @impl Mob.App
@@ -23,7 +25,12 @@ defmodule Operator.App do
       Ecto.Migrator.run(repo, migrations_dir(), :up, all: true)
     end)
 
-    Mob.Screen.start_root(Operator.HomeScreen)
+    # The terminal theme (dark, monospace `:term` font token) for every screen.
+    :ok = Term.install()
+
+    # Chat once signed in; until then the diagnostics screen, which signs in.
+    root = if Operator.KeyStore.present?(), do: Operator.ChatScreen, else: Operator.HomeScreen
+    Mob.Screen.start_root(root)
   end
 
   # Returns the path to the migrations directory for the current environment.
@@ -47,7 +54,7 @@ defmodule Operator.App do
   # and pass the explicit path to Ecto.Migrator.run/4.
   defp migrations_dir do
     case System.get_env("MOB_BEAMS_DIR") do
-      nil       -> Application.app_dir(:operator, "priv/repo/migrations")
+      nil -> Application.app_dir(:operator, "priv/repo/migrations")
       beams_dir -> Path.join([beams_dir, "priv", "repo", "migrations"])
     end
   end

@@ -1,18 +1,23 @@
 defmodule Operator.HomeScreen do
   @moduledoc """
-  Spike home: OpenRouter sign-in (localhost callback or pasted code), the
-  agent stack's status, and on-device compilation of sample screens, each
-  of which can be opened once compiled.
+  Diagnostics (and the sign-in screen when there is no key yet): OpenRouter
+  sign-in (localhost callback or pasted code), the agent stack's status, and
+  the spike's on-device compilation of sample screens. Signing in hands over
+  to `Operator.ChatScreen`.
   """
   use Mob.Screen
 
+  alias Operator.OpenRouter.OAuth
+  alias Operator.SelfMod
+
   def mount(_params, _session, socket) do
-    Mob.Theme.set(Mob.Theme.Dark)
-    Operator.OpenRouter.OAuth.subscribe()
+    # The theme (terminal font token included) is installed once at boot by
+    # Operator.Core.Term.install/0.
+    OAuth.subscribe()
 
     {:ok,
      Mob.Socket.assign(socket,
-       oauth: Operator.OpenRouter.OAuth.status(),
+       oauth: OAuth.status(),
        code_draft: "",
        last: boot_line(),
        dyn: dyn_screens()
@@ -61,18 +66,25 @@ defmodule Operator.HomeScreen do
     do: {:noreply, Mob.Socket.assign(socket, :code_draft, value)}
 
   def handle_info({:tap, :submit_code}, socket) do
-    _ = Operator.OpenRouter.OAuth.exchange_pasted(socket.assigns.code_draft)
-    {:noreply, Mob.Socket.assign(socket, code_draft: "", oauth: Operator.OpenRouter.OAuth.status())}
+    _ = OAuth.exchange_pasted(socket.assigns.code_draft)
+
+    {:noreply, Mob.Socket.assign(socket, code_draft: "", oauth: OAuth.status())}
   end
 
-  def handle_info({:oauth, _phase}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :oauth, Operator.OpenRouter.OAuth.status())}
+  def handle_info({:oauth, _phase}, socket) do
+    status = OAuth.status()
+    socket = Mob.Socket.assign(socket, :oauth, status)
+
+    if status.phase == :signed_in and status.key_present,
+      do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)},
+      else: {:noreply, socket}
+  end
 
   # ── self-modification ──
 
   def handle_info({:tap, {:compile, name}}, socket) do
     line =
-      case Operator.SelfMod.install(name, Operator.SelfMod.Samples.get(name)) do
+      case SelfMod.install(name, SelfMod.Samples.get(name)) do
         {:ok, r} ->
           "#{name}: #{inspect(r.modules)} compiled in #{div(r.compile_us, 1000)} ms, selftest #{inspect(r.selftest)}"
 
@@ -84,30 +96,47 @@ defmodule Operator.HomeScreen do
   end
 
   def handle_info({:tap, :forget}, socket) do
-    Enum.each(Operator.SelfMod.list(), &Operator.SelfMod.remove/1)
-    {:noreply, Mob.Socket.assign(socket, last: "persisted sources removed (modules stay loaded until restart)")}
+    Enum.each(SelfMod.list(), &SelfMod.remove/1)
+
+    {:noreply,
+     Mob.Socket.assign(socket,
+       last: "persisted sources removed (modules stay loaded until restart)"
+     )}
   end
 
-  def handle_info({:tap, {:open, mod}}, socket), do: {:noreply, Mob.Socket.push_screen(socket, mod)}
+  def handle_info({:tap, {:open, mod}}, socket),
+    do: {:noreply, Mob.Socket.push_screen(socket, mod)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # ── helpers ──
 
   defp begin(socket, mode) do
-    _ = Operator.OpenRouter.OAuth.begin(mode)
-    {:noreply, Mob.Socket.assign(socket, :oauth, Operator.OpenRouter.OAuth.status())}
+    _ = OAuth.begin(mode)
+    {:noreply, Mob.Socket.assign(socket, :oauth, OAuth.status())}
   end
 
   defp button(label, tag) do
     tap = {self(), tag}
-    ~MOB(<Button text={label} background={:primary} text_color={:on_primary} padding={:space_sm} fill_width={true} on_tap={tap} />)
+    ~MOB(<Button
+  text={label}
+  background={:primary}
+  text_color={:on_primary}
+  padding={:space_sm}
+  fill_width={true}
+  on_tap={tap}
+/>)
   end
 
   defp code_field(draft) do
     %{
       type: :text_field,
-      props: %{value: draft, placeholder: "paste the OpenRouter code", fill_width: true, on_change: {self(), :code}},
+      props: %{
+        value: draft,
+        placeholder: "paste the OpenRouter code",
+        fill_width: true,
+        on_change: {self(), :code}
+      },
       children: []
     }
   end
@@ -119,7 +148,7 @@ defmodule Operator.HomeScreen do
     %{type: :column, props: %{fill_width: true}, children: buttons}
   end
 
-  defp dyn_screens, do: Operator.SelfMod.screens() |> Enum.sort()
+  defp dyn_screens, do: SelfMod.screens() |> Enum.sort()
 
   defp stack_line do
     apps = Operator.Diag.apps()
@@ -130,10 +159,12 @@ defmodule Operator.HomeScreen do
   defp oauth_line(%{phase: phase, error: nil, key_fingerprint: fp}),
     do: "#{phase}" <> if(fp, do: " · key #{fp}…", else: "")
 
-  defp oauth_line(%{phase: phase, error: err}), do: "#{phase}: #{inspect(err) |> String.slice(0, 200)}"
+  defp oauth_line(%{phase: phase, error: err}),
+    do: "#{phase}: #{inspect(err) |> String.slice(0, 200)}"
 
   defp boot_line do
     t = Operator.Boot.timings()
+
     "boot: selfmod recompile #{t[:selfmod_recompile]} ms, apps #{t[:apps]} ms, total BEAM uptime #{t[:beam_uptime_at_boot_end]} ms"
   end
 end

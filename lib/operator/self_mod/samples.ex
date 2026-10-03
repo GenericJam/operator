@@ -4,6 +4,9 @@ defmodule Operator.SelfMod.Samples do
   (they stand in for source the agent will write at runtime).
   """
 
+  # Read at compile time and embedded: Application.app_dir/2 can't resolve
+  # priv/ on the device (see Operator.App.migrations_dir/0).
+  # credo:disable-for-next-line
   @dir Path.expand("../../../priv/selfmod_samples", __DIR__)
   @samples (for f <- Path.wildcard(Path.join(@dir, "*.ex.txt")) do
               @external_resource f

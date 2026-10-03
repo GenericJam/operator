@@ -101,13 +101,15 @@ defmodule Operator.OpenRouter.OAuth do
     verifier = new_verifier()
     state = :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
 
-    with {:ok, s} <- maybe_listen(%{s | verifier: verifier, state: state, mode: mode, code: nil}) do
-      url = auth_url(verifier, mode, state)
-      :ok = Mob.Device.open_url(url)
-      s = notify(%{s | phase: :awaiting_browser, error: nil, started_at: now()})
-      {:reply, {:ok, url}, s}
-    else
-      {:error, reason} = err -> {:reply, err, notify(%{s | phase: :failed, error: reason})}
+    case maybe_listen(%{s | verifier: verifier, state: state, mode: mode, code: nil}) do
+      {:ok, s} ->
+        url = auth_url(verifier, mode, state)
+        :ok = Mob.Device.open_url(url)
+        s = notify(%{s | phase: :awaiting_browser, error: nil, started_at: now()})
+        {:reply, {:ok, url}, s}
+
+      {:error, reason} = err ->
+        {:reply, err, notify(%{s | phase: :failed, error: reason})}
     end
   end
 
@@ -208,7 +210,11 @@ defmodule Operator.OpenRouter.OAuth do
          %URI{path: "/callback", query: query} <- URI.parse(target) do
       case GenServer.call(owner, {:callback, query || ""}, 10_000) do
         :received ->
-          reply(conn, 200, "<h2>Code received.</h2><p>Switch back to Operator to finish signing in.</p>")
+          reply(
+            conn,
+            200,
+            "<h2>Code received.</h2><p>Switch back to Operator to finish signing in.</p>"
+          )
 
         _ ->
           reply(conn, 200, "<h2>Sign-in failed.</h2><p>Return to Operator; it shows why.</p>")
@@ -282,7 +288,16 @@ defmodule Operator.OpenRouter.OAuth do
   defp finish_exchange({:ok, key, ms}, s) do
     :ok = Operator.KeyStore.put(key)
     Logger.info("[oauth] signed in (#{ms} ms exchange, attempt #{s.attempts})")
-    notify(%{s | phase: :signed_in, error: nil, exchange_ms: ms, verifier: nil, state: nil, code: nil})
+
+    notify(%{
+      s
+      | phase: :signed_in,
+        error: nil,
+        exchange_ms: ms,
+        verifier: nil,
+        state: nil,
+        code: nil
+    })
   end
 
   defp finish_exchange({:retry, reason}, s) do

@@ -4,6 +4,10 @@ defmodule Operator.Boot do
   can report what the agent stack costs at launch. `timings/0` returns
   `[{step, ms}]` plus the BEAM's own uptime at the end of boot.
   """
+
+  alias Operator.OpenRouter.OAuth
+  alias Operator.SelfMod
+
   require Logger
 
   @key {__MODULE__, :timings}
@@ -26,14 +30,18 @@ defmodule Operator.Boot do
       # llm_db, finch, req).
       apps: fn -> {:ok, _} = Application.ensure_all_started(:jido_ai) end,
       jido_instance: fn -> {:ok, _} = Operator.Jido.start_link() end,
-      llmdb_first_lookup: fn -> {:ok, _} = LLMDB.model("openrouter:anthropic/claude-haiku-4.5") end,
+      llmdb_first_lookup: fn ->
+        {:ok, _} = LLMDB.model("openrouter:anthropic/claude-haiku-4.5")
+      end,
       repo: fn ->
         {:ok, _} = Application.ensure_all_started(:ecto_sqlite3)
         {:ok, _} = Operator.Repo.start_link()
       end,
       key: fn -> Operator.KeyStore.load() end,
-      oauth: fn -> {:ok, _} = Operator.OpenRouter.OAuth.start_link([]) end,
-      selfmod_recompile: fn -> Operator.SelfMod.recompile_all() end
+      oauth: fn -> {:ok, _} = OAuth.start_link([]) end,
+      selfmod_recompile: fn -> SelfMod.recompile_all() end,
+      # The agent loop, sessions and core tools (resumes the latest session).
+      core: fn -> {:ok, _} = Operator.Core.start_link() end
     ]
 
     timings =

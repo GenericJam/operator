@@ -34,8 +34,14 @@ defmodule Operator.Diag do
 
     case res do
       {:ok, m} ->
-        %{ok: true, id: m.id, provider: m.provider, us: us, tools: get_in(m.capabilities, [:tools, :enabled]),
-          openrouter_models: length(LLMDB.models(:openrouter))}
+        %{
+          ok: true,
+          id: m.id,
+          provider: m.provider,
+          us: us,
+          tools: get_in(m.capabilities, [:tools, :enabled]),
+          openrouter_models: length(LLMDB.models(:openrouter))
+        }
 
       other ->
         %{ok: false, result: inspect(other), us: us}
@@ -50,7 +56,15 @@ defmodule Operator.Diag do
       {:ok, pid} ->
         {:ok, st} = Jido.AgentServer.state(pid)
         tools = Jido.AI.list_tools(pid)
-        info = %{ok: true, alive: Process.alive?(pid), start_us: us, agent_id: st.agent.id, tools: inspect(tools)}
+
+        info = %{
+          ok: true,
+          alive: Process.alive?(pid),
+          start_us: us,
+          agent_id: st.agent.id,
+          tools: inspect(tools)
+        }
+
         Operator.Jido.stop_agent(pid)
         info
 
@@ -60,7 +74,14 @@ defmodule Operator.Diag do
   end
 
   @doc "All step-2 probes in one map."
-  def all, do: %{apps: apps(), compiler: compiler(), llmdb: llmdb(), agent: agent(), boot: Operator.Boot.timings()}
+  def all,
+    do: %{
+      apps: apps(),
+      compiler: compiler(),
+      llmdb: llmdb(),
+      agent: agent(),
+      boot: Operator.Boot.timings()
+    }
 
   # ── model calls (need the key) ──
 
@@ -71,21 +92,29 @@ defmodule Operator.Diag do
   def stream(model \\ "openrouter:google/gemma-4-31b-it:free") do
     t0 = now()
 
-    with {:ok, resp} <-
-           ReqLLM.stream_text(model, "Count from 1 to 10, one number per line, nothing else.",
-             max_tokens: 200
-           ) do
-      {ttft, chunks, text} =
-        resp
-        |> ReqLLM.StreamResponse.tokens()
-        |> Enum.reduce({nil, 0, ""}, fn tok, {first, n, acc} ->
-          {first || now() - t0, n + 1, acc <> tok}
-        end)
+    prompt = "Count from 1 to 10, one number per line, nothing else."
 
-      %{ok: true, model: model, ttft_ms: ttft, total_ms: now() - t0, chunks: chunks, text: text,
-        usage: ReqLLM.StreamResponse.usage(resp)}
-    else
-      {:error, e} -> %{ok: false, model: model, error: describe(e), total_ms: now() - t0}
+    case ReqLLM.stream_text(model, prompt, max_tokens: 200) do
+      {:ok, resp} ->
+        {ttft, chunks, text} =
+          resp
+          |> ReqLLM.StreamResponse.tokens()
+          |> Enum.reduce({nil, 0, ""}, fn tok, {first, n, acc} ->
+            {first || now() - t0, n + 1, acc <> tok}
+          end)
+
+        %{
+          ok: true,
+          model: model,
+          ttft_ms: ttft,
+          total_ms: now() - t0,
+          chunks: chunks,
+          text: text,
+          usage: ReqLLM.StreamResponse.usage(resp)
+        }
+
+      {:error, e} ->
+        %{ok: false, model: model, error: describe(e), total_ms: now() - t0}
     end
   rescue
     e -> %{ok: false, model: model, error: Exception.message(e)}
@@ -97,7 +126,9 @@ defmodule Operator.Diag do
     t0 = now()
 
     res =
-      Operator.Agent.ask_sync(pid, "Use the add_numbers tool to compute 1234 + 4321. Reply with just the number.",
+      Operator.Agent.ask_sync(
+        pid,
+        "Use the add_numbers tool to compute 1234 + 4321. Reply with just the number.",
         timeout: 120_000
       )
 
@@ -105,8 +136,13 @@ defmodule Operator.Diag do
     {:ok, st} = Jido.AgentServer.state(pid)
     Operator.Jido.stop_agent(pid)
 
-    %{model: model, ms: ms, result: inspect(res, limit: 50, printable_limit: 500),
-      tool_results: inspect(get_in(st.agent.state, [:__strategy__, :details, :tool_results]) || :n_a)}
+    %{
+      model: model,
+      ms: ms,
+      result: inspect(res, limit: 50, printable_limit: 500),
+      tool_results:
+        inspect(get_in(st.agent.state, [:__strategy__, :details, :tool_results]) || :n_a)
+    }
   end
 
   defp describe(%{__exception__: true} = e), do: Exception.message(e)
