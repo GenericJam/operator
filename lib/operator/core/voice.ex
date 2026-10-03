@@ -6,7 +6,8 @@ defmodule Operator.Core.Voice do
 
     * `:important` (default): when a run ends: finished (the first sentence
       of the final reply, at most ~200 chars, markup stripped), stopped,
-      error (short) or step limit.
+      error (short) or step limit; when a self-change waits for approval
+      or was reverted (`Operator.Core.Dyn` events).
     * `:everything`: also each complete assistant reply (markup stripped);
       a finished run whose final reply was read adds nothing.
     * `:off`: nothing.
@@ -32,10 +33,11 @@ defmodule Operator.Core.Voice do
   default `{Operator.Core.Voice.MobSpeech, []}`), `:setting` (0-arity fun
   returning the voice setting; default `&Operator.Core.Settings.voice/0`),
   `:pace` (`{base_ms, ms_per_char}`, default `{500, 75}`), `:current`,
-  `:name`.
+  `:keeper` (whose Dyn events to follow), `:name`.
   """
   use GenServer
 
+  alias Operator.Core.Dyn
   alias Operator.Core.Session
   alias Operator.Core.Watcher
 
@@ -45,7 +47,8 @@ defmodule Operator.Core.Voice do
     backend: {Operator.Core.Voice.MobSpeech, []},
     setting: &Operator.Core.Settings.voice/0,
     pace: {500, 75},
-    current: Operator.Core.Current
+    current: Operator.Core.Current,
+    keeper: Operator.Core.Dyn.Keeper
   ]
 
   @summary_chars 200
@@ -69,6 +72,7 @@ defmodule Operator.Core.Voice do
       busy_until: nil
     }
 
+    _ = Dyn.subscribe(opts[:keeper])
     {:ok, state, {:continue, :watch}}
   end
 
@@ -77,6 +81,14 @@ defmodule Operator.Core.Voice do
 
   @impl true
   def handle_info({:operator_core, sid, event}, s), do: {:noreply, event(s, sid, event)}
+
+  def handle_info({:operator_dyn, event}, s) do
+    case {setting(s), dyn_line(event)} do
+      {:off, _} -> {:noreply, s}
+      {_, nil} -> {:noreply, s}
+      {_, text} -> {:noreply, say(s, text, :important)}
+    end
+  end
 
   def handle_info(message, s) do
     case Watcher.handle(message, s.watch) do
@@ -124,6 +136,17 @@ defmodule Operator.Core.Voice do
   end
 
   defp event(s, _sid, _event), do: s
+
+  @doc "What is said for a self-modification event, or nil."
+  @spec dyn_line(map()) :: String.t() | nil
+  def dyn_line(%{type: :candidate, gen: n}),
+    do: "A change to Operator, generation #{n}, needs your approval."
+
+  def dyn_line(%{type: :reverted, from: from}),
+    do: "Generation #{from} kept crashing and was reverted."
+
+  def dyn_line(%{type: :safe_mode}), do: "Operator started in safe mode."
+  def dyn_line(_event), do: nil
 
   defp update_run(s, sid, fun),
     do: %{s | runs: Map.update(s.runs, sid, fun.(%{reply: nil, error: nil}), fun)}

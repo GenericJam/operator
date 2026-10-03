@@ -204,4 +204,39 @@ defmodule Operator.Core.VoiceTest do
       assert Voice.line(:everything, :stopped, run) == "Stopped."
     end
   end
+
+  test "a self-change waiting for approval or reverted is said; :off stays quiet", %{
+    tmp_dir: dir
+  } do
+    %{current: current} = start_current(dir, [])
+    me = self()
+
+    voice =
+      start_observer(Voice, current,
+        backend: {FakeSpeech, me},
+        setting: fn -> :important end,
+        pace: {0, 0},
+        keeper: :no_keeper
+      )
+
+    send(voice, {:operator_dyn, %{type: :candidate, gen: 3, rationale: "x"}})
+    assert_receive {:speak, "A change to Operator, generation 3, needs your approval."}
+
+    send(voice, {:operator_dyn, %{type: :reverted, from: 3, to: 2, reason: "x", crashes: []}})
+    assert_receive {:speak, "Generation 3 kept crashing and was reverted."}
+
+    send(voice, {:operator_dyn, %{type: :proven, gen: 2}})
+    refute_receive {:speak, _}, 100
+
+    quiet =
+      start_observer(Voice, current,
+        backend: {FakeSpeech, me},
+        setting: fn -> :off end,
+        pace: {0, 0},
+        keeper: :no_keeper
+      )
+
+    send(quiet, {:operator_dyn, %{type: :candidate, gen: 4, rationale: "x"}})
+    refute_receive {:speak, _}, 100
+  end
 end
