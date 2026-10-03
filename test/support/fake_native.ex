@@ -31,4 +31,16 @@ defmodule Operator.Test.FakeNative do
       max_offset: {0.0, max(total - visible, 0) * 1.0}
     }
   end
+
+  @doc """
+  The same list as Android reports it: also px scrolled into item `first`
+  and whether it's at the end, which tells apart positions inside one item
+  taller than the screen.
+  """
+  def index_info(first, visible, total, first_offset, at_end) do
+    Map.merge(index_info(first, visible, total), %{
+      first_offset: first_offset * 1.0,
+      at_end: at_end
+    })
+  end
 end

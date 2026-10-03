@@ -177,6 +177,22 @@ defmodule Operator.ChatScreenTest do
       assert {true, 500.0} = Follow.decide(pixel, true, 498.0)
       assert {false, 500.0} = Follow.decide(pixel, true, 900.0)
     end
+
+    test "the decision inside one reply taller than the screen (Android px offsets)" do
+      at = &FakeNative.index_info/5
+      # the streaming reply is the last item; we stuck to its bottom
+      assert {true, {5.0, 1200.0}} = Follow.decide(at.(5, 1, 6, 1200, true), true, nil)
+      # it grew while streaming: same position, no longer at the end; keep following
+      assert {true, {5.0, 1200.0}} = Follow.decide(at.(5, 1, 6, 1200, false), true, {5.0, 1200.0})
+      # the user scrolled up inside it: same index, fewer px; stop
+      assert {false, {5.0, 400.0}} = Follow.decide(at.(5, 1, 6, 400, false), true, {5.0, 1200.0})
+      # near its top is not the bottom (index math alone would say it is)
+      assert {false, _} = Follow.decide(at.(5, 1, 6, 400, false), false, {5.0, 400.0})
+      # back at the end: resume
+      assert {true, _} = Follow.decide(at.(5, 1, 6, 1900, true), false, {5.0, 400.0})
+      # rows replaced under the reader nudged px back, still at the end: keep following
+      assert {true, _} = Follow.decide(at.(5, 1, 6, 900, true), true, {5.0, 1900.0})
+    end
   end
 
   test "copying: long-press a line, a code block's Copy, copy last reply", %{tmp_dir: dir} do

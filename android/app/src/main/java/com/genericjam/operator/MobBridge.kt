@@ -51,6 +51,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.abs
@@ -861,6 +862,9 @@ object MobBridge {
      * Mob.Test.scroll_info/2 decodes). Returns null when no scroll view is
      * registered under `id`. `kind` is "pixel" for ScrollState (px units) or
      * "index" for LazyListState (item-index units; viewport = visible items).
+     * Index lists also report `first_offset` (px scrolled into the first
+     * visible item) and `at_end` (nothing further to scroll), which item
+     * indexes alone can't show when an item is taller than the viewport.
      */
     @JvmStatic
     fun scrollInfo(id: String): String? {
@@ -898,6 +902,8 @@ object MobBridge {
             o.put("content_w", 0.0); o.put("content_h", total)
             o.put("viewport_w", 0.0); o.put("viewport_h", visible)
             o.put("max_x", 0.0); o.put("max_y", maxIdx)
+            o.put("first_offset", ls.firstVisibleItemScrollOffset.toDouble())
+            o.put("at_end", !ls.canScrollForward)
             o.put("kind", "index")
             return o.toString()
         }
@@ -907,8 +913,11 @@ object MobBridge {
 
     /**
      * Scroll the view registered under `id` to absolute (x, y). Pixel views use
-     * the relevant axis; index lists use y as an item index. Runs the suspend
-     * scroll on the main thread and blocks the NIF thread until it completes.
+     * the relevant axis; index lists use y as an item index, and an index at or
+     * past `max_y` goes to the true end: the bottom of the last item, not its
+     * top, which matters once the last item is taller than the viewport.
+     * Runs the suspend scroll on the main thread and blocks the NIF thread
+     * until it completes.
      */
     @JvmStatic
     fun scrollTo(id: String, x: Double, y: Double): Boolean {
@@ -926,7 +935,18 @@ object MobBridge {
                         ok = true
                     }
                     ls != null -> {
-                        ls.scrollToItem(y.toInt().coerceAtLeast(0))
+                        val li = ls.layoutInfo
+                        val total = li.totalItemsCount
+                        val maxIdx = (total - li.visibleItemsInfo.size).coerceAtLeast(0)
+                        val idx = y.toInt().coerceAtLeast(0)
+                        if (total > 0 && idx >= maxIdx) {
+                            ls.scrollToItem(total - 1)
+                            // Clamped at the end, so the item's height is enough.
+                            val last = ls.layoutInfo.visibleItemsInfo.lastOrNull()?.size ?: 0
+                            ls.scrollBy(last.toFloat())
+                        } else {
+                            ls.scrollToItem(idx)
+                        }
                         ok = true
                     }
                 }

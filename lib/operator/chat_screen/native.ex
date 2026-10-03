@@ -44,17 +44,26 @@ defmodule Operator.ChatScreen.Native do
     _ in [ErlangError, UndefinedFunctionError] -> {:error, :unavailable}
   end
 
-  # Same shape as Mob.Test.scroll_info/2.
+  # Mob.Test.scroll_info/2's shape, plus what index lists report beyond it:
+  # px scrolled into the first visible item, and whether it's at the end.
   defp decode(json) do
     m = Jason.decode!(json)
 
-    %{
+    info = %{
       offset: {f(m["offset_x"]), f(m["offset_y"])},
       content: {f(m["content_w"]), f(m["content_h"])},
       viewport: {f(m["viewport_w"]), f(m["viewport_h"])},
       max_offset: {f(m["max_x"]), f(m["max_y"])},
       kind: if(m["kind"] == "index", do: :index, else: :pixel)
     }
+
+    case m do
+      %{"first_offset" => px, "at_end" => at_end} when is_boolean(at_end) ->
+        Map.merge(info, %{first_offset: f(px), at_end: at_end})
+
+      _ ->
+        info
+    end
   end
 
   defp f(n) when is_number(n), do: n * 1.0
@@ -68,39 +77,62 @@ defmodule Operator.ChatScreen.Follow do
   a burst of rows leaves the offset far from the new bottom even though
   the user never scrolled.
 
-    * Following, and the offset didn't go back since the last check: keep
+    * Following, and the position didn't go back since the last check: keep
       following (the list only moves down by our own scrolling).
-    * Following, and the offset went back: the user scrolled up; stop.
+    * Following, and the position went back: the user scrolled up; stop.
+      Still at the end counts as following (rows replaced under the reader
+      can nudge the position back without anyone scrolling).
     * Not following: resume once the user is back at the bottom.
 
-  Android's lazy list reports item indexes (`:index`), iOS a pixel scroll
-  view (`:pixel`).
+  Android's lazy list reports item indexes (`:index`) plus the px scrolled
+  into the first visible item (`:first_offset`) and `:at_end`; iOS a pixel
+  scroll view (`:pixel`). The position on an index list is
+  `{index, first_offset}`, so scrolling inside one reply taller than the
+  screen counts, and that reply growing while it streams doesn't move it.
   """
+
+  @typep position :: float() | {float(), float()}
 
   @doc """
-  `{following, offset_to_remember}` from the list's scroll info, whether we
-  were following, and the offset seen at the last check (nil at first).
-  Without scroll info (host, list not laid out yet) nothing changes.
+  `{following, position_to_remember}` from the list's scroll info, whether
+  we were following, and the position seen at the last check (nil at
+  first). Without scroll info (host, list not laid out yet) nothing changes.
   """
-  @spec decide(map() | {:error, term()} | nil, boolean(), float() | nil) ::
-          {boolean(), float() | nil}
-  def decide(%{offset: {_, y}} = info, true, last),
-    do: {last == nil or y >= last - slack(info), y}
+  @spec decide(map() | {:error, term()} | nil, boolean(), position() | nil) ::
+          {boolean(), position() | nil}
+  def decide(%{offset: _} = info, true, last) do
+    at = position(info)
+    {last == nil or not went_back?(info, at, last) or Map.get(info, :at_end, false), at}
+  end
 
-  def decide(%{offset: {_, y}} = info, false, _last), do: {at_bottom?(info), y}
+  def decide(%{offset: _} = info, false, _last), do: {at_bottom?(info), position(info)}
   def decide(_unavailable, following, last), do: {following, last}
 
-  # How far back the offset may move without counting as a user scroll.
-  defp slack(%{kind: :index}), do: 0.5
-  defp slack(%{kind: :pixel}), do: 4.0
+  defp position(%{kind: :index, offset: {_, i}, first_offset: px}), do: {i, px}
+  defp position(%{offset: {_, y}}), do: y
+
+  # How far back the position may move without counting as a user scroll:
+  # px inside an item (and pixel views), or half an item without px info.
+  @px_slack 24.0
+  defp went_back?(_info, {i, px}, {last_i, last_px}),
+    do: i < last_i or (i == last_i and px < last_px - @px_slack)
+
+  defp went_back?(%{kind: :index}, y, last) when is_float(last), do: y < last - 0.5
+  defp went_back?(_info, y, last) when is_float(y) and is_float(last), do: y < last - 4.0
+  # The list changed kind of report between checks: start over from here.
+  defp went_back?(_info, _at, _last), do: false
 
   @spec at_bottom?(map()) :: boolean()
+  def at_bottom?(%{kind: :index, at_end: at_end}), do: at_end
   def at_bottom?(%{kind: :index, offset: {_, y}, max_offset: {_, max}}), do: max - y <= 1.0
 
   def at_bottom?(%{kind: :pixel, offset: {_, y}, max_offset: {_, max}, viewport: {_, vh}}),
     do: max - y <= max(vh * 0.15, 32.0)
 
-  @doc "Where `scroll_to/3` should go to show the end: the last item (index lists clamp) or the max offset."
+  @doc """
+  Where `scroll_to/3` should go to show the end: the last item (an index
+  past the max goes to the bottom of the last item) or the max offset.
+  """
   @spec bottom(map()) :: {float(), float()}
   def bottom(%{kind: :index, content: {_, items}}), do: {0.0, max(items - 1.0, 0.0)}
   def bottom(%{kind: :pixel, max_offset: {_, max}}), do: {0.0, max}
