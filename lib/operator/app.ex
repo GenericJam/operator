@@ -3,6 +3,7 @@ defmodule Operator.App do
 
   use Mob.App
 
+  alias Operator.Core.Dyn
   alias Operator.Core.Term
 
   @impl Mob.App
@@ -17,8 +18,8 @@ defmodule Operator.App do
     # $MOB_BEAMS_DIR/mob_dist_cookie (MobDev.DistCookie on the host side).
     Mob.Dist.ensure_started(node: :"operator_android@127.0.0.1")
 
-    # DNS, CA certs, the agent stack, the repo, the OpenRouter key, and
-    # recompiling the app's self-written modules (Operator.Boot, timed).
+    # DNS, CA certs, the agent stack, the repo, the OpenRouter key, the Core
+    # and the current Dyn generation (Operator.Boot, timed).
     :ok = Operator.Boot.run()
 
     Ecto.Migrator.with_repo(Operator.Repo, fn repo ->
@@ -28,8 +29,16 @@ defmodule Operator.App do
     # The terminal theme (dark, monospace `:term` font token) for every screen.
     :ok = Term.install()
 
-    # Chat once signed in; until then the diagnostics screen, which signs in.
-    root = if Operator.KeyStore.present?(), do: Operator.ChatScreen, else: Operator.HomeScreen
+    # Safe mode (launches kept failing, no Dyn loaded): the rescue screen.
+    # Otherwise chat once signed in; until then the diagnostics screen,
+    # which signs in.
+    root =
+      cond do
+        Dyn.safe_mode?() -> Operator.RescueScreen
+        Operator.KeyStore.present?() -> Operator.ChatScreen
+        true -> Operator.HomeScreen
+      end
+
     Mob.Screen.start_root(root)
   end
 

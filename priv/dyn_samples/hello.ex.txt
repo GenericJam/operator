@@ -29,7 +29,7 @@ defmodule Operator.Dyn.Hello do
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
-  # ExUnit-free assertion: the installer runs this before persisting.
+  # ExUnit-free assertion: the Dyn selftest runs it before a proposal.
   def selftest do
     texts = collect(render(%{taps: 2, compiled_at: "x"}))
     unless "Taps: 2" in texts, do: raise("render missing tap count: #{inspect(texts)}")

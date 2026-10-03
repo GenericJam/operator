@@ -7,9 +7,12 @@ defmodule Operator.Core.ToolRunner do
   which starts the tool's timeout clock from then.
 
   The task's result is `{:ok, text}` or `{:error, text}`. A raise, exit or
-  kill of the task is turned into an error result by the loop.
+  kill of the task is turned into an error result by the loop. A Dyn
+  tool's task is watched by `Operator.Core.Dyn.Keeper` before it runs, so
+  its crash or timeout (the loop kills it) counts against its generation.
   """
 
+  alias Operator.Core.Dyn
   alias Operator.Core.Tool
 
   @type gate :: (call :: map(), ctx :: map() -> :allow | {:block, String.t()})
@@ -23,6 +26,7 @@ defmodule Operator.Core.ToolRunner do
     Task.Supervisor.async_nolink(task_sup, fn ->
       case gate.(call, ctx) do
         :allow ->
+          :ok = Dyn.watch(self(), module)
           send(loop, {:tool_running, self()})
           call["arguments"] |> module.run(ctx) |> to_result()
 

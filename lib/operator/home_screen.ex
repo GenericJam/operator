@@ -1,27 +1,27 @@
 defmodule Operator.HomeScreen do
   @moduledoc """
   Diagnostics (and the sign-in screen when there is no key yet): OpenRouter
-  sign-in (localhost callback or pasted code), the agent stack's status, and
-  the spike's on-device compilation of sample screens. Signing in hands over
-  to `Operator.ChatScreen`.
+  sign-in (localhost callback or pasted code), the agent stack's status,
+  and the Dyn layer: its current generation, sample proposals that run the
+  self-modification pipeline on the phone, its screens, and the way to the
+  rescue screen. Signing in hands over to `Operator.ChatScreen`.
   """
   use Mob.Screen
 
+  alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.Samples
   alias Operator.OpenRouter.OAuth
-  alias Operator.SelfMod
 
   def mount(_params, _session, socket) do
     # The theme (terminal font token included) is installed once at boot by
     # Operator.Core.Term.install/0.
     OAuth.subscribe()
+    Dyn.subscribe()
 
     {:ok,
-     Mob.Socket.assign(socket,
-       oauth: OAuth.status(),
-       code_draft: "",
-       last: boot_line(),
-       dyn: dyn_screens()
-     )}
+     socket
+     |> Mob.Socket.assign(oauth: OAuth.status(), code_draft: "", last: boot_line())
+     |> dyn()}
   end
 
   def render(assigns) do
@@ -42,14 +42,17 @@ defmodule Operator.HomeScreen do
         <Spacer size={8} />
         {button("Submit pasted code", :submit_code)}
         <Spacer size={24} />
-        <Text text="On-device compilation" text_size={:sm} text_color={:muted} />
-        <Text text={assigns.last} text_color={:primary} />
+        <Text text="Dyn layer (self-modification)" text_size={:sm} text_color={:muted} />
+        <Text text={assigns.dyn_line} text_color={:primary} />
+        <Text text={assigns.last} text_size={:sm} text_color={:muted} />
         <Spacer size={8} />
-        {button("Compile + install Hello", {:compile, "hello"})}
+        {button("Propose sample: Hello", {:propose, "hello"})}
         <Spacer size={8} />
-        {button("Compile + install Checklist (~200 lines)", {:compile, "checklist"})}
+        {button("Propose sample: Checklist (~200 lines)", {:propose, "checklist"})}
         <Spacer size={8} />
-        {button("Forget compiled screens", :forget)}
+        {button("Activate the proposal", :activate)}
+        <Spacer size={8} />
+        {button("Rescue: generations, diffs, crash log", :rescue)}
         <Spacer size={16} />
         {dyn_section(assigns.dyn)}
       </Column>
@@ -80,32 +83,62 @@ defmodule Operator.HomeScreen do
       else: {:noreply, socket}
   end
 
-  # ── self-modification ──
+  # ── the Dyn layer ──
 
-  def handle_info({:tap, {:compile, name}}, socket) do
+  # Stages the sample over the current generation's sources and proposes it:
+  # check, compile, selftest, as the agent's changes go.
+  def handle_info({:tap, {:propose, name}}, socket) do
+    {path, source} = Samples.get(name)
+
     line =
-      case SelfMod.install(name, SelfMod.Samples.get(name)) do
-        {:ok, r} ->
-          "#{name}: #{inspect(r.modules)} compiled in #{div(r.compile_us, 1000)} ms, selftest #{inspect(r.selftest)}"
+      with :ok <- Dyn.stage_reset(),
+           :ok <- Dyn.stage_put(path, source) do
+        case Dyn.propose("Sample screen #{name}") do
+          {:ok, p} ->
+            "G#{p.n} proposed: compiled in #{p.compile_ms} ms, #{length(p.selftests)} selftests passed"
 
-        {:error, e} ->
-          "#{name} failed: #{inspect(e) |> String.slice(0, 300)}"
+          {:error, %{stage: stage, reason: reason}} ->
+            "rejected at #{stage}: #{String.slice(reason, 0, 300)}"
+
+          {:error, other} ->
+            "not proposed: #{inspect(other)}"
+        end
+      else
+        {:error, e} -> "can't stage #{path}: #{inspect(e)}"
       end
 
-    {:noreply, Mob.Socket.assign(socket, last: line, dyn: dyn_screens())}
+    {:noreply, socket |> Mob.Socket.assign(:last, line) |> dyn()}
   end
 
-  def handle_info({:tap, :forget}, socket) do
-    Enum.each(SelfMod.list(), &SelfMod.remove/1)
+  def handle_info({:tap, :activate}, socket) do
+    line =
+      case Dyn.status() do
+        %{pending: nil} ->
+          "nothing proposed"
 
-    {:noreply,
-     Mob.Socket.assign(socket,
-       last: "persisted sources removed (modules stay loaded until restart)"
-     )}
+        %{pending: n} ->
+          with {:ok, token} <- Dyn.request_approval({:activate, n}),
+               {:ok, gen} <- Dyn.activate(n, token) do
+            "G#{gen.n} active, on probation"
+          else
+            {:error, :approval_required} ->
+              "G#{n} waits for approval (the biometric prompt isn't wired yet)"
+
+            {:error, e} ->
+              "G#{n} not activated: #{inspect(e) |> String.slice(0, 300)}"
+          end
+      end
+
+    {:noreply, socket |> Mob.Socket.assign(:last, line) |> dyn()}
   end
+
+  def handle_info({:tap, :rescue}, socket),
+    do: {:noreply, Mob.Socket.push_screen(socket, Operator.RescueScreen)}
 
   def handle_info({:tap, {:open, mod}}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, mod)}
+
+  def handle_info({:operator_dyn, _event}, socket), do: {:noreply, dyn(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
@@ -141,14 +174,24 @@ defmodule Operator.HomeScreen do
     }
   end
 
-  defp dyn_section([]), do: ~MOB(<Text text="No compiled screens yet" text_color={:muted} />)
+  defp dyn_section([]), do: ~MOB(<Text text="No Dyn screens" text_color={:muted} />)
 
-  defp dyn_section(mods) do
-    buttons = Enum.map(mods, fn m -> button("Open " <> inspect(m), {:open, m}) end)
+  defp dyn_section(screens) do
+    buttons = Enum.map(screens, fn {name, mod} -> button("Open " <> name, {:open, mod}) end)
     %{type: :column, props: %{fill_width: true}, children: buttons}
   end
 
-  defp dyn_screens, do: SelfMod.screens() |> Enum.sort()
+  defp dyn(socket),
+    do: Mob.Socket.assign(socket, dyn_line: dyn_line(Dyn.status()), dyn: Dyn.screens())
+
+  defp dyn_line(%{mode: :safe, generation: n}),
+    do: "SAFE MODE: launches kept failing, no Dyn code loaded (generation #{n} is current)"
+
+  defp dyn_line(%{mode: :off}), do: "not started"
+  defp dyn_line(%{generation: 0, pending: nil}), do: "no generation yet"
+
+  defp dyn_line(%{generation: n, status: status, pending: pending}),
+    do: "generation #{n} (#{status})" <> if(pending, do: " · G#{pending} proposed", else: "")
 
   defp stack_line do
     apps = Operator.Diag.apps()
@@ -165,6 +208,6 @@ defmodule Operator.HomeScreen do
   defp boot_line do
     t = Operator.Boot.timings()
 
-    "boot: selfmod recompile #{t[:selfmod_recompile]} ms, apps #{t[:apps]} ms, total BEAM uptime #{t[:beam_uptime_at_boot_end]} ms"
+    "boot: dyn #{t[:dyn]} ms, apps #{t[:apps]} ms, total BEAM uptime #{t[:beam_uptime_at_boot_end]} ms"
   end
 end

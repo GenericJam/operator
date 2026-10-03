@@ -1,16 +1,25 @@
 defmodule Operator.Core.ToolRegistry do
   @moduledoc """
-  The tools the agent can call, by name: one ETS table owned by the Core.
-  The loop reads it at the start of every model call, so a tool registered
-  at runtime (step 2: a Dyn generation's tools) is offered from the next
-  call on.
+  The tools the agent can call, by name. The Core's own (and any
+  registered at runtime) live in one ETS table owned by this process; the
+  current Dyn generation's come from `Operator.Core.Dyn`'s registry, read
+  on every call, so a generation switch (activation or revert) changes the
+  tool set at once, with nothing to register or unregister. A Core tool's
+  name always wins. The loop reads the list at the start of every model
+  call, so a new tool is offered from the next call on.
   """
   use GenServer
 
+  alias Operator.Core.Dyn
   alias Operator.Core.Tool
 
   @table __MODULE__
-  @core_tools [Operator.Core.Tools.Notes, Operator.Core.Tools.ReadArtifact]
+  @core_tools [
+    Operator.Core.Tools.Notes,
+    Operator.Core.Tools.ReadArtifact,
+    Operator.Core.Tools.HttpGet,
+    Operator.Core.Tools.Clipboard
+  ]
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -25,13 +34,23 @@ defmodule Operator.Core.ToolRegistry do
   def lookup(name) do
     case :ets.lookup(@table, name) do
       [{^name, module}] -> {:ok, module}
-      [] -> :error
+      [] -> Dyn.lookup({:tool, name})
     end
   end
 
-  @doc "All registered tool modules, sorted by name."
+  @doc "All tool modules (the Core's, then the current Dyn generation's), sorted by name."
   @spec list() :: [module()]
-  def list, do: @table |> :ets.tab2list() |> Enum.sort() |> Enum.map(&elem(&1, 1))
+  def list do
+    core = :ets.tab2list(@table)
+
+    dyn = for {name, mod} <- Dyn.tools(), not :ets.member(@table, name), do: {name, mod}
+
+    (core ++ dyn) |> Enum.sort() |> Enum.map(&elem(&1, 1))
+  end
+
+  @doc "The Core's own tools (a Dyn tool may not take one of their names)."
+  @spec core_tools() :: [module()]
+  def core_tools, do: @core_tools
 
   @impl true
   def init(opts) do

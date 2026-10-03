@@ -1,8 +1,9 @@
 defmodule Operator.Core do
   @moduledoc """
   The fixed core (docs/DESIGN.md §1): the agent loop, sessions, core tools.
-  Started by `Operator.Boot`; supervises the tool registry, the task
-  supervisor tools run under, the loops, `Operator.Core.Current`
+  Started by `Operator.Boot`; supervises `Operator.Core.Dyn.Keeper` (which
+  Dyn generation runs; `Operator.Boot` then loads it), the tool registry,
+  the task supervisor tools run under, the loops, `Operator.Core.Current`
   (which session the app is showing; the latest one is resumed at boot),
   and the observers of its runs: `Operator.Core.KeepAlive` (keeps the app
   running in the background during a run) and `Operator.Core.Voice`
@@ -21,6 +22,7 @@ defmodule Operator.Core do
   @impl true
   def init(_opts) do
     children = [
+      Operator.Core.Dyn.Keeper,
       Operator.Core.ToolRegistry,
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},

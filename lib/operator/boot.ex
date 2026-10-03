@@ -5,8 +5,8 @@ defmodule Operator.Boot do
   `[{step, ms}]` plus the BEAM's own uptime at the end of boot.
   """
 
+  alias Operator.Core.Dyn
   alias Operator.OpenRouter.OAuth
-  alias Operator.SelfMod
 
   require Logger
 
@@ -39,9 +39,12 @@ defmodule Operator.Boot do
       end,
       key: fn -> Operator.KeyStore.load() end,
       oauth: fn -> {:ok, _} = OAuth.start_link([]) end,
-      selfmod_recompile: fn -> SelfMod.recompile_all() end,
-      # The agent loop, sessions and core tools (resumes the latest session).
-      core: fn -> {:ok, _} = Operator.Core.start_link() end
+      # The agent loop, sessions, core tools (resumes the latest session) and
+      # the Dyn keeper.
+      core: fn -> {:ok, _} = Operator.Core.start_link() end,
+      # The current Dyn generation (or boot probation's revert, or safe mode:
+      # Core only), see Operator.Core.Dyn.Keeper.
+      dyn: fn -> %{} = Dyn.boot() end
     ]
 
     timings =
