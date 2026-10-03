@@ -147,6 +147,7 @@ defmodule Operator.Core.Voice do
   def line(_setting, :done, _run), do: "Done."
   def line(_setting, :stopped, _run), do: "Stopped."
   def line(_setting, :max_iterations, _run), do: "Stopped: too many steps in one run."
+  def line(_setting, :cost_cap, _run), do: "Stopped: the daily cost cap is reached."
 
   def line(_setting, :error, %{error: error}) when is_binary(error) do
     case error |> plain() |> first_sentence() |> cap(@error_chars) do

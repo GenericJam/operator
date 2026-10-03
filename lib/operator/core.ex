@@ -174,9 +174,20 @@ defmodule Operator.Core.Current do
   defp open_or_new(s),
     do: {Session.new(s.dir, Operator.Core.default_model(), Operator.Paths.data_dir()), []}
 
+  # Real loops get the daily cost cap, kept next to the tools' data dir.
   defp start(s, {session, entries}) do
+    budget = Keyword.get_lazy(s.loop_opts, :data_dir, &Operator.Paths.data_dir/0)
+
     opts =
-      [session: session, entries: entries, max_tokens: Operator.Core.max_tokens()] ++ s.loop_opts
+      Keyword.merge(
+        [
+          session: session,
+          entries: entries,
+          max_tokens: Operator.Core.max_tokens(),
+          budget: budget
+        ],
+        s.loop_opts
+      )
 
     {:ok, pid} = DynamicSupervisor.start_child(s.loop_sup, {Loop, opts})
     announce(pid, session.id, Map.keys(s.watchers))

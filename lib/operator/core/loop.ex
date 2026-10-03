@@ -18,13 +18,16 @@ defmodule Operator.Core.Loop do
   monitored worker, each tool in a task under `:task_supervisor`, so the
   loop always answers steer / stop. Guards: `:max_iterations` model calls
   per run (12), explicit `:max_tokens` (4096), up to `:max_retries` (2)
-  retries with exponential backoff on 429 / 5xx / transport errors.
+  retries with exponential backoff on 429 / 5xx / transport errors, and
+  with `:budget` (a data dir) the per-day cost cap (`Operator.Core.Budget`):
+  checked before each model call, each reply's cost recorded.
 
   Everything is persisted to the session as it happens
   (`Operator.Core.Session`, omp/pi's JSONL).
   """
   use GenServer, restart: :temporary
 
+  alias Operator.Core.Budget
   alias Operator.Core.Events
   alias Operator.Core.LLM
   alias Operator.Core.Session
@@ -53,7 +56,8 @@ defmodule Operator.Core.Loop do
   `Session.open/2`), `:system_prompt`, `:data_dir` (given to tools),
   `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:before_tool_call` (`fn call, ctx -> :allow | {:block, reason}
-  end`), `:task_supervisor`, and the guards above.
+  end`), `:task_supervisor`, `:budget` (the data dir holding the cost
+  ledger and cap; nil means no cap), and the guards above.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -295,8 +299,28 @@ defmodule Operator.Core.Loop do
         acc
       end)
 
-    start_attempt(s)
+    case budget(s) do
+      :ok ->
+        start_attempt(s)
+
+      {:over, spent, cap} ->
+        text =
+          "Daily cost cap reached: $#{dollars(spent)} of $#{dollars(cap)} spent today. " <>
+            "No more model calls until tomorrow, or until the cap is raised."
+
+        s |> notice(:notice, text) |> finish(:cost_cap)
+    end
   end
+
+  defp budget(%{opts: %{budget: dir}}) when is_binary(dir), do: Budget.check(dir)
+  defp budget(_s), do: :ok
+
+  defp record_cost(%{opts: %{budget: dir}}, entry) when is_binary(dir),
+    do: Budget.record(dir, get_in(entry, ["message", "usage", "cost", "total"]) || 0)
+
+  defp record_cost(_s, _entry), do: :ok
+
+  defp dollars(n), do: :erlang.float_to_binary(n * 1.0, decimals: 2)
 
   defp start_attempt(s) do
     {mod, llm_opts} = s.opts.llm
@@ -345,6 +369,7 @@ defmodule Operator.Core.Loop do
 
     reply = Map.merge(reply, %{tool_calls: calls, stop_reason: stop_reason})
     {s, entry} = persist(put_run(s, stream: nil), Session.assistant(reply, s.session.model))
+    record_cost(s, entry)
     emit(s, %{type: :message_end, entry: entry})
 
     if calls == [], do: end_turn(s, entry, []), else: start_batch(s, entry, calls)

@@ -30,7 +30,7 @@ defmodule Operator.Core.Events do
       being streamed is discarded; the next `message_start` restarts it
     * `%{type: :queue, steering: [String.t()], follow_up: [String.t()]}`
     * `%{type: :model_change, model: String.t()}`
-    * `%{type: :agent_end, reason: :done | :stopped | :error | :max_iterations}`
+    * `%{type: :agent_end, reason: :done | :stopped | :error | :max_iterations | :cost_cap}`
   """
 
   @type event :: %{required(:type) => atom(), optional(atom()) => term()}
