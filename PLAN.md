@@ -150,14 +150,19 @@ any text arrives with MOB-374.
 
 1. **Core loop** (in progress): pi's turn loop on req_llm (OpenRouter),
    steering/follow-up/stop, parallel tools with ordered results, omp/pi-format
-   JSONL sessions, terminal-style chat screen (styled, streaming, stick to
-   bottom). Verify on the Moto G.
-2. **Self-modification**: generations with versioned module names, static
+   JSONL sessions, terminal-style chat screen (own parser, streaming, stick
+   to bottom, copy). Verify on the Moto G.
+2. **Native Markdown view per reply** (Markwon on Android first) and
+   **background runs on Android** (`mob_background` during a run, progress
+   notification, network verified past 60 s) plus **spoken updates**
+   (`Mob.Speech`).
+3. **Self-modification**: generations with versioned module names, static
    check, selftests, biometric approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn
    artifact.
-3. **Phone tools, context management**: camera/photos/location/notifications/
+4. **Phone tools, context management**: camera/photos/location/notifications/
    http; output budget + artifacts; compaction; cost cap.
-4. **Session transfer omp ⇄ phone** (this document's compatibility section),
+5. **Session transfer omp ⇄ phone** (this document's compatibility section),
    starting with export/import files, then Muster as the relay.
-5. Secure-store key, iOS build, foreground service for long runs.
+6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
+   background).
