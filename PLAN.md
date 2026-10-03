@@ -278,5 +278,6 @@ message.
    `Operator.Auth`. From the Mac: `mix operator.login anthropic|openai`
    prints an encrypted QR plus six words; Diagnostics -> Scan login QR on
    the phone. Built and reviewed (reviewer subagent: SHIP after fixes);
-   the browser opening claude.ai verified on the Moto; the sign-in itself,
-   a streamed reply and the QR transfer need Kevin's accounts.
+   `/login anthropic` verified on the Moto (Kevin signed in; replies stream
+   from claude-haiku-4-5 on his subscription). Not yet tried: `/login
+   openai`, the QR transfer.
