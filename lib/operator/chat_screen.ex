@@ -47,6 +47,7 @@ defmodule Operator.ChatScreen do
   @stick_retries 4
   @stick_retry_ms 150
   @attach_stick_ms 300
+  @header_chip_size 12
   @toast_ms 1_500
   @window 300
   @max_native 200
@@ -900,10 +901,10 @@ defmodule Operator.ChatScreen do
 
     bar_row(t, [
       text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2),
-      chip("new", :new_session, t),
-      chip("model", :edit_model, t),
-      chip("diag", :diagnostics, t),
-      chip("md:#{Term.renderer(t)}", :toggle_renderer, t)
+      header_chip("new", :new_session, t),
+      header_chip("model", :edit_model, t),
+      header_chip("diag", :diagnostics, t),
+      header_chip("md:#{Term.renderer(t)}", :toggle_renderer, t)
     ])
   end
 
@@ -1040,6 +1041,11 @@ defmodule Operator.ChatScreen do
       children: []
     }
   end
+
+  # The header has four chips in one row: a theme's bigger text mustn't push
+  # them off the screen (seen at text_size 15).
+  defp header_chip(label, tag, t),
+    do: put_in(chip(label, tag, t), [:props, :text_size], min(t.text_size - 1, @header_chip_size))
 
   defp field(value, placeholder, tag, t, opts) do
     props =
