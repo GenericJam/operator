@@ -246,11 +246,12 @@ message.
    Moto has no fingerprint enrolled, so approving there needs one (or a PIN
    fallback decision). The theme artifact is done (`Operator.Dyn.Theme`
    with `overrides/0`, applied by `Operator.Core.DynTheme`; a warm theme
-   proposed, fingerprint-approved and drawn on the emulator). Not yet: the
-   agent writing a change itself (no OpenRouter credit left), automatic
-   revert on a device (unit-tested). Phone tools become Dyn-replaceable by
-   shipping them in a seed generation (a Core tool's name can't be taken
-   by a Dyn tool).
+   proposed, fingerprint-approved and drawn on the emulator), and automatic
+   revert was seen on the emulator (a Dyn tool crashing 3 times through
+   ToolRunner: generation 3 reverted to 2, the tool gone). Not yet: the
+   agent writing a change itself (no OpenRouter credit left). Phone tools
+   become Dyn-replaceable by shipping them in a seed generation (a Core
+   tool's name can't be taken by a Dyn tool).
 4. **Phone tools, context management**: camera/photos/location/notifications/
    http; output budget + artifacts; compaction; cost cap. Done and
    device-verified: output budget + `read_artifact`, compaction (pi's soft
