@@ -1,125 +1,139 @@
 defmodule Operator.HomeScreen do
-  @moduledoc "Landing screen for Operator."
+  @moduledoc """
+  Spike home: OpenRouter sign-in (localhost callback or pasted code), the
+  agent stack's status, and on-device compilation of sample screens, each
+  of which can be opened once compiled.
+  """
   use Mob.Screen
 
   def mount(_params, _session, socket) do
-    theme = Mob.State.get(:theme, :dark)
-    Mob.Theme.set(theme_to_module(theme))
-    # Activated plugins that ship a demo screen show up here automatically —
-    # no edits needed when you add or remove one in mob.exs.
-    {:ok, Mob.Socket.assign(socket, theme: theme, plugin_screens: Mob.Plugins.screens())}
+    Mob.Theme.set(Mob.Theme.Dark)
+    Operator.OpenRouter.OAuth.subscribe()
+
+    {:ok,
+     Mob.Socket.assign(socket,
+       oauth: Operator.OpenRouter.OAuth.status(),
+       code_draft: "",
+       last: boot_line(),
+       dyn: dyn_screens()
+     )}
   end
 
   def render(assigns) do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        <Image src={logo_src(assigns.theme)} width={120} height={120} content_mode="fit" />
+        <Text text="Operator" text_size={:xl} text_color={:on_surface} />
+        <Text text={stack_line()} text_size={:sm} text_color={:muted} />
         <Spacer size={16} />
-        <Text text="Operator" text_size={:xl} text_color={:on_surface} padding={:space_sm} />
-        <Text text="BEAM running on device" text_size={:sm} text_color={:primary} padding={4} />
-        <Spacer size={40} />
-        {plugin_section(assigns.plugin_screens)}
-        <Spacer size={32} />
-        <Text text="Theme" text_size={:sm} text_color={:muted} padding={4} />
+        <Text text="OpenRouter" text_size={:sm} text_color={:muted} />
+        <Text text={oauth_line(assigns.oauth)} text_color={:primary} />
         <Spacer size={8} />
-        <Row fill_width={true}>
-          {theme_tab("Light", :light, assigns.theme)}
-          <Spacer size={8} />
-          {theme_tab("Dark",  :dark,  assigns.theme)}
-        </Row>
+        {button("Sign in with OpenRouter", :sign_in_localhost)}
+        <Spacer size={8} />
+        {button("Sign in (show code to paste)", :sign_in_headless)}
+        <Spacer size={8} />
+        {code_field(assigns.code_draft)}
+        <Spacer size={8} />
+        {button("Submit pasted code", :submit_code)}
+        <Spacer size={24} />
+        <Text text="On-device compilation" text_size={:sm} text_color={:muted} />
+        <Text text={assigns.last} text_color={:primary} />
+        <Spacer size={8} />
+        {button("Compile + install Hello", {:compile, "hello"})}
+        <Spacer size={8} />
+        {button("Compile + install Checklist (~200 lines)", {:compile, "checklist"})}
+        <Spacer size={8} />
+        {button("Forget compiled screens", :forget)}
+        <Spacer size={16} />
+        {dyn_section(assigns.dyn)}
       </Column>
     </Scroll>
     """
   end
 
-  def handle_info({:tap, :theme_light}, socket) do
-    Mob.Theme.set(Mob.Theme.Light)
-    Mob.State.put(:theme, :light)
-    {:noreply, Mob.Socket.assign(socket, :theme, :light)}
+  # ── sign-in ──
+
+  def handle_info({:tap, :sign_in_localhost}, socket), do: begin(socket, :localhost)
+  def handle_info({:tap, :sign_in_headless}, socket), do: begin(socket, :headless)
+
+  def handle_info({:change, :code, value}, socket) when is_binary(value),
+    do: {:noreply, Mob.Socket.assign(socket, :code_draft, value)}
+
+  def handle_info({:tap, :submit_code}, socket) do
+    _ = Operator.OpenRouter.OAuth.exchange_pasted(socket.assigns.code_draft)
+    {:noreply, Mob.Socket.assign(socket, code_draft: "", oauth: Operator.OpenRouter.OAuth.status())}
   end
 
-  def handle_info({:tap, :theme_dark}, socket) do
-    Mob.Theme.set(Mob.Theme.Dark)
-    Mob.State.put(:theme, :dark)
-    {:noreply, Mob.Socket.assign(socket, :theme, :dark)}
+  def handle_info({:oauth, _phase}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :oauth, Operator.OpenRouter.OAuth.status())}
+
+  # ── self-modification ──
+
+  def handle_info({:tap, {:compile, name}}, socket) do
+    line =
+      case Operator.SelfMod.install(name, Operator.SelfMod.Samples.get(name)) do
+        {:ok, r} ->
+          "#{name}: #{inspect(r.modules)} compiled in #{div(r.compile_us, 1000)} ms, selftest #{inspect(r.selftest)}"
+
+        {:error, e} ->
+          "#{name} failed: #{inspect(e) |> String.slice(0, 300)}"
+      end
+
+    {:noreply, Mob.Socket.assign(socket, last: line, dyn: dyn_screens())}
   end
 
-  # Plugin demo screens are tagged by their route string (see plugin_section/1).
-  def handle_info({:tap, route}, socket) when is_binary(route) do
-    case Enum.find(socket.assigns.plugin_screens, &(&1.default_route == route)) do
-      %{module: mod} -> {:noreply, Mob.Socket.push_screen(socket, mod)}
-      nil -> {:noreply, socket}
-    end
+  def handle_info({:tap, :forget}, socket) do
+    Enum.each(Operator.SelfMod.list(), &Operator.SelfMod.remove/1)
+    {:noreply, Mob.Socket.assign(socket, last: "persisted sources removed (modules stay loaded until restart)")}
   end
+
+  def handle_info({:tap, {:open, mod}}, socket), do: {:noreply, Mob.Socket.push_screen(socket, mod)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
-  defp nav_button(label, tag) do
-    tap = {self(), tag}
+  # ── helpers ──
 
-    ~MOB(<Button text={label} background={:primary} text_color={:on_primary} text_size={:lg} padding={:space_md} fill_width={true} on_tap={tap} />)
+  defp begin(socket, mode) do
+    _ = Operator.OpenRouter.OAuth.begin(mode)
+    {:noreply, Mob.Socket.assign(socket, :oauth, Operator.OpenRouter.OAuth.status())}
   end
 
-  # A nav button per activated plugin that declares a screen, built from the
-  # live plugin registry so the list tracks mob.exs with no edits here.
-  defp plugin_section([]), do: %{type: :column, props: %{}, children: []}
+  defp button(label, tag) do
+    tap = {self(), tag}
+    ~MOB(<Button text={label} background={:primary} text_color={:on_primary} padding={:space_sm} fill_width={true} on_tap={tap} />)
+  end
 
-  defp plugin_section(screens) do
-    heading = %{
-      type: :text,
-      props: %{text: "Device Plugins", text_size: :sm, text_color: :muted, padding: 4},
+  defp code_field(draft) do
+    %{
+      type: :text_field,
+      props: %{value: draft, placeholder: "paste the OpenRouter code", fill_width: true, on_change: {self(), :code}},
       children: []
     }
-
-    spacer = %{type: :spacer, props: %{size: 12}, children: []}
-
-    buttons =
-      Enum.flat_map(screens, fn %{default_route: route} ->
-        [spacer, nav_button(plugin_label(route), route)]
-      end)
-
-    %{type: :column, props: %{fill_width: true}, children: [spacer, heading | buttons]}
   end
 
-  # "/mob_camera/demo" -> "Camera". Falls back gracefully for any route shape.
-  defp plugin_label(route) do
-    route
-    |> String.trim_leading("/")
-    |> String.split("/")
-    |> List.first()
-    |> to_string()
-    |> String.replace_prefix("mob_", "")
-    |> String.replace("_", " ")
-    |> String.split()
-    |> Enum.map_join(" ", &String.capitalize/1)
+  defp dyn_section([]), do: ~MOB(<Text text="No compiled screens yet" text_color={:muted} />)
+
+  defp dyn_section(mods) do
+    buttons = Enum.map(mods, fn m -> button("Open " <> inspect(m), {:open, m}) end)
+    %{type: :column, props: %{fill_width: true}, children: buttons}
   end
 
-  defp theme_tab(label, key, active) do
-    {bg, fg} = if key == active, do: {:primary, :on_primary}, else: {:surface, :on_surface}
-    tap = {self(), :"theme_#{key}"}
+  defp dyn_screens, do: Operator.SelfMod.screens() |> Enum.sort()
 
-    ~MOB(<Button text={label} background={bg} text_color={fg} text_size={:sm} padding={:space_sm} weight={1} on_tap={tap} />)
+  defp stack_line do
+    apps = Operator.Diag.apps()
+    down = for {app, false} <- apps, app not in [:mnesia, :compiler], do: app
+    if down == [], do: "agent stack: all apps running", else: "agent stack DOWN: #{inspect(down)}"
   end
 
-  defp theme_to_module(:light), do: Mob.Theme.Light
-  defp theme_to_module(_), do: Mob.Theme.Dark
+  defp oauth_line(%{phase: phase, error: nil, key_fingerprint: fp}),
+    do: "#{phase}" <> if(fp, do: " · key #{fp}…", else: "")
 
-  # mob_logo_dark.png is the dark-on-light logo (for light backgrounds);
-  # mob_logo_light.png is light-on-dark.
-  defp logo_src(:light), do: Path.join(rootdir(), "mob_logo_dark.png")
-  defp logo_src(_), do: Path.join(rootdir(), "mob_logo_light.png")
+  defp oauth_line(%{phase: phase, error: err}), do: "#{phase}: #{inspect(err) |> String.slice(0, 200)}"
 
-  # ROOTDIR is set by mob_beam (iOS) and mob_beam.c (Android) before erl_start,
-  # so this fallback is only exercised in unit tests on the host. Don't put
-  # `Path.expand("~/...")` directly in `System.get_env/2`'s default argument —
-  # default args evaluate eagerly, and Android's BEAM has no `HOME` env var,
-  # so `System.user_home!()` would raise `RuntimeError` and abort the screen
-  # before the first render.
-  defp rootdir do
-    case System.get_env("ROOTDIR") do
-      nil -> Path.expand("~/.mob/runtime/ios-sim")
-      val -> val
-    end
+  defp boot_line do
+    t = Operator.Boot.timings()
+    "boot: selfmod recompile #{t[:selfmod_recompile]} ms, apps #{t[:apps]} ms, total BEAM uptime #{t[:beam_uptime_at_boot_end]} ms"
   end
 end

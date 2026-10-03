@@ -1,0 +1,6 @@
+screen: Operator.Dyn.Checklist
+history after toggle: 1
+install broken: {:error, {:selftest_failed, {:error, "nope"}}}
+broken still loaded?: false
+install syntax error: :error
+persisted: ["checklist", "hello"]

@@ -1,0 +1,9 @@
+[
+  {"hello", 1, 82, [Operator.Dyn.Hello], :ok},
+  {"hello", 2, 57, [Operator.Dyn.Hello], :ok},
+  {"hello", 3, 76, [Operator.Dyn.Hello], :ok},
+  {"checklist", 1, 198, [Operator.Dyn.Checklist], :ok},
+  {"checklist", 2, 180, [Operator.Dyn.Checklist], :ok},
+  {"checklist", 3, 222, [Operator.Dyn.Checklist], :ok}
+]
+beam MB: 191

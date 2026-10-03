@@ -1,0 +1,6 @@
+10-02 22:36:43.454  5595  5629 I Elixir  : [selfmod] checklist: [Operator.Dyn.Checklist] in 209 ms
+10-02 22:36:43.523  5595  5629 I Elixir  : [selfmod] hello: [Operator.Dyn.Hello] in 66 ms
+10-02 22:36:43.524  5595  5629 I Elixir  : [boot] [dns: 2, tz_data: 11, certs: 114, apps: 2735, jido_instance: 7, llmdb_first_lookup: 18779, repo: 54, key: 39, oauth: 45, selfmod_recompile: 294, beam_uptime_at_boot_end: 24211]
+%{dyn: [Operator.Dyn.Checklist, Operator.Dyn.Hello]}
+schedulers_online: 1
+after restart, opened: Operator.Dyn.Hello

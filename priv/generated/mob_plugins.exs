@@ -3,14 +3,20 @@
 # The activated plugins' tier-3/4 contributions, read at boot by Mob.Plugins.
 # Regenerated whenever `config :mob, :plugins` changes (the deploy/regen hook).
 %{
-  nifs: [],
-  plugins: [],
-  screens: [],
-  composites: [],
-  default_font: nil,
-  default_style: nil,
-  lifecycle: [],
-  notification_handlers: [],
+  nifs: [:mob_biometric_nif],
+  plugins: [:mob_biometric],
   settings: [],
-  styles: []
+  screens: [
+    %{
+      module: MobBiometric.DemoScreen,
+      plugin: :mob_biometric,
+      default_route: "/mob_biometric/demo"
+    }
+  ],
+  notification_handlers: [],
+  lifecycle: [],
+  default_font: nil,
+  styles: [],
+  default_style: nil,
+  composites: []
 }

@@ -1,0 +1,19 @@
+--- 70 s behind Chrome, fake code delivered to the localhost callback:
+** (MatchError) no match of right hand side value:
+    false
+    (stdlib 8.0) erl_eval.erl:796: :erl_eval.expr/6
+    (elixir 1.20.1) lib/code.ex:649: Code.validated_eval_string/4
+    (elixir 1.20.1) lib/enum.ex:983: Enum."-each/2-lists^foreach/1-0-"/2
+--- after switching back to Operator:
+%{
+  error: {:http, 400,
+   %{"error" => %{"code" => 400, "message" => "Invalid code"}}},
+  mode: :localhost,
+  listening: false,
+  phase: :failed,
+  callback_url: "http://localhost:51423/callback",
+  exchange_ms: nil,
+  exchange_attempts: 3,
+  key_fingerprint: nil,
+  key_present: false
+}

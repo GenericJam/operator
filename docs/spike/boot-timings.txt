@@ -1,0 +1,9 @@
+1 scheduler (mob default -S 1:1), after OpenRouter-only LLMDB snapshot:
+[boot] [dns: 2, tz_data: 9, llm_catalog: 15, certs: 106, apps: 2139, jido_instance: 14, llmdb_first_lookup: 2897, repo: 168, key: 49, oauth: 56, selfmod_recompile: 1393, beam_uptime_at_boot_end: 8231]
+[boot] [dns: 2, tz_data: 15, llm_catalog: 17, certs: 52, apps: 2053, jido_instance: 8, llmdb_first_lookup: 3281, repo: 226, key: 64, oauth: 62, selfmod_recompile: 2130, beam_uptime_at_boot_end: 9216]
+1 scheduler, compile_embed: true (full 230-provider snapshot):
+[boot] [dns: 1, tz_data: 8, certs: 90, apps: 2536, jido_instance: 6, llmdb_first_lookup: 18776, repo: 46, key: 35, oauth: 44, selfmod_recompile: 4281, beam_uptime_at_boot_end: 27697]
+[boot] [dns: 3, tz_data: 12, certs: 154, apps: 3013, jido_instance: 10, llmdb_first_lookup: 19984, repo: 113, key: 34, oauth: 66, selfmod_recompile: 471, beam_uptime_at_boot_end: 25538]
+auto schedulers (mix mob.deploy --schedulers 0):
+[boot] [dns: 2, tz_data: 8, llm_catalog: 14, certs: 81, apps: 2559, jido_instance: 14, llmdb_first_lookup: 1982, repo: 123, key: 5, oauth: 20, selfmod_recompile: 1259, beam_uptime_at_boot_end: 7523]
+[boot] [dns: 1, tz_data: 7, llm_catalog: 15, certs: 88, apps: 2593, jido_instance: 17, llmdb_first_lookup: 2037, repo: 123, key: 21, oauth: 12, selfmod_recompile: 1251, beam_uptime_at_boot_end: 7578]

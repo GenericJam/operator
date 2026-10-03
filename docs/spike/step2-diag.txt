@@ -1,0 +1,54 @@
+%{
+  boot: [
+    dns: 0,
+    tz_data: 4,
+    certs: 25,
+    apps: 507,
+    jido_instance: 5,
+    llmdb_first_lookup: 2445,
+    repo: 9,
+    key: 9,
+    oauth: 8,
+    selfmod_recompile: 4,
+    beam_uptime_at_boot_end: 3312
+  ],
+  compiler: %{
+    otp_release: "29",
+    elixir: "1.20.1",
+    beam_asm: true,
+    v3_core: true,
+    elixir_expand: true,
+    elixir_compiler: true,
+    elixir_erl: true,
+    compile_module: true,
+    compiler_lib_dir: "/data/user/0/com.genericjam.operator/files/otp/lib/compiler-10.0",
+    kernel_parallel_compiler: true
+  },
+  apps: %{
+    compiler: true,
+    jido: true,
+    jido_ai: true,
+    req_llm: true,
+    llm_db: true,
+    finch: true,
+    req: true,
+    jido_action: true,
+    jido_signal: true,
+    mnesia: true
+  },
+  agent: %{
+    alive: true,
+    ok: true,
+    tools: "{:ok, [Operator.Tools.AddNumbers]}",
+    agent_id: "01a1000a-f146-7a93-b53a-571b996d885e",
+    start_us: 12642
+  },
+  llmdb: %{
+    id: "anthropic/claude-haiku-4.5",
+    ok: true,
+    tools: true,
+    provider: :openrouter,
+    openrouter_models: 632,
+    us: 64
+  }
+}

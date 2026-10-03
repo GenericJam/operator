@@ -10,26 +10,20 @@ defmodule Operator.App do
 
   @impl Mob.App
   def on_start do
-    # Configure BEAM's DNS path so Req / Finch / Mint / `gen_tcp:connect/3`
-    # with a hostname work on iOS without per-host setup. Flips the lookup
-    # chain from the iOS-broken `:native` (inet_gethost port program) path
-    # to `[:file, :dns]` and seeds Google + Cloudflare as fallback
-    # nameservers. Override with `nameservers:` if you need to (corporate
-    # resolver, Quad9, etc.) — see `Mob.DNS.configure_pure_beam/1`.
-    #
-    # For hosts that need Apple's resolver (VPN-pushed DNS, mDNS,
-    # captive portals, search-domain expansion) call `Mob.DNS.resolve/1`
-    # for those specific hostnames here too. Both paths compose.
-    Mob.DNS.configure_pure_beam()
+    # Dist first, so a boot step that fails can still be inspected over rpc.
+    # No :cookie: the node takes the per-app cookie mob_dev writes to
+    # $MOB_BEAMS_DIR/mob_dist_cookie (MobDev.DistCookie on the host side).
+    Mob.Dist.ensure_started(node: :"operator_android@127.0.0.1")
 
-    {:ok, _} = Application.ensure_all_started(:ecto_sqlite3)
-    {:ok, _} = Operator.Repo.start_link()
+    # DNS, CA certs, the agent stack, the repo, the OpenRouter key, and
+    # recompiling the app's self-written modules (Operator.Boot, timed).
+    :ok = Operator.Boot.run()
+
     Ecto.Migrator.with_repo(Operator.Repo, fn repo ->
       Ecto.Migrator.run(repo, migrations_dir(), :up, all: true)
     end)
 
     Mob.Screen.start_root(Operator.HomeScreen)
-    Mob.Dist.ensure_started(node: :"operator_android@127.0.0.1", cookie: :mob_secret)
   end
 
   # Returns the path to the migrations directory for the current environment.
