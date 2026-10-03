@@ -286,18 +286,25 @@ defmodule Operator.OpenRouter.OAuth do
   end
 
   defp finish_exchange({:ok, key, ms}, s) do
-    :ok = Operator.KeyStore.put(key)
-    Logger.info("[oauth] signed in (#{ms} ms exchange, attempt #{s.attempts})")
+    case Operator.KeyStore.put(key) do
+      :ok ->
+        Logger.info("[oauth] signed in (#{ms} ms exchange, attempt #{s.attempts})")
 
-    notify(%{
-      s
-      | phase: :signed_in,
-        error: nil,
-        exchange_ms: ms,
-        verifier: nil,
-        state: nil,
-        code: nil
-    })
+        notify(%{
+          s
+          | phase: :signed_in,
+            error: nil,
+            exchange_ms: ms,
+            verifier: nil,
+            state: nil,
+            code: nil
+        })
+
+      # The code is spent: signing in again starts a new flow.
+      {:error, reason} ->
+        Logger.error("[oauth] storing the key failed: #{inspect(reason)}")
+        notify(%{s | phase: :failed, error: {:key_store, reason}, code: nil})
+    end
   end
 
   defp finish_exchange({:retry, reason}, s) do

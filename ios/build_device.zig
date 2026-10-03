@@ -725,6 +725,8 @@ fn addLink(b: *std.Build, step: *std.Build.Step, opts: LinkOptions) void {
         "CoreGraphics",
         "QuartzCore",
         "SwiftUI",
+        // Security — c_src/operator_secure_store.c (iOS Keychain).
+        "Security",
     };
     for (frameworks_base) |fw| {
         run.addArgs(&.{ "-Xlinker", "-framework", "-Xlinker", fw });

@@ -630,6 +630,11 @@ fn addLink(b: *std.Build, step: *std.Build.Step, opts: LinkOptions) void {
         "CoreGraphics",
         "QuartzCore",
         "SwiftUI",
+        // Security — used by c_src/operator_secure_store.c for
+        // SecItemAdd/Update/Copy/Delete against the iOS Keychain.
+        // Added here rather than as a plugin_frameworks entry because
+        // it's an app-owned NIF, not a plugin.
+        "Security",
     };
     for (frameworks_base) |fw| {
         run.addArgs(&.{ "-Xlinker", "-framework", "-Xlinker", fw });

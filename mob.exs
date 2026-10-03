@@ -14,7 +14,11 @@ config :mob_dev,
   mob_dir: Path.join(File.cwd!(), "deps/mob"),
 
   # Path to your Elixir lib dir (e.g. ~/.local/share/mise/installs/elixir/1.18.4-otp-28/lib).
-  elixir_lib: System.get_env("MOB_ELIXIR_LIB", :code.lib_dir(:elixir) |> to_string() |> Path.dirname())
+  elixir_lib:
+    System.get_env("MOB_ELIXIR_LIB", :code.lib_dir(:elixir) |> to_string() |> Path.dirname()),
+  # App-owned C NIF (c_src/<module>.c): the Keychain / EncryptedSharedPrefs
+  # store that holds the OpenRouter key (Operator.KeyStore).
+  static_nifs: [%{module: :operator_secure_store, archs: [:all]}]
 
 # Activated capability plugins (the packages added in mix.exs). Each contributes
 # its native code, permissions, and any demo screens at build time. Drop a name

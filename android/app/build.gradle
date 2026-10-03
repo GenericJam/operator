@@ -126,6 +126,11 @@ dependencies {
     // kept in the template so its gradle merge stays a no-op)
     implementation 'androidx.appcompat:appcompat:1.6.1'
 
+    // Jetpack Security — EncryptedSharedPreferences + MasterKey for the
+    // OpenRouter key store. OperatorSecureStore.kt bridges these to the C NIF
+    // c_src/operator_secure_store.c (Android JNI branch) for Operator.KeyStore.
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
     // Biometric authentication
 
     // CameraX (camera preview in core; mob_camera/mob_scanner also declare
