@@ -10,13 +10,18 @@ defmodule Operator.LoginScanScreen do
       with another app.
     * A handoff part from `mix operator.handoff`: counted, then on to the
       next; the last one opens the chat on the new session.
-    * The update server from `mix operator.deliver.qr`: saved
-      (`Operator.Deliver`), and the result said.
+    * The update server from `mix operator.deliver.qr`, checked by
+      `Operator.Deliver.parse/1`: shown with the server in use, and saved
+      (`Operator.Deliver.save/2`) only when "Use this server" is tapped. The
+      chat opens this screen at that question, with `%{deliver: endpoint}`,
+      for a link scanned with another app, so no link changes the server
+      on its own.
   """
   use Mob.Screen
 
   alias Operator.Auth
   alias Operator.Auth.Transfer
+  alias Operator.Deliver
   alias Operator.Links
   alias Operator.LoginScanScreen.Native
 
@@ -26,6 +31,8 @@ defmodule Operator.LoginScanScreen do
         phase: :scan,
         qr: nil,
         words: "",
+        deliver: nil,
+        data_dir: Map.get(params, :data_dir) || Operator.Paths.data_dir(),
         line:
           "On the Mac, in the operator checkout: mix operator.login anthropic (or openai) " <>
             "to sign in, mix operator.handoff to carry on from omp, " <>
@@ -34,6 +41,7 @@ defmodule Operator.LoginScanScreen do
 
     case params do
       %{link: link} when is_binary(link) -> {:ok, words_step(socket, link)}
+      %{deliver: endpoint} when is_binary(endpoint) -> {:ok, confirm_step(socket, endpoint)}
       _ -> {:ok, socket}
     end
   end
@@ -107,6 +115,19 @@ defmodule Operator.LoginScanScreen do
     end
   end
 
+  def handle_info({:tap, :use_server}, %{assigns: %{deliver: endpoint}} = socket)
+      when is_binary(endpoint) do
+    text = Deliver.save(endpoint, socket.assigns.data_dir)
+    {:noreply, socket |> Mob.Socket.assign(phase: :done, deliver: nil) |> line(text)}
+  end
+
+  def handle_info({:tap, :keep_server}, socket) do
+    {:noreply,
+     socket
+     |> Mob.Socket.assign(phase: :scan, deliver: nil)
+     |> line("Update server not changed.")}
+  end
+
   def handle_info({:tap, :rescan}, socket),
     do: handle_info({:tap, :scan}, Mob.Socket.assign(socket, phase: :scan, qr: nil, words: ""))
 
@@ -130,10 +151,8 @@ defmodule Operator.LoginScanScreen do
       {:handoff, _handoff, _loop} ->
         Mob.Socket.reset_to(socket, Operator.ChatScreen)
 
-      {:deliver, text} ->
-        socket
-        |> Mob.Socket.assign(phase: :done, qr: nil, words: "")
-        |> line(text)
+      {:deliver, endpoint} ->
+        confirm_step(socket, endpoint)
 
       {:error, text} ->
         line(socket, text)
@@ -144,6 +163,18 @@ defmodule Operator.LoginScanScreen do
     socket
     |> Mob.Socket.assign(phase: :words, qr: link, words: "")
     |> line("Code scanned. Type the six words shown on the Mac.")
+  end
+
+  defp confirm_step(socket, endpoint) do
+    now =
+      case Deliver.endpoint() do
+        nil -> "none is set"
+        current -> "now #{current}"
+      end
+
+    socket
+    |> Mob.Socket.assign(phase: :confirm_deliver, deliver: endpoint, qr: nil, words: "")
+    |> line("Get Operator's code updates from #{endpoint}? (#{now})")
   end
 
   defp body(%{phase: :scan}), do: button("Scan QR", :scan)
@@ -158,6 +189,18 @@ defmodule Operator.LoginScanScreen do
         button("Sign in", :submit),
         spacer(8),
         button("Scan again", :rescan)
+      ]
+    }
+  end
+
+  defp body(%{phase: :confirm_deliver}) do
+    %{
+      type: :column,
+      props: %{fill_width: true},
+      children: [
+        button("Use this server", :use_server),
+        spacer(8),
+        button("Cancel", :keep_server)
       ]
     }
   end

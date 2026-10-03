@@ -296,8 +296,8 @@ message.
    (AGENTS.md "How to update the phone"; DESIGN.md §1 "The Core's release
    path"). Publishes Operator's own modules (not the entry module, the
    build config, NIF stubs or Mix tasks); the endpoint comes from an
-   `operator://deliver?endpoint=…&key=…` QR checked against the build's
-   key and kept in settings; Diagnostics shows the server, the code
+   `operator://deliver?endpoint=…&key=…` QR (key fingerprint must match the
+   build's), confirmed on screen and kept in settings; Diagnostics shows the server, the code
    running, the last check and "Check for updates now". The Keeper's stable
    launch also ends an update's probation, a Core change rebuilds and
    selftests the Dyn generation, and a launch that failed on a rolled-back
@@ -305,8 +305,9 @@ message.
    serve -> mob_deliver's client; on the host also install -> next launch
    loads it -> no stable launch -> rolled back). Device checks (Moto G
    2021), not done yet:
-   1. Key, native deploy, serve, scan the QR with the camera: "Update
-      server set …: close Operator and open it again"; after relaunching,
+   1. Key, native deploy, serve, scan the QR with the camera: the scanner
+      asks "Get Operator's code updates from …?"; "Use this server", then
+      "Update server set …: close Operator and open it again"; after relaunching,
       Diagnostics shows the server and a last check ("nothing published
       yet" before the first publish).
    2. A visible Core change, `mix operator.publish`, Diagnostics → Check

@@ -11,16 +11,19 @@ defmodule Operator.Deliver do
 
   **The endpoint isn't baked into the build**: the Mac's address changes.
   The phone learns it from a QR (`mix operator.deliver.qr`):
-  `operator://deliver?endpoint=…&key=…` (`link/2`, handled by
-  `Operator.Links`, then `configure/2`) carries the server's URL and the
-  fingerprint of the key it signs with, which must be this build's trusted
-  key or the link is refused. The endpoint is kept in
-  `Operator.Core.Settings` and put into mob_deliver's environment
+  `operator://deliver?endpoint=…&key=…` (`link/2`). `Operator.Links` reads
+  it with `parse/1`, which refuses an address that isn't http(s) and a key
+  fingerprint that isn't this build's key's. That catches a QR from another
+  Mac or an old key; it is not authentication (the fingerprint is
+  public). So nothing is saved until the user confirms the address on
+  screen (`Operator.LoginScanScreen`, then `save/2`). Code from any server
+  is still checked against the build's key by mob_deliver. The endpoint is
+  kept in `Operator.Core.Settings` and put into mob_deliver's environment
   (`config :mob_deliver, :endpoint`, read on every check): at launch by
   `apply_saved_endpoint/1`, which `src/operator.erl` runs before mob starts
-  its plugins, and at once when a link sets it. mob_deliver doesn't start
-  without an endpoint, so on a phone that had none at launch the first scan
-  asks for a restart.
+  its plugins, and at once when it is saved. mob_deliver doesn't start
+  without an endpoint, so on a phone that had none at launch the first one
+  saved asks for a restart.
 
   **One stable launch for both layers.** mob_deliver keeps a new update on
   probation until a launch running it is stable, and rolls it back at the
@@ -30,9 +33,9 @@ defmodule Operator.Deliver do
   user leaving. `take_over_probation/0` removes mob_deliver's proof and the
   Keeper calls `launch_stable/0` instead, so a Core update that crashes the
   app in those 10 s is rolled back too. A launch whose update mob_deliver
-  rolled back failed on the Core, not on the Dyn layer:
-  `rolled_back_this_launch?/1` tells the Keeper not to count it
-  (`Operator.Core.Dyn.boot/1`).
+  rolled back failed on the Core, not on the Dyn layer: `boot_opts/2` tells
+  the Keeper which update each launch runs and which one was rolled back,
+  so it doesn't count that launch (`Operator.Core.Dyn.boot/1`).
   """
 
   alias Operator.Core.Settings
@@ -85,34 +88,45 @@ defmodule Operator.Deliver do
   def fingerprint(_key), do: :error
 
   @doc """
-  Acts on an `operator://deliver` link's parameters: refuses an endpoint
-  that isn't an http(s) URL, or whose key fingerprint isn't this build's
-  trusted key's; otherwise saves it in `dir`'s settings, hands it to
-  mob_deliver and (when its update checks run) checks for an update.
-  Returns the sentence to show.
+  Reads an `operator://deliver` link's parameters: `{:ok, endpoint}` when
+  the address is an http(s) URL with a host and the key fingerprint is this
+  build's key's, else `{:error, sentence}`. Saves nothing: the user
+  confirms the address first (`save/2`).
   """
-  @spec configure(%{String.t() => String.t()}, String.t()) ::
-          {:ok, String.t()} | {:error, String.t()}
-  def configure(params, dir \\ Operator.Paths.data_dir()) do
-    with {:ok, endpoint} <- endpoint(params["endpoint"]),
-         :ok <- trusted?(params["key"]) do
-      :ok = Settings.put_deliver_endpoint(endpoint, dir)
-      put_endpoint(endpoint)
+  @spec parse(%{String.t() => String.t()}) :: {:ok, String.t()} | {:error, String.t()}
+  def parse(params) do
+    with {:ok, endpoint} <- http_url(params["endpoint"]),
+         :ok <- this_builds_key(params["key"]),
+         do: {:ok, endpoint}
+  end
 
-      if checks_running?() do
-        {:ok, _} = Task.start(&MobDeliver.check/0)
-        {:ok, "Update server set to #{endpoint}: checking for updates."}
-      else
-        {:ok,
-         "Update server set to #{endpoint}. Close Operator and open it again to start " <>
-           "checking for updates."}
-      end
+  @doc """
+  Saves `endpoint` (from `parse/1`, confirmed by the user) in `dir`'s
+  settings, hands it to mob_deliver and, when its update checks run, checks
+  for an update. Returns the sentence to show.
+  """
+  @spec save(String.t(), String.t()) :: String.t()
+  def save(endpoint, dir \\ Operator.Paths.data_dir()) when is_binary(endpoint) do
+    :ok = Settings.put_deliver_endpoint(endpoint, dir)
+    put_endpoint(endpoint)
+
+    if checks_running?() do
+      {:ok, _} = Task.start(&MobDeliver.check/0)
+      "Update server set to #{endpoint}: checking for updates."
+    else
+      "Update server set to #{endpoint}. Close Operator and open it again to start " <>
+        "checking for updates."
     end
   end
 
-  defp endpoint(url) when is_binary(url) do
+  @doc "The update server in use (`nil`: none), for the confirmation."
+  @spec endpoint() :: String.t() | nil
+  def endpoint, do: Application.get_env(:mob_deliver, :endpoint)
+
+  defp http_url(url) when is_binary(url) do
     case URI.new(url) do
-      {:ok, %URI{scheme: scheme, host: host}} when scheme in ["http", "https"] and host != "" ->
+      {:ok, %URI{scheme: scheme, host: host}}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
         {:ok, url}
 
       _ ->
@@ -120,17 +134,17 @@ defmodule Operator.Deliver do
     end
   end
 
-  defp endpoint(_url), do: {:error, "That update-server code has no valid address."}
+  defp http_url(_url), do: {:error, "That update-server code has no valid address."}
 
-  defp trusted?(key) do
-    case trusted_key() && fingerprint(trusted_key()) do
+  defp this_builds_key(key) do
+    case build_key() && fingerprint(build_key()) do
       {:ok, ^key} ->
         :ok
 
       {:ok, _other} ->
         {:error,
-         "That update server signs with another key than this build trusts: not saved. " <>
-           "Is it this Mac's `mix operator.deliver.serve`?"}
+         "That update-server code is for another signing key than this build's: not used. " <>
+           "Is it from this Mac's `mix operator.deliver.qr`?"}
 
       _none ->
         {:error,
@@ -139,9 +153,9 @@ defmodule Operator.Deliver do
     end
   end
 
-  # The trust root the build was made with (mob_dev ships config/config.exs
+  # The publish key the build was made with (mob_dev ships config/config.exs
   # into the build; mob_deliver itself reads it from there).
-  defp trusted_key, do: Application.get_env(:mob_deliver, :trusted_publish_key)
+  defp build_key, do: Application.get_env(:mob_deliver, :trusted_publish_key)
 
   # ── launch ──
 
@@ -190,22 +204,23 @@ defmodule Operator.Deliver do
   end
 
   @doc """
-  Whether mob_deliver rolled an update back during this launch (its
-  `notice`, `MobDeliver.rollback_notice/0`, is newer than the VM): the last
-  launch crashed in a Core update, which is gone now.
+  `Operator.Core.Dyn.boot/1`'s options for this launch: `core:` the update
+  this launch runs (the active manifest's id, `nil` for the build's own
+  code) and `core_rolled_back:` the update mob_deliver rolled back during
+  this launch (its rollback notice is newer than the VM), if any.
   """
-  @spec rolled_back_this_launch?(map() | nil) :: boolean()
-  def rolled_back_this_launch?(notice \\ MobDeliver.rollback_notice()) do
-    case notice do
-      %{at: %DateTime{} = at} -> DateTime.compare(at, vm_started_at()) != :lt
-      _ -> false
-    end
+  @spec boot_opts(map(), map() | nil) :: keyword()
+  def boot_opts(state \\ MobDeliver.state(), notice \\ MobDeliver.rollback_notice()) do
+    [core: state.active && state.active.id, core_rolled_back: rolled_back_this_launch(notice)]
   end
 
-  defp vm_started_at do
+  defp rolled_back_this_launch(%{rolled_back: id, at: %DateTime{} = at}) do
     {uptime_ms, _since_last_call} = :erlang.statistics(:wall_clock)
-    DateTime.add(DateTime.utc_now(), -uptime_ms, :millisecond)
+    started = DateTime.add(DateTime.utc_now(), -uptime_ms, :millisecond)
+    if DateTime.compare(at, started) != :lt, do: id
   end
+
+  defp rolled_back_this_launch(_notice), do: nil
 
   # ── Diagnostics ──
 

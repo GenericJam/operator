@@ -123,7 +123,8 @@ defmodule Mix.Tasks.Operator.DeliverTest do
     # The phone scans the QR; its build trusts this key.
     Application.put_env(:mob_deliver, :trusted_publish_key, public_key)
     {:ok, params} = Links.params(Operator.Deliver.link(endpoint, public_key), "deliver")
-    assert {:ok, _} = Operator.Deliver.configure(params, dir)
+    assert {:ok, ^endpoint} = Operator.Deliver.parse(params)
+    Operator.Deliver.save(endpoint, dir)
 
     client = [
       endpoint: Settings.deliver_endpoint(dir),

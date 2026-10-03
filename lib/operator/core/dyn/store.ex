@@ -197,22 +197,38 @@ defmodule Operator.Core.Dyn.Store do
 
   # ── launch markers ──
 
-  @spec boot_markers(Path.t()) :: %{boot_attempts: non_neg_integer(), stable: boolean()}
+  @typedoc """
+  `boot.json`: launches since the last stable one, whether the last reached
+  stable, and the delivered Core update (mob_deliver manifest id) the last
+  counted launch ran, `nil` for the build's own code.
+  """
+  @type boot_markers :: %{
+          boot_attempts: non_neg_integer(),
+          stable: boolean(),
+          core: String.t() | nil
+        }
+
+  @spec boot_markers(Path.t()) :: boot_markers()
   def boot_markers(root) do
     with {:ok, json} <- File.read(Path.join(root, "boot.json")),
-         {:ok, %{"boot_attempts" => a, "stable" => s}} when is_integer(a) and is_boolean(s) <-
+         {:ok, %{"boot_attempts" => a, "stable" => s} = m} when is_integer(a) and is_boolean(s) <-
            Jason.decode(json) do
-      %{boot_attempts: a, stable: s}
+      core = m["core"]
+      %{boot_attempts: a, stable: s, core: if(is_binary(core), do: core)}
     else
-      _ -> %{boot_attempts: 0, stable: true}
+      _ -> %{boot_attempts: 0, stable: true, core: nil}
     end
   end
 
-  @spec put_boot_markers(Path.t(), %{boot_attempts: non_neg_integer(), stable: boolean()}) ::
-          :ok | {:error, term()}
-  def put_boot_markers(root, %{boot_attempts: a, stable: s}) do
+  @spec put_boot_markers(Path.t(), %{
+          required(:boot_attempts) => non_neg_integer(),
+          required(:stable) => boolean(),
+          optional(:core) => String.t() | nil
+        }) :: :ok | {:error, term()}
+  def put_boot_markers(root, %{boot_attempts: a, stable: s} = markers) do
     File.mkdir_p!(root)
-    write_atomic(Path.join(root, "boot.json"), Jason.encode!(%{boot_attempts: a, stable: s}))
+    json = Jason.encode!(%{boot_attempts: a, stable: s, core: Map.get(markers, :core)})
+    write_atomic(Path.join(root, "boot.json"), json)
   end
 
   # ── the log ──

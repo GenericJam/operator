@@ -1,18 +1,20 @@
 defmodule Operator.DeliverTest do
   # async: false: mob_deliver's environment and mob's router hooks are VM-wide.
-  use ExUnit.Case, async: false
+  use Mob.ScreenCase, async: false
 
   alias Operator.Core.Settings
   alias Operator.Deliver
   alias Operator.Links
+  alias Operator.LoginScanScreen
 
   @moduletag :tmp_dir
+  @moduletag :capture_log
   @endpoint "http://192.168.1.20:8040/deliver"
 
   defp public_key, do: "ed25519:" <> Base.encode64(:crypto.strong_rand_bytes(32))
 
-  # This build's trust root, for one test.
-  defp trust(key) do
+  # This build's publish key, for one test.
+  defp build_key(key) do
     previous = Application.get_env(:mob_deliver, :trusted_publish_key)
     Application.put_env(:mob_deliver, :trusted_publish_key, key)
     on_exit(fn -> Application.put_env(:mob_deliver, :trusted_publish_key, previous) end)
@@ -32,82 +34,88 @@ defmodule Operator.DeliverTest do
     end)
   end
 
-  test "a link from the Mac signing with the build's key sets the update server", %{tmp_dir: dir} do
+  test "a link for this build's key gives its server; another key, no key or a bad address don't" do
     key = public_key()
-    trust(key)
+    build_key(key)
+    assert Deliver.parse(params(Deliver.link(@endpoint, key))) == {:ok, @endpoint}
 
-    assert {:ok, text} = Deliver.configure(params(Deliver.link(@endpoint, key)), dir)
-    assert text =~ @endpoint
-    # mob_deliver had no endpoint at this launch, so it isn't checking yet.
-    assert text =~ "open it again"
-    assert Settings.deliver_endpoint(dir) == @endpoint
-    assert Application.get_env(:mob_deliver, :endpoint) == @endpoint
-  end
+    assert {:error, "That update-server code is for another signing key" <> _} =
+             Deliver.parse(params(Deliver.link(@endpoint, public_key())))
 
-  test "a link for another key, a build without a key or a bad address changes nothing",
-       %{tmp_dir: dir} do
-    trust(public_key())
-    other = Deliver.link(@endpoint, public_key())
-    assert {:error, text} = Deliver.configure(params(other), dir)
-    assert text =~ "another key"
-
-    trust(nil)
-    assert {:error, text} = Deliver.configure(params(other), dir)
-    assert text =~ "mix operator.deliver.key"
-
-    key = public_key()
-    trust(key)
-
-    for bad <- ["ftp://192.168.1.20/deliver", "192.168.1.20:8040", "http://"] do
-      assert {:error, _} = Deliver.configure(params(Deliver.link(bad, key)), dir)
+    for bad <- ["ftp://192.168.1.20/deliver", "192.168.1.20:8040", "http://", "http:/x/deliver"] do
+      assert {:error, "That update-server code has no valid address."} =
+               Deliver.parse(params(Deliver.link(bad, key)))
     end
 
-    assert {:error, _} = Deliver.configure(%{"key" => "x"}, dir)
-    assert Settings.deliver_endpoint(dir) == nil
-    assert Application.get_env(:mob_deliver, :endpoint) == nil
+    assert {:error, _} = Deliver.parse(%{"key" => "x"})
+
+    build_key(nil)
+    assert {:error, text} = Deliver.parse(params(Deliver.link(@endpoint, key)))
+    assert text =~ "mix operator.deliver.key"
   end
 
-  test "Operator.Links routes operator://deliver links" do
+  test "Operator.Links hands an update-server link over for confirmation, saving nothing" do
     key = public_key()
-    trust(key)
+    build_key(key)
 
-    assert {:error, "That update server signs with another key" <> _} =
+    assert {:error, "That update-server code is for another" <> _} =
              Links.handle(Deliver.link(@endpoint, public_key()))
 
-    assert {:deliver, text} = Links.handle(Deliver.link(@endpoint, key))
-    assert text =~ @endpoint
-    assert Settings.deliver_endpoint() == @endpoint
+    assert Links.handle(Deliver.link(@endpoint, key)) == {:deliver, @endpoint}
+    assert Settings.deliver_endpoint() == nil
+    assert Deliver.endpoint() == nil
   end
 
-  test "the saved endpoint is in mob_deliver's environment before mob starts it",
-       %{tmp_dir: dir} do
-    assert Deliver.apply_saved_endpoint(dir) == :ok
-    assert Application.get_env(:mob_deliver, :endpoint) == nil
-
-    :ok = Settings.put_deliver_endpoint(@endpoint, dir)
-    assert Deliver.apply_saved_endpoint(dir) == :ok
-    assert Application.get_env(:mob_deliver, :endpoint) == @endpoint
-
-    # mob_deliver started its checks with it: a new link checks at once
-    # (here against a closed port).
+  test "the scanner asks before using a server, showing the one in use", %{tmp_dir: dir} do
     key = public_key()
-    trust(key)
-    other = "http://127.0.0.1:1/deliver"
-    assert {:ok, text} = Deliver.configure(params(Deliver.link(other, key)), dir)
-    assert text =~ "checking for updates"
-    assert Settings.deliver_endpoint(dir) == other
+    build_key(key)
+    :ok = Settings.put_deliver_endpoint(@endpoint, dir)
+    :ok = Deliver.apply_saved_endpoint(dir)
+    other = "http://10.0.0.5:8040/deliver"
+
+    # Cancelled: nothing changes.
+    view = mount_screen(LoginScanScreen, %{data_dir: dir})
+    view = render_info(view, {:scan, :result, %{value: Deliver.link(other, key)}})
+    assert text(view) =~ "Get Operator's code updates from #{other}? (now #{@endpoint})"
+    view = render_info(view, {:tap, :keep_server})
+    assert text(view) =~ "Update server not changed."
+    assert Settings.deliver_endpoint(dir) == @endpoint
+    assert Deliver.endpoint() == @endpoint
+
+    # Opened by the chat for a link from another app, then confirmed. Update
+    # checks ran at this launch, so it checks at once (here against nothing).
+    view = mount_screen(LoginScanScreen, %{data_dir: dir, deliver: "http://127.0.0.1:1/deliver"})
+    assert_renderable(view)
+    view = render_info(view, {:tap, :use_server})
+    assert text(view) =~ "Update server set to http://127.0.0.1:1/deliver: checking for updates."
+    assert Settings.deliver_endpoint(dir) == "http://127.0.0.1:1/deliver"
+    assert Deliver.endpoint() == "http://127.0.0.1:1/deliver"
   end
 
-  test "a rollback notice from this launch means the last launch failed on the Core" do
+  test "the first server saved on a phone without one asks for a restart", %{tmp_dir: dir} do
+    :ok = Deliver.apply_saved_endpoint(dir)
+    assert Deliver.endpoint() == nil
+
+    assert Deliver.save(@endpoint, dir) =~ "Close Operator and open it again"
+    assert Settings.deliver_endpoint(dir) == @endpoint
+    assert Deliver.endpoint() == @endpoint
+  end
+
+  test "the Keeper learns which update this launch runs and which one was rolled back" do
     now = DateTime.utc_now()
-    assert Deliver.rolled_back_this_launch?(%{rolled_back: "abc", at: now})
+    active = %{active: %{id: "cur", issued_at: now}}
 
-    refute Deliver.rolled_back_this_launch?(%{
-             rolled_back: "abc",
+    assert Deliver.boot_opts(active, %{rolled_back: "bad", at: now}) ==
+             [core: "cur", core_rolled_back: "bad"]
+
+    # A notice from an earlier launch says nothing about the last one.
+    assert Deliver.boot_opts(%{active: nil}, %{
+             rolled_back: "bad",
              at: DateTime.add(now, -1, :day)
-           })
+           }) ==
+             [core: nil, core_rolled_back: nil]
 
-    refute Deliver.rolled_back_this_launch?(nil)
+    assert Deliver.boot_opts(%{active: nil}, nil) == [core: nil, core_rolled_back: nil]
   end
 
   test "taking over probation removes mob_deliver's first-frame proof, not its navigation hook" do

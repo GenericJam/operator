@@ -6,8 +6,7 @@
   nifs: [:mob_background_nif, :mob_location_nif, :mob_notify_nif,
    :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif],
   plugins: [:mob_background, :mob_location, :mob_notify, :mob_camera,
-   :mob_photos, :mob_scanner],
-  settings: [],
+   :mob_photos, :mob_scanner, :mob_deliver],
   screens: [
     %{
       module: MobLocation.DemoScreen,
@@ -20,8 +19,16 @@
       default_route: "/mob_camera/demo"
     }
   ],
+  lifecycle: [
+    %{
+      plugin: :mob_deliver,
+      on_start: {MobDeliver, :on_start, []},
+      on_resume: {MobDeliver, :on_resume, []},
+      on_background: {MobDeliver, :on_background, []}
+    }
+  ],
+  settings: [],
   notification_handlers: [],
-  lifecycle: [],
   default_font: nil,
   styles: [],
   default_style: nil,

@@ -56,11 +56,10 @@ defmodule Operator.Boot do
       # launch, not at mob_deliver's first frame (Operator.Deliver).
       deliver: fn -> :ok = Operator.Deliver.take_over_probation() end,
       # The current Dyn generation (or boot probation's revert, or safe mode:
-      # Core only), see Operator.Core.Dyn.Keeper. A failed launch whose Core
-      # update mob_deliver just rolled back doesn't count against it.
-      dyn: fn ->
-        %{} = Dyn.boot(core_rolled_back: Operator.Deliver.rolled_back_this_launch?())
-      end,
+      # Core only), see Operator.Core.Dyn.Keeper. It records the Core update
+      # this launch runs; a failed launch whose update mob_deliver just
+      # rolled back doesn't count against the generation.
+      dyn: fn -> %{} = Dyn.boot(Operator.Deliver.boot_opts()) end,
       # The theme that generation defines, if any (Operator.Core.DynTheme).
       dyn_theme: fn -> :ok = DynTheme.refresh() end
     ]

@@ -40,15 +40,16 @@ defmodule Operator.Links do
       new session that opens with the handoff (`Operator.Handoff.framed/1`
       as its first user message, sent with the next prompt; nothing goes to
       the model before that) and returns `{:handoff, handoff, loop}`;
-    * an update-server link: saved and used for update checks if it signs
-      with this build's trusted key (`Operator.Deliver.configure/2`),
-      `{:deliver, sentence}` to show;
+    * an update-server link: `{:deliver, endpoint}` when its address is
+      usable and it is for this build's key (`Operator.Deliver.parse/1`);
+      nothing is saved until the user confirms it in
+      `Operator.LoginScanScreen`;
     * anything else: `{:error, sentence}` to show.
   """
   @spec handle(String.t()) :: result()
   def handle(link) when is_binary(link) do
     case params(link, "deliver") do
-      {:ok, params} -> deliver(params)
+      {:ok, params} -> deliver(Deliver.parse(params))
       :error -> handoff_or_login(link)
     end
   end
@@ -90,12 +91,8 @@ defmodule Operator.Links do
     end
   end
 
-  defp deliver(params) do
-    case Deliver.configure(params) do
-      {:ok, sentence} -> {:deliver, sentence}
-      {:error, _sentence} = refused -> refused
-    end
-  end
+  defp deliver({:ok, endpoint}), do: {:deliver, endpoint}
+  defp deliver({:error, _sentence} = refused), do: refused
 
   defp login(link) do
     case Transfer.check(link) do

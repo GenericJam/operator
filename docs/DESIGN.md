@@ -49,9 +49,19 @@ only way the Core changes besides a cable deploy:
   and `mob.exs` never travel: those need a native deploy.
 - **Trust**: the public key is baked into the build (mob_dev ships
   `config :mob_deliver` inside it; delivered code can't change it, and Dyn code
-  may not call `MobDeliver` at all, `Operator.Core.Dyn.Check`). The Mac's
+  may not call `MobDeliver` at all, `Operator.Core.Dyn.Check`). Every manifest
+  and module is checked against it, whatever server sent it. The Mac's
   address is not baked: the phone learns it from an `operator://deliver` QR
-  carrying the key's fingerprint, refused unless it matches the build's key.
+  carrying the key's fingerprint. A fingerprint that doesn't match the
+  build's key is refused, which catches a QR from another Mac or an old key.
+  It is not authentication (the fingerprint is public), so no link changes
+  the server on its own: the phone shows the new address and the one in use,
+  and saves it only when the user taps "Use this server".
+- **Known gap (MOB-382)**: mob_deliver installs any validly signed manifest
+  that isn't active or rejected, older ones included. A man-in-the-middle on
+  the plain-HTTP home network, or a server the user agreed to, could replay
+  an older publish and downgrade the Core. It can't run unsigned code. Fix
+  belongs in mob_deliver (refuse manifests older than the active one).
 - **When it runs**: mob_deliver checks at launch, every 5 minutes in front
   and from Diagnostics, prefetches, and loads the delivered modules at the
   next launch, before the app's code runs.
@@ -62,9 +72,12 @@ only way the Core changes besides a cable deploy:
   from then on. The Dyn runtime fingerprint includes a digest of the Core's
   loaded code, so the first launch on a new Core rebuilds the current
   generation from its sources and selftests it (a failure loads no Dyn code
-  that launch and leaves the generation on probation). A launch that failed
-  on a Core update mob_deliver then rolled back isn't counted against the
-  Dyn generation (no boot revert, no step towards safe mode): the Core failed.
+  that launch and leaves the generation on probation). Each launch records
+  in `boot.json` which update it runs; when mob_deliver rolls back exactly
+  the update the last counted launch ran, that launch isn't counted against
+  the Dyn generation (no boot revert, no step towards safe mode): the Core
+  failed. A launch that died before the Keeper booted recorded nothing, so
+  it can't excuse an earlier Dyn failure.
 
   A crashing update, combined: launch 1 runs the new Core (Dyn rebuilt for
   it, back on probation) and dies before stable; launch 2 rolls the Core

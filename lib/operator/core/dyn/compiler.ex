@@ -344,34 +344,61 @@ defmodule Operator.Core.Dyn.Compiler do
   A digest of the Core's code as this VM runs it: every `Operator.*` module
   except the Dyn generations' (`Operator.Dyn.*`), by the MD5 of its loaded
   code, or of its `.beam` on the code path while it isn't loaded (what
-  will load). mob_deliver loads the delivered modules at launch, before
-  the Dyn layer boots, so a delivered Core counts with its delivered code.
+  will load). The modules are the `:operator` application's plus every
+  loaded `Operator.*` one (a delivered update can add modules); without
+  the application's `.app`, every `Operator.*` module on the code path.
+  mob_deliver loads the delivered modules at launch, before the Dyn layer
+  boots, so a delivered Core counts with its delivered code.
   """
   @spec core_digest() :: String.t()
   def core_digest do
     modules =
-      for {name, file, loaded?} <- :code.all_available(),
-          name = to_string(name),
-          String.starts_with?(name, "Elixir.Operator."),
-          not String.starts_with?(name, "Elixir.Operator.Dyn."),
-          {:ok, md5} <- [module_md5(name, file, loaded?)],
-          do: {name, md5}
+      for module <- Enum.uniq(app_modules() ++ loaded_modules()),
+          core?(module),
+          {:ok, md5} <- [module_md5(module)],
+          do: {module, md5}
 
     digest = :crypto.hash(:sha256, :erlang.term_to_binary(Enum.sort(modules)))
     digest |> binary_part(0, 8) |> Base.encode16(case: :lower)
   end
 
-  defp module_md5(name, _file, true),
-    do: {:ok, :erlang.get_module_info(String.to_existing_atom(name), :md5)}
+  defp app_modules do
+    _ = Application.load(:operator)
 
-  defp module_md5(_name, file, false) when is_list(file) do
-    case :beam_lib.md5(file) do
+    case Application.spec(:operator, :modules) do
+      nil ->
+        for {name, _file, _loaded?} <- :code.all_available(),
+            :lists.prefix(~c"Elixir.Operator.", name),
+            do: List.to_atom(name)
+
+      modules ->
+        modules
+    end
+  end
+
+  defp loaded_modules, do: Enum.map(:code.all_loaded(), &elem(&1, 0))
+
+  defp core?(module) do
+    name = Atom.to_string(module)
+
+    String.starts_with?(name, "Elixir.Operator.") and
+      not String.starts_with?(name, "Elixir.Operator.Dyn.")
+  end
+
+  defp module_md5(module) do
+    case {:code.is_loaded(module), :code.which(module)} do
+      {{:file, _}, _which} -> {:ok, :erlang.get_module_info(module, :md5)}
+      {false, path} when is_list(path) -> beam_md5(path)
+      _ -> :error
+    end
+  end
+
+  defp beam_md5(path) do
+    case :beam_lib.md5(path) do
       {:ok, {_module, md5}} -> {:ok, md5}
       {:error, :beam_lib, _reason} -> :error
     end
   end
-
-  defp module_md5(_name, _file, _loaded?), do: :error
 
   @spec sha256(binary()) :: String.t()
   def sha256(bin), do: :sha256 |> :crypto.hash(bin) |> Base.encode16(case: :lower)

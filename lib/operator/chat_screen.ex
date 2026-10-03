@@ -499,8 +499,8 @@ defmodule Operator.ChatScreen do
       {:login, link} ->
         {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen, %{link: link})}
 
-      {:deliver, text} ->
-        {:noreply, lasting_toast(socket, text)}
+      {:deliver, endpoint} ->
+        {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen, %{deliver: endpoint})}
 
       {:error, text} ->
         {:noreply, lasting_toast(socket, text)}

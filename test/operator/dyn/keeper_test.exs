@@ -238,27 +238,49 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert [{"weather", _}] = Dyn.tools()
   end
 
+  # A launch that runs Core update `core` (mob_deliver's manifest id) after
+  # the previous one died.
+  defp core_launch(dir, opts) do
+    :ok = stop_supervised(Keeper)
+    purge_all()
+    start_supervised!({Keeper, approval: Operator.Test.Dyn.Approval, dir: dir}, id: Keeper)
+    Keeper.boot(Keeper, opts)
+  end
+
   test "a launch that failed on a Core update mob_deliver rolled back doesn't count against Dyn",
        %{tmp_dir: dir} do
     start_keeper(dir)
     n1 = activate!(%{"weather.ex" => tool("Weather", "weather", run: ~s|{:ok, "v1"}|)})
     n2 = activate!(%{"weather.ex" => tool("Weather", "weather", run: ~s|{:ok, "v2"}|)})
-    assert %{generation: ^n2, status: :probation} = relaunch(dir, stable: true)
+    :ok = Keeper.mark_stable(Keeper)
 
-    # This launch dies before stable, on a Core update; the next one runs
+    # This launch runs update "x" and dies before stable; the next one runs
     # the rolled-back Core and keeps the unproven generation.
-    :ok = stop_supervised(Keeper)
-    purge_all()
-    start_supervised!({Keeper, approval: Operator.Test.Dyn.Approval, dir: dir}, id: Keeper)
+    assert %{generation: ^n2, status: :probation} = core_launch(dir, core: "x")
 
     assert %{generation: ^n2, reverted: nil, failed_launches: 0, mode: :normal} =
-             Keeper.boot(Keeper, core_rolled_back: true)
+             core_launch(dir, core: nil, core_rolled_back: "x")
 
     assert Store.current(dir) == n2
 
     # Died again, nothing rolled back: that one is the generation's.
     assert %{generation: ^n1, reverted: %{from: ^n2, to: ^n1}, failed_launches: 1} =
-             relaunch(dir)
+             core_launch(dir, core: nil)
+  end
+
+  test "a rolled-back update doesn't excuse a launch that didn't run it", %{tmp_dir: dir} do
+    start_keeper(dir)
+    n1 = activate!(%{"weather.ex" => tool("Weather", "weather", run: ~s|{:ok, "v1"}|)})
+    n2 = activate!(%{"weather.ex" => tool("Weather", "weather", run: ~s|{:ok, "v2"}|)})
+    :ok = Keeper.mark_stable(Keeper)
+
+    # The build's own code with generation 2 dies before stable (the
+    # generation's failure). The next launch runs update "x" and dies before
+    # the Keeper boots, so it records nothing; the one after rolls "x" back.
+    assert %{generation: ^n2} = core_launch(dir, core: nil)
+
+    assert %{generation: ^n1, reverted: %{from: ^n2, to: ^n1}, failed_launches: 1} =
+             core_launch(dir, core: nil, core_rolled_back: "x")
   end
 
   test "a stable launch runs :on_stable once (a delivered update's probation ends)",

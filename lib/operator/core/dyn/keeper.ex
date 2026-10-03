@@ -44,10 +44,10 @@ defmodule Operator.Core.Dyn.Keeper do
 
   **Core updates** (`Operator.Deliver`) share that launch: the
   `:on_stable` MFA runs when a launch reaches stable (it ends a delivered
-  update's probation), and `boot/2` with `core_rolled_back: true` (the
-  update the failed launch ran was rolled back by mob_deliver this launch)
-  doesn't count that launch against the Dyn generation: no boot revert
-  and no step towards safe mode for it.
+  update's probation). `boot/2` records the update a launch runs (`core:`,
+  in `boot.json`); when mob_deliver has rolled back exactly that update
+  (`core_rolled_back:`), the failed launch doesn't count against the Dyn
+  generation: no boot revert and no step towards safe mode for it.
 
   **Old generations** stay loaded while anything may run them: the current
   one, its parent (instant revert), the pending candidate, and any
@@ -121,8 +121,11 @@ defmodule Operator.Core.Dyn.Keeper do
 
   @doc """
   The launch's Dyn boot: launch markers, boot probation, safe mode, loading
-  the current generation. `core_rolled_back: true`: the previous launch
-  failed on a Core update that has been rolled back since, so it doesn't
+  the current generation. Options: `core:` the delivered Core update
+  (mob_deliver manifest id) this launch runs, `nil` for the build's own
+  code, recorded with the launch; `core_rolled_back:` the update
+  mob_deliver rolled back during this launch, if any. When it is the one
+  the last counted launch ran, that launch failed on the Core and doesn't
   count against the Dyn generation (see the moduledoc).
   """
   @spec boot(GenServer.server(), keyword()) :: boot_report()
@@ -235,10 +238,11 @@ defmodule Operator.Core.Dyn.Keeper do
 
   @impl true
   def handle_call({:boot, opts}, _from, s) do
-    %{boot_attempts: attempts} = Store.boot_markers(s.dir)
-    failed = failed_launches(attempts, Keyword.get(opts, :core_rolled_back, false))
+    markers = Store.boot_markers(s.dir)
+    failed = failed_launches(markers, Keyword.get(opts, :core_rolled_back))
+    launch_markers = %{boot_attempts: failed + 1, stable: false, core: Keyword.get(opts, :core)}
 
-    case Store.put_boot_markers(s.dir, %{boot_attempts: failed + 1, stable: false}) do
+    case Store.put_boot_markers(s.dir, launch_markers) do
       :ok -> :ok
       {:error, e} -> Logger.error("[dyn] can't write launch markers: #{inspect(e)}")
     end
@@ -430,18 +434,21 @@ defmodule Operator.Core.Dyn.Keeper do
 
   # ── launches ──
 
-  # The last failed launch ran a Core update mob_deliver has rolled back:
-  # the Core failed, not this generation.
-  defp failed_launches(attempts, true) when attempts > 0 do
+  # The last counted launch ran a Core update that mob_deliver has rolled
+  # back since: the Core failed, not this generation. Only that launch: one
+  # that died before reaching the Keeper recorded nothing, and the markers
+  # still name what the launch before it ran.
+  defp failed_launches(%{boot_attempts: attempts, core: core}, core)
+       when attempts > 0 and is_binary(core) do
     Logger.info(
-      "[dyn] the last launch failed on a Core update that was rolled back; " <>
+      "[dyn] the last launch failed on Core update #{core}, rolled back since; " <>
         "not counted against the Dyn generation"
     )
 
     attempts - 1
   end
 
-  defp failed_launches(attempts, _core_rolled_back), do: attempts
+  defp failed_launches(%{boot_attempts: attempts}, _core_rolled_back), do: attempts
 
   defp launch(s, failed) do
     s = %{
