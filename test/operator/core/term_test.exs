@@ -157,15 +157,17 @@ defmodule Operator.Core.TermTest do
       [row] = Term.entry_rows(entry, "m1", owner)
 
       assert [
-               %{text: "Run\u00A0"},
-               %{text: "mix\u00A0", font_weight: "bold"},
+               %{text: "Run\u00A0", font: :term},
+               %{text: "mix\u00A0", font: :term_bold},
                %{text: "test"} = test,
                %{text: "\u00A0"},
                %{text: "now"}
              ] =
                texts(row)
 
-      assert test.font_weight == "bold"
+      # a real bold face, never a synthesized weight
+      assert test.font == :term_bold
+      refute Enum.any?(texts(row), &(Map.has_key?(&1, :font_weight) or Map.has_key?(&1, :italic)))
       assert test.text_color == Term.color(t, "fg")
     end
 
@@ -178,7 +180,7 @@ defmodule Operator.Core.TermTest do
           "openrouter:x/y"
         )
 
-      assert ["⏺ notes(action: \"read\")"] =
+      assert ["● notes(action: \"read\")"] =
                entry |> Term.entry_rows("m2", owner) |> Term.rows_text()
 
       [row] = Term.entry_rows(entry, "m2", owner)
@@ -207,11 +209,21 @@ defmodule Operator.Core.TermTest do
         )
 
       [row] = Term.entry_rows(failed, "m5", owner)
-      assert [%{text: "✗ OpenRouter 402", font_weight: "bold", text_color: red}] = texts(row)
+      assert [%{text: "✗ OpenRouter 402", font: :term_bold, text_color: red}] = texts(row)
       assert red == Term.color(t, "error")
 
       [row] = Term.entry_rows(Session.custom(:notice, "Stopped by the user."), "m6", owner)
-      assert [%{text: "· Stopped by the user.", italic: true}] = texts(row)
+      assert [%{text: "· Stopped by the user.", font: :term_italic}] = texts(row)
+    end
+
+    test "each style picks its own face" do
+      assert Term.font_token(%{}) == :term
+      assert Term.font_token(%{bold: true}) == :term_bold
+      assert Term.font_token(%{italic: true}) == :term_italic
+      assert Term.font_token(%{bold: true, italic: true}) == :term_bold_italic
+      fonts = Term.default_theme().fonts
+      assert fonts.term_bold == %{ios: "JetBrainsMono-Bold", android: "jetbrainsmono_bold"}
+      assert Enum.all?(Map.keys(fonts), &File.exists?("priv/fonts/#{fonts[&1].ios}.ttf"))
     end
 
     test "a code block gets a Copy button; no fence lines are shown", %{owner: owner} do

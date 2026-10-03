@@ -28,9 +28,25 @@ defmodule Operator.Core.Term do
   @spec default_theme() :: map()
   def default_theme do
     %{
-      # Monospace on both platforms (`font: :term` resolves through Mob.Theme's
-      # fonts map): Android's system "monospace" family, iOS's Menlo.
-      font: %{ios: "Menlo-Regular", android: "monospace"},
+      # One real face per style (JetBrains Mono, bundled from priv/fonts), so
+      # bold and italic are never synthesized: mob's Android side turns a
+      # system family like "monospace" into a single regular face, and
+      # Compose's bold on it falls back to the default sans (see DESIGN.md).
+      # Installed as Mob.Theme font tokens; `font_token/1` picks one per style.
+      fonts: %{
+        term:
+          Mob.Theme.font("JetBrainsMono-Regular",
+            from_file: "priv/fonts/JetBrainsMono-Regular.ttf"
+          ),
+        term_bold:
+          Mob.Theme.font("JetBrainsMono-Bold", from_file: "priv/fonts/JetBrainsMono-Bold.ttf"),
+        term_italic:
+          Mob.Theme.font("JetBrainsMono-Italic", from_file: "priv/fonts/JetBrainsMono-Italic.ttf"),
+        term_bold_italic:
+          Mob.Theme.font("JetBrainsMono-BoldItalic",
+            from_file: "priv/fonts/JetBrainsMono-BoldItalic.ttf"
+          )
+      },
       text_size: 13,
       line_height: 1.25,
       padding: 8,
@@ -53,7 +69,8 @@ defmodule Operator.Core.Term do
         user: %{color: "user", prefix: "› "},
         assistant: %{color: "fg"},
         thinking: %{color: "dim", italic: true},
-        tool_call: %{color: "tool", prefix: "⏺ "},
+        # "●" renders as text on both platforms ("⏺" gets emoji presentation on Android)
+        tool_call: %{color: "tool", prefix: "● "},
         tool_result: %{color: "dim", prefix: "  ⎿ "},
         tool_error: %{color: "error", prefix: "  ⎿ "},
         error: %{color: "error", bold: true, prefix: "✗ "},
@@ -97,11 +114,22 @@ defmodule Operator.Core.Term do
     install()
   end
 
-  @doc "Registers the theme's font as the `:term` font token in Mob's theme."
+  @doc "Registers the theme's fonts (`:term`, `:term_bold`, …) as Mob.Theme font tokens."
   @spec install() :: :ok
   def install do
     t = theme()
-    Mob.Theme.set({Mob.Theme.Dark, fonts: %{term: t.font}, background: color(t, "bg")})
+    Mob.Theme.set({Mob.Theme.Dark, fonts: t.fonts, background: color(t, "bg")})
+  end
+
+  @doc "The font token for a style: a real face per bold / italic combination."
+  @spec font_token(map()) :: :term | :term_bold | :term_italic | :term_bold_italic
+  def font_token(style) do
+    case {style[:bold] == true, style[:italic] == true} do
+      {false, false} -> :term
+      {true, false} -> :term_bold
+      {false, true} -> :term_italic
+      {true, true} -> :term_bold_italic
+    end
   end
 
   @spec color(map(), String.t()) :: integer()
@@ -437,14 +465,11 @@ defmodule Operator.Core.Term do
   defp text_node(text, style, theme) do
     props = %{
       text: text,
-      font: :term,
+      font: font_token(style),
       text_size: theme.text_size,
       line_height: theme.line_height,
       text_color: color(theme, style[:color] || "fg")
     }
-
-    props = if style[:bold], do: Map.put(props, :font_weight, "bold"), else: props
-    props = if style[:italic], do: Map.put(props, :italic, true), else: props
 
     props =
       if style[:background],

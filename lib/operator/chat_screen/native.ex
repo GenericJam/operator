@@ -63,17 +63,36 @@ end
 
 defmodule Operator.ChatScreen.Follow do
   @moduledoc """
-  Stick-to-bottom for the transcript list. Before each repaint the screen
-  asks where the list is: at (or near) the bottom means keep following new
-  output; scrolled up means the user is reading, so leave it alone until
-  they come back down. Android's lazy list reports item indexes (`:index`),
-  iOS a pixel scroll view (`:pixel`).
+  Stick-to-bottom for the transcript list, decided from how the list
+  moved, not from where it is relative to a max that new rows just grew:
+  a burst of rows leaves the offset far from the new bottom even though
+  the user never scrolled.
+
+    * Following, and the offset didn't go back since the last check: keep
+      following (the list only moves down by our own scrolling).
+    * Following, and the offset went back: the user scrolled up; stop.
+    * Not following: resume once the user is back at the bottom.
+
+  Android's lazy list reports item indexes (`:index`), iOS a pixel scroll
+  view (`:pixel`).
   """
 
-  @doc "Whether to keep following, given the list's scroll info (or an error: keep the current choice)."
-  @spec following?(map() | {:error, term()} | nil, boolean()) :: boolean()
-  def following?(%{} = info, _current), do: at_bottom?(info)
-  def following?(_unavailable, current), do: current
+  @doc """
+  `{following, offset_to_remember}` from the list's scroll info, whether we
+  were following, and the offset seen at the last check (nil at first).
+  Without scroll info (host, list not laid out yet) nothing changes.
+  """
+  @spec decide(map() | {:error, term()} | nil, boolean(), float() | nil) ::
+          {boolean(), float() | nil}
+  def decide(%{offset: {_, y}} = info, true, last),
+    do: {last == nil or y >= last - slack(info), y}
+
+  def decide(%{offset: {_, y}} = info, false, _last), do: {at_bottom?(info), y}
+  def decide(_unavailable, following, last), do: {following, last}
+
+  # How far back the offset may move without counting as a user scroll.
+  defp slack(%{kind: :index}), do: 0.5
+  defp slack(%{kind: :pixel}), do: 4.0
 
   @spec at_bottom?(map()) :: boolean()
   def at_bottom?(%{kind: :index, offset: {_, y}, max_offset: {_, max}}), do: max - y <= 1.0

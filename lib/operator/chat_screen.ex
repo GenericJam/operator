@@ -192,7 +192,8 @@ defmodule Operator.ChatScreen do
         next_key: next,
         stream: nil,
         flush_timer: nil,
-        following: true
+        following: true,
+        last_offset: nil
       )
 
     socket =
@@ -292,12 +293,13 @@ defmodule Operator.ChatScreen do
     Mob.Socket.assign(socket, :flush_timer, nil)
   end
 
-  # New output: decide whether to follow (from where the list is now, before
-  # this repaint lands), repaint, then scroll once the frame is in.
+  # New output: decide whether to follow (from how the list moved since the
+  # last check), repaint, then scroll once the frame is in.
   defp repaint(socket) do
-    following = Follow.following?(Native.impl().scroll_info(@list_id), socket.assigns.following)
+    %{following: following, last_offset: last} = socket.assigns
+    {following, offset} = Follow.decide(Native.impl().scroll_info(@list_id), following, last)
     if following, do: Process.send_after(self(), :stick, @stick_ms)
-    socket |> Mob.Socket.assign(:following, following) |> refresh()
+    socket |> Mob.Socket.assign(following: following, last_offset: offset) |> refresh()
   end
 
   defp refresh(socket) do
@@ -413,7 +415,8 @@ defmodule Operator.ChatScreen do
   # ── chrome ──
 
   defp header(a, t) do
-    model = String.replace_prefix(a.model, "openrouter:", "")
+    # Status and cost first: the line is one row and gets cut at the end.
+    model = a.model |> String.split("/") |> List.last()
 
     tokens =
       if a.totals.tokens >= 1000,
@@ -421,9 +424,8 @@ defmodule Operator.ChatScreen do
         else: "#{a.totals.tokens}"
 
     queued = if a.queued > 0, do: " · #{a.queued} queued", else: ""
-
-    line =
-      "#{model} · #{tokens} tok · $#{:erlang.float_to_binary(a.totals.cost, decimals: 4)} · #{a.status}#{queued}"
+    cost = :erlang.float_to_binary(a.totals.cost, decimals: 4)
+    line = "#{a.status}#{queued} · $#{cost} · #{tokens} tok · #{model}"
 
     bar_row(t, [
       text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2),
@@ -448,7 +450,12 @@ defmodule Operator.ChatScreen do
     detail = a.detail || if(a.status == :running, do: "working…", else: "")
 
     bar_row(t, [
-      text(detail, t, "dim", weight: 1, max_lines: 1, italic: true, text_size: t.text_size - 2),
+      text(detail, t, "dim",
+        weight: 1,
+        max_lines: 1,
+        font: :term_italic,
+        text_size: t.text_size - 2
+      ),
       %{
         type: :text,
         props: %{

@@ -73,7 +73,7 @@ defmodule Operator.ChatScreenTest do
     refute text(view) =~ "**"
 
     view = pump(view, :agent_end)
-    assert %{props: %{font_weight: "bold"}} = find(view, :text, text: "world")
+    assert %{props: %{font: :term_bold}} = find(view, :text, text: "world")
     assert text(view) =~ "› hi"
     assert button?(view, "Send") and not button?(view, "Stop")
     assert_renderable(view)
@@ -95,7 +95,7 @@ defmodule Operator.ChatScreenTest do
     [_, second] = FakeLLM.requests(llm)
     assert Enum.any?(second.messages, &(&1.role == :user and hd(&1.content).text == "focus on y"))
     assert text(view) =~ "› focus on y"
-    assert text(view) =~ "⏺"
+    assert text(view) =~ "●"
   end
 
   test "Stop ends the run and shows the notice", %{tmp_dir: dir} do
@@ -109,7 +109,7 @@ defmodule Operator.ChatScreenTest do
   end
 
   describe "stick to bottom" do
-    test "follows new output while at the bottom; stops once the user scrolls up", %{tmp_dir: dir} do
+    test "a burst of rows keeps following; a scroll up stops it", %{tmp_dir: dir} do
       script = [
         [{:text, "one\n"}, {:sleep, 250}, {:text, "two\n"}, {:sleep, 250}, {:text, "three"}]
       ]
@@ -123,17 +123,18 @@ defmodule Operator.ChatScreenTest do
       view = pump(view, :stick)
       assert_received {:scrolled_to, "transcript", +0.0, 19.0}
 
-      # the user scrolled up: no more scrolling on new output
-      Process.put(:fake_scroll_info, FakeNative.index_info(3, 10, 20))
+      # 40 rows landed at once: far from the new bottom, but the user didn't move
+      Process.put(:fake_scroll_info, FakeNative.index_info(10, 10, 60))
       view = pump(view, :flush)
+      assert assigns(view).following
+      view = pump(view, :stick)
+      assert_received {:scrolled_to, "transcript", +0.0, 59.0}
+
+      # the user scrolled up: no more scrolling on new output
+      Process.put(:fake_scroll_info, FakeNative.index_info(3, 10, 60))
+      view = pump(view, :message_end)
       refute assigns(view).following
       refute_receive :stick, 150
-
-      # back at the bottom: the next repaint (the finished reply) follows again
-      Process.put(:fake_scroll_info, FakeNative.index_info(9, 10, 20))
-      view = pump(view, :message_end)
-      assert assigns(view).following
-      _ = pump(view, :stick)
     end
 
     test "the decision: index lists, pixel scroll views, no info" do
@@ -154,8 +155,27 @@ defmodule Operator.ChatScreenTest do
       refute Follow.at_bottom?(%{pixel | offset: {0.0, 500.0}})
       assert Follow.bottom(pixel) == {0.0, 1000.0}
 
-      assert Follow.following?({:error, :unavailable}, true)
-      refute Follow.following?({:error, :unavailable}, false)
+      assert Follow.decide({:error, :unavailable}, true, 4.0) == {true, 4.0}
+      assert Follow.decide({:error, :unavailable}, false, nil) == {false, nil}
+    end
+
+    test "the decision over time: follow, burst, scroll up, come back" do
+      at = &FakeNative.index_info/3
+      assert {true, 10.0} = Follow.decide(at.(10, 10, 20), true, nil)
+      assert {true, 10.0} = Follow.decide(at.(10, 10, 60), true, 10.0)
+      assert {false, 4.0} = Follow.decide(at.(4, 10, 60), true, 10.0)
+      assert {false, 30.0} = Follow.decide(at.(30, 10, 60), false, 4.0)
+      assert {true, 49.0} = Follow.decide(at.(49, 10, 60), false, 30.0)
+
+      pixel = %{
+        kind: :pixel,
+        offset: {0.0, 500.0},
+        viewport: {0.0, 800.0},
+        max_offset: {0.0, 3000.0}
+      }
+
+      assert {true, 500.0} = Follow.decide(pixel, true, 498.0)
+      assert {false, 500.0} = Follow.decide(pixel, true, 900.0)
     end
   end
 
@@ -210,6 +230,7 @@ defmodule Operator.ChatScreenTest do
 
     assert assigns(view).model == "openrouter:openai/gpt-5-mini"
     assert Loop.snapshot(loop).model == "openrouter:openai/gpt-5-mini"
-    assert text(view) =~ "openai/gpt-5-mini"
+    # status and cost first, the model's short name last (the line is cut at the end)
+    assert text(view) =~ "idle · $0.0000 · 0 tok · gpt-5-mini"
   end
 end

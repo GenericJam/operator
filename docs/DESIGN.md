@@ -166,6 +166,15 @@ The transcript renders the GitHub-flavoured Markdown subset omp's terminal
 renders (`pi-tui/src/components/markdown.ts`), so a session reads the same in
 both; colour comes from role and construct only (`Operator.Core.Term`).
 
+Fonts: the terminal uses JetBrains Mono (OFL 1.1, `priv/fonts/`, licence in
+`OFL.txt`) with one real face per style (`:term`, `:term_bold`,
+`:term_italic`, `:term_bold_italic` Mob.Theme tokens); Term picks the face
+instead of setting `font_weight`/`italic`. Reason (mob behaviour, found on
+the Moto G): mob's Android `fontFamilyProp` resolves a system family name
+such as `"monospace"` to `FontFamily(Typeface.create(name, NORMAL))`, a
+single regular face, so Compose's bold/italic on it falls back to the default
+sans. Bundled fonts need a `mix mob.deploy --native`.
+
 ## 4. Tools in v1
 
 Core: `read`, `write`/`edit` (hashline anchors, on the agent's own Dyn
