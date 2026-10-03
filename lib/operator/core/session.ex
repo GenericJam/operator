@@ -14,12 +14,17 @@ defmodule Operator.Core.Session do
       `usage`, `stopReason`, `errorMessage`), `toolResult`
     * `custom_message` (`customType` `"operator.notice"` / `"operator.error"` /
       `"operator.aside"`, `content`, `display`) for loop notices
+    * `compaction` (pi's `CompactionEntry`: `summary`, `firstKeptEntryId`,
+      `tokensBefore`, `tokensAfter`, `method: "soft"`): the branch before
+      `firstKeptEntryId`, summarized by the model (`Operator.Core.Compaction`)
 
   Reading keeps every entry, including types Operator doesn't know (omp's
-  `custom`, `compaction`, `title_change`, `thinking_level_change`, …). They
-  are carried along (Operator only appends, never rewrites) and ignored
-  when building the model context: `context/1` walks the leaf's branch and
-  turns `message` and `custom_message` entries into req_llm messages.
+  `custom`, `title_change`, `thinking_level_change`, …). They are carried
+  along (Operator only appends, never rewrites) and ignored when building
+  the model context. `context/1` walks the leaf's branch as pi's
+  `buildSessionContext` does: the latest `compaction`'s summary first, then
+  the entries from its `firstKeptEntryId` on, `message` and
+  `custom_message` entries turned into req_llm messages.
 
   The loop builds every request with `context/1` over its entry list, and
   `append/2` returns the entry as it reads back from disk, so a resumed
@@ -202,7 +207,7 @@ defmodule Operator.Core.Session do
       "api" => provider,
       "provider" => provider,
       "model" => model_id,
-      "usage" => pi_usage(reply[:usage]),
+      "usage" => usage(reply[:usage]),
       "stopReason" => reply.stop_reason,
       "timestamp" => now_ms()
     }
@@ -242,6 +247,24 @@ defmodule Operator.Core.Session do
   @spec model_change(String.t()) :: entry()
   def model_change(model), do: %{"type" => "model_change", "model" => to_pi_model(model)}
 
+  @doc """
+  A compaction, as pi's local summarizer writes its `CompactionEntry`
+  (`method: "soft"`, `fromExtension: false`): from now on `context/1`
+  sends `summary` in place of the branch before `first_kept_id`.
+  """
+  @spec compaction(String.t(), String.t(), non_neg_integer(), non_neg_integer()) :: entry()
+  def compaction(summary, first_kept_id, tokens_before, tokens_after) do
+    %{
+      "type" => "compaction",
+      "summary" => summary,
+      "firstKeptEntryId" => first_kept_id,
+      "tokensBefore" => tokens_before,
+      "tokensAfter" => tokens_after,
+      "method" => "soft",
+      "fromExtension" => false
+    }
+  end
+
   # ── reading entries ──
 
   @doc "The text of a message's content (string or parts; text parts only)."
@@ -270,18 +293,81 @@ defmodule Operator.Core.Session do
   # ── replay ──
 
   @doc """
-  The req_llm messages for a branch (no system prompt). `message` and
-  `custom_message` entries contribute; every other type is ignored.
-  Assistant turns with no text and no tool calls (empty errors / aborts)
-  and pi's superseded `retryRecovery` turns are dropped, and a tool call
-  left without a result gets pi's synthetic "aborted" result, so the
-  context is always valid for the provider.
+  The req_llm messages for a branch (no system prompt), as pi's
+  `buildSessionContext` builds them. With a `compaction` on the branch,
+  the latest one's summary comes first (rendered as pi renders it), then
+  the entries from its `firstKeptEntryId` up to it, then everything after
+  it (see `compacted/1`); otherwise the whole branch. See `messages/1`.
   """
   @spec context([entry()]) :: [ReqLLM.Message.t()]
   def context(entries) do
+    {compaction, kept, later} = compacted(entries)
+
+    summary =
+      for %{"summary" => s} when is_binary(s) <- List.wrap(compaction),
+          do: Context.user(compaction_context(s))
+
+    summary ++ messages(kept ++ later)
+  end
+
+  @doc """
+  The req_llm messages for `entries` as given (no compaction applied).
+  `message` and `custom_message` entries contribute; every other type is
+  ignored. Assistant turns with no text and no tool calls (empty errors /
+  aborts) and pi's superseded `retryRecovery` turns are dropped, and a
+  tool call left without a result gets pi's synthetic "aborted" result,
+  so the context is always valid for the provider.
+  """
+  @spec messages([entry()]) :: [ReqLLM.Message.t()]
+  def messages(entries) do
     entries
     |> Enum.flat_map(&to_messages/1)
     |> close_dangling_calls()
+  end
+
+  @doc """
+  Splits a branch at its latest `compaction`: `{compaction, kept, later}`.
+  `kept` runs from the compaction's `firstKeptEntryId` up to it (empty
+  when that entry is not before it), `later` is everything after it.
+  Without a compaction: `{nil, [], entries}`.
+  """
+  @spec compacted([entry()]) :: {entry() | nil, [entry()], [entry()]}
+  def compacted(entries) do
+    last =
+      entries
+      |> Enum.with_index()
+      |> Enum.reduce(nil, fn
+        {%{"type" => "compaction"}, i}, _last -> i
+        _entry, last -> last
+      end)
+
+    case last do
+      nil ->
+        {nil, [], entries}
+
+      i ->
+        {before, [compaction | later]} = Enum.split(entries, i)
+
+        kept =
+          case compaction["firstKeptEntryId"] do
+            id when is_binary(id) -> Enum.drop_while(before, &(&1["id"] != id))
+            _ -> []
+          end
+
+        {compaction, kept, later}
+    end
+  end
+
+  # pi's prompts/compaction-summary-context.md.
+  defp compaction_context(summary) do
+    """
+    Prior model work/tool state available.
+    MUST build on prior work; NEVER duplicate prior work.
+
+    <summary>
+    #{summary}
+    </summary>\
+    """
   end
 
   defp to_messages(%{"type" => "message", "message" => %{"role" => role} = m})
@@ -390,6 +476,32 @@ defmodule Operator.Core.Session do
     }
   end
 
+  @doc "pi's `usage` (tokens; `cost` in dollars) from req_llm's usage map; nil gives zeros."
+  @spec usage(map() | nil) :: map()
+  def usage(nil), do: usage(%{})
+
+  def usage(u) do
+    cache_read = u[:cache_read_tokens] || u[:cached_tokens] || 0
+    cache_write = u[:cache_write_tokens] || u[:cache_creation_tokens] || 0
+    input = max((u[:input_tokens] || 0) - cache_read - cache_write, 0)
+    output = u[:output_tokens] || 0
+
+    %{
+      "input" => input,
+      "output" => output,
+      "cacheRead" => cache_read,
+      "cacheWrite" => cache_write,
+      "totalTokens" => input + output + cache_read + cache_write,
+      "cost" => %{
+        "input" => num(u[:input_cost]),
+        "output" => num(u[:output_cost]),
+        "cacheRead" => 0,
+        "cacheWrite" => 0,
+        "total" => num(u[:total_cost] || u[:cost])
+      }
+    }
+  end
+
   @doc ~S|`"openrouter:anthropic/x"` (req_llm) → `"openrouter/anthropic/x"` (pi).|
   @spec to_pi_model(String.t()) :: String.t()
   def to_pi_model(spec), do: String.replace(spec, ":", "/", global: false)
@@ -470,30 +582,6 @@ defmodule Operator.Core.Session do
       [provider, id] -> {provider, id}
       [id] -> {"openrouter", id}
     end
-  end
-
-  defp pi_usage(nil), do: pi_usage(%{})
-
-  defp pi_usage(u) do
-    cache_read = u[:cache_read_tokens] || u[:cached_tokens] || 0
-    cache_write = u[:cache_write_tokens] || u[:cache_creation_tokens] || 0
-    input = max((u[:input_tokens] || 0) - cache_read - cache_write, 0)
-    output = u[:output_tokens] || 0
-
-    %{
-      "input" => input,
-      "output" => output,
-      "cacheRead" => cache_read,
-      "cacheWrite" => cache_write,
-      "totalTokens" => input + output + cache_read + cache_write,
-      "cost" => %{
-        "input" => num(u[:input_cost]),
-        "output" => num(u[:output_cost]),
-        "cacheRead" => 0,
-        "cacheWrite" => 0,
-        "total" => num(u[:total_cost] || u[:cost])
-      }
-    }
   end
 
   defp num(n) when is_number(n), do: n

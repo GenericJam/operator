@@ -246,6 +246,51 @@ defmodule Operator.Core.SessionTest do
     end
   end
 
+  describe "a compacted branch" do
+    defp e(entry, id), do: Map.put(entry, "id", id)
+
+    defp reply(text, calls \\ []),
+      do: Session.assistant(%{text: text, tool_calls: calls, stop_reason: "stop"}, model())
+
+    defp texts(messages),
+      do: Enum.map(messages, &{&1.role, Enum.map_join(&1.content, "", fn p -> p.text end)})
+
+    test "sends the latest summary as pi renders it, then the kept entries, then the rest" do
+      call = %{"id" => "t1", "name" => "echo", "arguments" => %{}}
+
+      entries = [
+        e(Session.user("old question"), "u1"),
+        e(reply("old answer"), "a1"),
+        e(Session.user("kept question"), "u2"),
+        e(Session.compaction("FIRST", "u1", 100, 50), "c1"),
+        e(reply("kept answer", [call]), "a2"),
+        e(Session.tool_result("t1", "echo", "out", false), "r2"),
+        e(Session.compaction("## Goal\n- x", "u2", 300, 80), "c2"),
+        e(Session.user("new question"), "u3")
+      ]
+
+      assert texts(Session.context(entries)) == [
+               {:user,
+                "Prior model work/tool state available.\n" <>
+                  "MUST build on prior work; NEVER duplicate prior work.\n\n" <>
+                  "<summary>\n## Goal\n- x\n</summary>"},
+               {:user, "kept question"},
+               {:assistant, "kept answer"},
+               {:tool, "out"},
+               {:user, "new question"}
+             ]
+
+      # a first kept entry not before the compaction: nothing kept but the summary
+      gone = [
+        e(Session.user("a"), "u1"),
+        e(Session.compaction("S", "zz", 1, 1), "c1"),
+        e(Session.user("b"), "u2")
+      ]
+
+      assert [{:user, "Prior model work" <> _}, {:user, "b"}] = texts(Session.context(gone))
+    end
+  end
+
   test "lists sessions newest first, by header", %{tmp_dir: dir} do
     a = Session.new(dir, model(), dir)
     {_, _} = Session.append(a, Session.user("older"))

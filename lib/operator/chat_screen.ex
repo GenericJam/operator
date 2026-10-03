@@ -350,6 +350,17 @@ defmodule Operator.ChatScreen do
     |> refresh()
   end
 
+  defp on_event(%{type: :compaction_start}, socket) do
+    socket
+    |> cancel_flush()
+    |> Mob.Socket.assign(stream: nil, detail: "compacting context…")
+    |> refresh()
+  end
+
+  # The compaction notice joins the transcript like any finished entry.
+  defp on_event(%{type: :compaction, entry: entry}, socket),
+    do: on_event(%{type: :message_end, entry: entry}, Mob.Socket.assign(socket, :detail, nil))
+
   defp on_event(%{type: :tool_execution_start, name: name}, socket),
     do: Mob.Socket.assign(socket, :detail, "running #{name}…")
 

@@ -22,6 +22,17 @@ defmodule Operator.Core.Loop do
   with `:budget` (a data dir) the per-day cost cap (`Operator.Core.Budget`):
   checked before each model call, each reply's cost recorded.
 
+  Compaction (pi's; `Operator.Core.Compaction`): before each model call, a
+  context over the window (`:context_window`, default the model's) minus
+  the reserve (`:reserve_tokens`, default pi's) has its older part
+  summarized by the model into a `compaction` entry, keeping about
+  `:keep_recent_tokens` (pi's 20,000) of recent messages. The summary call
+  uses `:compaction_model` (default the session's) with an explicit
+  `:compaction_max_tokens` (4096), runs in a worker like a model call and
+  counts toward the cost cap; if it fails, the run ends with an error
+  notice and nothing else is persisted. A call the provider rejects as
+  over the context window is compacted and retried once.
+
   Everything is persisted to the session as it happens
   (`Operator.Core.Session`, omp/pi's JSONL).
   """
@@ -29,6 +40,7 @@ defmodule Operator.Core.Loop do
 
   alias Operator.Core.Artifacts
   alias Operator.Core.Budget
+  alias Operator.Core.Compaction
   alias Operator.Core.Events
   alias Operator.Core.LLM
   alias Operator.Core.Session
@@ -47,7 +59,12 @@ defmodule Operator.Core.Loop do
     task_supervisor: Operator.Core.TaskSup,
     tools: :registry,
     before_tool_call: &ToolRunner.allow_all/2,
-    llm: {LLM.ReqLLM, []}
+    llm: {LLM.ReqLLM, []},
+    context_window: nil,
+    reserve_tokens: nil,
+    keep_recent_tokens: 20_000,
+    compaction_model: nil,
+    compaction_max_tokens: 4096
   ]
 
   # ── API ──
@@ -58,7 +75,8 @@ defmodule Operator.Core.Loop do
   `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:before_tool_call` (`fn call, ctx -> :allow | {:block, reason}
   end`), `:task_supervisor`, `:budget` (the data dir holding the cost
-  ledger and cap; nil means no cap), and the guards above.
+  ledger and cap; nil means no cap), and the compaction options and
+  guards above.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -214,6 +232,17 @@ defmodule Operator.Core.Loop do
   def handle_info(:retry_attempt, %{run: %{phase: :backoff}} = s),
     do: {:noreply, start_attempt(put_run(s, retry_timer: nil))}
 
+  # compaction summary worker
+  def handle_info({:compaction_done, pid, result}, %{run: %{compaction: %{pid: pid} = c}} = s) do
+    Process.demonitor(c.ref, [:flush])
+    {:noreply, compaction_done(s, result)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{run: %{compaction: %{ref: ref}}} = s),
+    do:
+      {:noreply,
+       compaction_failed(s, "the summary call crashed: #{Exception.format_exit(reason)}")}
+
   # tool tasks
   def handle_info({:tool_running, pid}, %{run: %{batch: %{running: running}}} = s) do
     case Enum.find(running, fn {_ref, r} -> r.pid == pid end) do
@@ -261,7 +290,15 @@ defmodule Operator.Core.Loop do
     s = %{
       s
       | status: :running,
-        run: %{iteration: 0, turn: 0, phase: nil, stopping: false, attempt: 1, stream: nil}
+        run: %{
+          iteration: 0,
+          turn: 0,
+          phase: nil,
+          stopping: false,
+          attempt: 1,
+          stream: nil,
+          compaction: nil
+        }
     }
 
     emit(s, %{type: :agent_start})
@@ -287,7 +324,8 @@ defmodule Operator.Core.Loop do
         iteration: run.iteration + 1,
         attempt: 1,
         batch: nil,
-        assistant: nil
+        assistant: nil,
+        overflow_retried: false
       )
 
     emit(s, %{type: :turn_start, turn: s.run.turn})
@@ -300,9 +338,14 @@ defmodule Operator.Core.Loop do
         acc
       end)
 
+    with_budget(s, &maybe_compact/1)
+  end
+
+  # Every model call, the summary call included, goes through the cap.
+  defp with_budget(s, next) do
     case budget(s) do
       :ok ->
-        start_attempt(s)
+        next.(s)
 
       {:over, spent, cap} ->
         text =
@@ -313,20 +356,37 @@ defmodule Operator.Core.Loop do
     end
   end
 
+  # pi's pre-prompt compaction: a context over the threshold has its older
+  # part summarized first; the call then goes out on the compacted context.
+  defp maybe_compact(s) do
+    entries = Enum.reverse(s.entries_rev)
+    request = request(s, entries)
+    tokens = Compaction.context_tokens(entries, request)
+    window = window(s, s.session.model)
+
+    with true <- Compaction.should_compact?(tokens, window, s.opts.reserve_tokens),
+         %{} = plan <- Compaction.prepare(entries, s.opts.keep_recent_tokens) do
+      start_compaction(s, plan, tokens, nil)
+    else
+      _ -> start_attempt(s, request)
+    end
+  end
+
   defp budget(%{opts: %{budget: dir}}) when is_binary(dir), do: Budget.check(dir)
   defp budget(_s), do: :ok
 
-  defp record_cost(%{opts: %{budget: dir}}, entry) when is_binary(dir),
-    do: Budget.record(dir, get_in(entry, ["message", "usage", "cost", "total"]) || 0)
+  defp record_cost(%{opts: %{budget: dir}}, cost) when is_binary(dir),
+    do: Budget.record(dir, cost)
 
-  defp record_cost(_s, _entry), do: :ok
+  defp record_cost(_s, _cost), do: :ok
 
   defp dollars(n), do: :erlang.float_to_binary(n * 1.0, decimals: 2)
 
-  defp start_attempt(s) do
+  defp start_attempt(s), do: start_attempt(s, request(s))
+
+  defp start_attempt(s, request) do
     {mod, llm_opts} = s.opts.llm
     loop = self()
-    request = request(s)
 
     {pid, ref} =
       spawn_monitor(fn ->
@@ -343,11 +403,13 @@ defmodule Operator.Core.Loop do
     put_run(s, phase: :streaming, stream: %{pid: pid, ref: ref, text: [], thinking: []})
   end
 
-  defp request(s) do
+  defp request(s), do: request(s, Enum.reverse(s.entries_rev))
+
+  defp request(s, entries) do
     %{
       model: s.session.model,
       system_prompt: s.opts[:system_prompt] || Operator.Core.system_prompt(),
-      messages: Session.context(Enum.reverse(s.entries_rev)),
+      messages: Session.context(entries),
       tools: s |> tools() |> Map.values() |> Enum.map(&Tool.to_req_llm/1),
       max_tokens: s.opts.max_tokens
     }
@@ -370,13 +432,40 @@ defmodule Operator.Core.Loop do
 
     reply = Map.merge(reply, %{tool_calls: calls, stop_reason: stop_reason})
     {s, entry} = persist(put_run(s, stream: nil), Session.assistant(reply, s.session.model))
-    record_cost(s, entry)
+    record_cost(s, get_in(entry, ["message", "usage", "cost", "total"]) || 0)
     emit(s, %{type: :message_end, entry: entry})
 
     if calls == [], do: end_turn(s, entry, []), else: start_batch(s, entry, calls)
   end
 
   defp handle_error(s, error) do
+    case overflow_plan(s, error) do
+      {plan, tokens} ->
+        s
+        |> put_run(stream: nil)
+        |> with_budget(&start_compaction(&1, plan, tokens, LLM.describe(error)))
+
+      nil ->
+        retry_or_fail(s, error)
+    end
+  end
+
+  # A call rejected as over the context window: compact and retry, once
+  # per model call; a second overflow ends the run like any other error.
+  defp overflow_plan(%{run: %{overflow_retried: false}} = s, error) do
+    entries = Enum.reverse(s.entries_rev)
+
+    with true <- Compaction.overflow?(error),
+         %{} = plan <- Compaction.prepare(entries, s.opts.keep_recent_tokens) do
+      {plan, Compaction.context_tokens(entries, request(s, entries))}
+    else
+      _ -> nil
+    end
+  end
+
+  defp overflow_plan(_s, _error), do: nil
+
+  defp retry_or_fail(s, error) do
     %{attempt: attempt, stream: stream} = s.run
 
     if LLM.retryable?(error) and attempt <= s.opts.max_retries do
@@ -436,6 +525,74 @@ defmodule Operator.Core.Loop do
     s
   end
 
+  # ── compaction ──
+
+  # The summary call runs in a monitored worker like a model call, so the
+  # loop still answers steer / stop; its deltas go nowhere. `overflow` is
+  # the rejected call's error, or nil for a threshold compaction.
+  defp start_compaction(s, plan, tokens, overflow) do
+    {mod, llm_opts} = s.opts.llm
+    model = s.opts.compaction_model || s.session.model
+    max_tokens = s.opts.compaction_max_tokens
+    request = Compaction.summary_request(plan, model, max_tokens, window(s, model))
+    loop = self()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        me = self()
+        send(loop, {:compaction_done, me, mod.stream(request, llm_opts, fn _delta -> :ok end)})
+      end)
+
+    reason = if overflow, do: :overflow, else: :threshold
+    emit(s, %{type: :compaction_start, reason: reason, tokens: tokens})
+
+    put_run(s,
+      phase: :compacting,
+      overflow_retried: s.run.overflow_retried or reason == :overflow,
+      compaction: %{pid: pid, ref: ref, plan: plan, tokens: tokens, overflow: overflow}
+    )
+  end
+
+  defp compaction_done(s, {:ok, reply}) do
+    %{plan: plan, tokens: before} = s.run.compaction
+    record_cost(s, Session.usage(reply[:usage])["cost"]["total"])
+
+    case String.trim(reply[:text] || "") do
+      "" ->
+        compaction_failed(s, "the model returned an empty summary")
+
+      summary ->
+        pending = Session.compaction(summary, plan.first_kept_id, before, 0)
+        request = request(s, Enum.reverse([pending | s.entries_rev]))
+        after_tokens = Compaction.request_tokens(request)
+        s = put_run(s, compaction: nil)
+        {s, entry} = persist(s, %{pending | "tokensAfter" => after_tokens})
+        Logger.info("[loop] compacted the context: ~#{before} -> ~#{after_tokens} tokens")
+        emit(s, %{type: :compaction, entry: entry})
+        with_budget(s, &start_attempt(&1, request))
+    end
+  end
+
+  defp compaction_done(s, {:error, error}), do: compaction_failed(s, LLM.describe(error))
+
+  # Only the notice is persisted, and the run ends: no retry loop.
+  defp compaction_failed(s, reason) do
+    Logger.warning("[loop] compaction failed: #{reason}")
+
+    text =
+      "Compacting the context failed: #{reason}" <>
+        case s.run.compaction.overflow do
+          nil -> ""
+          overflow -> "\nIt was needed because the model call failed: #{overflow}"
+        end
+
+    s = s |> put_run(compaction: nil) |> notice(:error, text)
+    emit(s, %{type: :turn_end, turn: s.run.turn, entry: nil, tool_results: [], error: text})
+    finish(s, :error)
+  end
+
+  defp window(s, model), do: s.opts.context_window || Compaction.context_window(model)
+
   # ── stop ──
 
   defp do_stop(%{status: :idle} = s), do: s
@@ -450,6 +607,14 @@ defmodule Operator.Core.Loop do
   defp do_stop(%{run: %{phase: :backoff, retry_timer: timer}} = s) do
     if timer, do: Process.cancel_timer(timer)
     aborted_turn(s, "", "")
+  end
+
+  defp do_stop(%{run: %{phase: :compacting, compaction: c}} = s) do
+    Process.demonitor(c.ref, [:flush])
+    Process.exit(c.pid, :kill)
+    s = put_run(s, compaction: nil)
+    emit(s, %{type: :turn_end, turn: s.run.turn, entry: nil, tool_results: [], error: nil})
+    stopped(s)
   end
 
   defp do_stop(%{run: %{phase: :tools, batch: batch}} = s) do

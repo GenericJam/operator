@@ -239,6 +239,7 @@ defmodule Operator.Core.Term do
 
   def plain_text(%{"type" => "message", "message" => m}), do: Session.text(m["content"])
   def plain_text(%{"type" => "custom_message", "content" => c}), do: Session.text(c)
+  def plain_text(%{"type" => "compaction", "summary" => s}) when is_binary(s), do: s
   def plain_text(_entry), do: ""
 
   @doc """
@@ -291,7 +292,26 @@ defmodule Operator.Core.Term do
   defp entry_lines(%{"type" => "model_change", "model" => model}, theme),
     do: prefixed("model: #{model}", theme.roles.notice)
 
+  defp entry_lines(%{"type" => "compaction"} = entry, theme) do
+    sizes =
+      case {entry["tokensBefore"], entry["tokensAfter"]} do
+        {before, after_} when is_integer(before) and is_integer(after_) ->
+          "#{kilo(before)} → #{kilo(after_)} tokens"
+
+        {before, _} when is_integer(before) ->
+          "#{kilo(before)} tokens summarized"
+
+        _ ->
+          "older turns summarized"
+      end
+
+    prefixed("context compacted: " <> sizes, theme.roles.notice)
+  end
+
   defp entry_lines(_entry, _theme), do: []
+
+  defp kilo(n) when n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
+  defp kilo(n), do: "#{n}"
 
   defp thinking_lines(m, theme) do
     case Session.thinking(m) do

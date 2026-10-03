@@ -11,6 +11,7 @@ defmodule Operator.ChatScreenTest do
   alias Operator.ChatScreen.Follow
   alias Operator.Core.Loop
   alias Operator.Core.Session
+  alias Operator.Core.Settings
   alias Operator.Test.FakeLLM
   alias Operator.Test.FakeNative
 
@@ -106,6 +107,27 @@ defmodule Operator.ChatScreenTest do
     assert text(view) =~ "partial"
     assert text(view) =~ "Stopped by the user."
     assert button?(view, "Send")
+  end
+
+  test "a compaction shows while it runs and leaves a notice line", %{tmp_dir: dir} do
+    script = [[{:text, "r1"}], [{:sleep, 100}, {:text, "SUMMARY"}], [{:text, "r2"}]]
+    # compaction above 3400 estimated tokens; each message is 2000, the
+    # newest is kept
+    %{view: view} =
+      mount_chat(dir, script,
+        context_window: 4000,
+        keep_recent_tokens: 1500,
+        tools: [Operator.Test.Tools.Echo]
+      )
+
+    view = view |> send_text(String.duplicate("a", 8000)) |> pump(:agent_end)
+    view = view |> send_text(String.duplicate("b", 8000)) |> pump(:compaction_start)
+    assert text(view) =~ "compacting context…"
+
+    view = pump(view, :agent_end)
+    assert text(view) =~ "· context compacted:"
+    assert text(view) =~ "r2"
+    assert_renderable(view)
   end
 
   describe "stick to bottom" do
@@ -382,10 +404,10 @@ defmodule Operator.ChatScreenTest do
 
     view = render_info(view, {:tap, :cycle_voice})
     assert text(view) =~ "[voice:everything]"
-    assert Operator.Core.Settings.voice(dir) == :everything
+    assert Settings.voice(dir) == :everything
 
     view = render_info(view, {:tap, :cycle_voice})
     assert text(view) =~ "[voice:off]"
-    assert Operator.Core.Settings.voice(dir) == :off
+    assert Settings.voice(dir) == :off
   end
 end

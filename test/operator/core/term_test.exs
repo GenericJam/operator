@@ -235,6 +235,24 @@ defmodule Operator.Core.TermTest do
       assert [%{text: "· Stopped by the user.", font: :term_italic}] = texts(row)
     end
 
+    test "a compaction is one dim notice line; copying it gives the summary", %{
+      owner: owner,
+      theme: t
+    } do
+      entry = Session.compaction("## Goal\n- x", "e1", 172_000, 24_500)
+      [row] = Term.entry_rows(entry, "m7", owner)
+
+      assert [%{text: "· context compacted: " <> _, font: :term_italic, text_color: c}] =
+               texts(row)
+
+      assert c == Term.color(t, "notice")
+      assert Term.plain_text(entry) == "## Goal\n- x"
+
+      # omp's own entries may lack tokensAfter
+      legacy = Map.delete(entry, "tokensAfter")
+      assert [_one_line] = Term.rows_text(Term.entry_rows(legacy, "m8", owner))
+    end
+
     test "each style picks its own face" do
       assert Term.font_token(%{}) == :term
       assert Term.font_token(%{bold: true}) == :term_bold
