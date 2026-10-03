@@ -1,8 +1,10 @@
 # Operator design: an omp-shaped agent that rewrites itself on the phone
 
-Status: proposed 2026-10-02, for Kevin's review. Builds on `docs/SPIKE.md`
-(on-device compile 0.1–0.3 s, persisted sources recompile at boot,
-OpenRouter sign-in, streaming and tool calls via req_llm on a Moto G 2021).
+Status: **accepted 2026-10-02** by Kevin: Core fixed (changed only by a
+release from the Mac), Dyn self-editable; every self-change needs biometric
+approval in v1. Builds on `docs/SPIKE.md` (on-device compile 0.1–0.3 s,
+persisted sources recompile at boot, OpenRouter sign-in, streaming and tool
+calls via req_llm on a Moto G 2021).
 
 ## 1. The core idea: a fixed core that can always repair a mutable layer
 
