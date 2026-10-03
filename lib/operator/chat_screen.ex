@@ -56,6 +56,7 @@ defmodule Operator.ChatScreen do
     settings_dir = Map.get(params, :settings_dir) || Operator.Paths.data_dir()
     _ = Dyn.subscribe()
     :ok = Phone.register_host(self())
+    if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
 
     {:ok,
      socket
@@ -67,7 +68,8 @@ defmodule Operator.ChatScreen do
        notifications_asked: false,
        proposal: pending_proposal(),
        approving: nil,
-       phone: %{}
+       phone: %{},
+       foreground: true
      )
      |> attach(loop)}
   end
@@ -213,6 +215,31 @@ defmodule Operator.ChatScreen do
   def handle_info({:permission, _capability, _result}, socket), do: {:noreply, socket}
 
   # ── phone actions for tools (Operator.Core.Phone) ──
+
+  # The camera and the photo picker are activities: Android won't start them
+  # from an app in the background, so those requests need Operator in front.
+  def handle_info({:mob_device, event}, socket)
+      when event in [:will_resign_active, :did_enter_background],
+      do: {:noreply, Mob.Socket.assign(socket, :foreground, false)}
+
+  def handle_info({:mob_device, :did_become_active}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :foreground, true)}
+
+  def handle_info({:mob_device, _event}, socket), do: {:noreply, socket}
+
+  def handle_info(
+        {:phone_request, ref, from, action, _args},
+        %{assigns: %{foreground: false}} = socket
+      )
+      when action in [:camera_photo, :pick_photos] do
+    Phone.reply(
+      from,
+      ref,
+      {:error, "Operator isn't on screen; ask the user to open it, then try again."}
+    )
+
+    {:noreply, socket}
+  end
 
   def handle_info({:phone_request, ref, from, action, args}, socket) do
     case socket.assigns.phone do

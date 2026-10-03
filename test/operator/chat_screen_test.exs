@@ -541,12 +541,24 @@ defmodule Operator.ChatScreenTest do
 
       ref = make_ref()
 
-      view
-      |> render_info({:phone_request, ref, self(), :camera_photo, %{}})
-      |> render_info({:permission, :camera, :granted})
-      |> render_info({:camera, :cancelled})
+      view =
+        view
+        |> render_info({:phone_request, ref, self(), :camera_photo, %{}})
+        |> render_info({:permission, :camera, :granted})
+        |> render_info({:camera, :cancelled})
 
       assert_received {:phone_reply, ^ref, {:ok, :cancelled}}
+      assert_received {:requested_permission, :camera}
+
+      # in the background Android won't open the camera: refused at once
+      ref = make_ref()
+
+      view
+      |> render_info({:mob_device, :did_enter_background})
+      |> render_info({:phone_request, ref, self(), :camera_photo, %{}})
+
+      assert_received {:phone_reply, ^ref, {:error, "Operator isn't on screen" <> _}}
+      refute_received {:requested_permission, :camera}
     end
   end
 

@@ -67,6 +67,10 @@ defmodule Operator.Core.LLM.ReqLLM do
   def normalize(%ReqLLM.Error.API.Response{status: status} = e) when is_integer(status),
     do: {:http, status, to_string(e.reason)}
 
+  # A failure mid-stream is raised as a Stream error wrapping the real one
+  # (its message inspects the whole cause, response headers included).
+  def normalize(%ReqLLM.Error.API.Stream{cause: cause}) when cause != nil, do: normalize(cause)
+
   def normalize(%{__struct__: mod, reason: reason})
       when mod in [Mint.TransportError, Req.TransportError, Finch.TransportError, Finch.Error],
       do: {:transport, reason}
