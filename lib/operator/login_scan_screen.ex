@@ -1,31 +1,45 @@
 defmodule Operator.LoginScanScreen do
   @moduledoc """
-  Signs the phone in with a login minted on the Mac: `mix operator.login
-  anthropic|openai` shows a QR and six words; this screen scans the QR
-  (camera permission first), takes the words, opens the code with
-  `Operator.Auth.Transfer` and stores the login with `Operator.Auth.put/2`.
+  Diagnostics → Scan QR: reads the `operator://` QR codes made on the Mac
+  (`Operator.Links`), camera permission first.
+
+    * A login from `mix operator.login anthropic|openai`: takes the six
+      words shown next to it, opens the code with `Operator.Auth.Transfer`
+      and stores the login with `Operator.Auth.put/2`. The chat opens this
+      screen at the words, with `%{link: link}`, for a login link scanned
+      with another app.
+    * A handoff part from `mix operator.handoff`: counted, then on to the
+      next; the last one opens the chat on the new session.
   """
   use Mob.Screen
 
   alias Operator.Auth
   alias Operator.Auth.Transfer
+  alias Operator.Links
   alias Operator.LoginScanScreen.Native
 
-  def mount(_params, _session, socket) do
-    {:ok,
-     Mob.Socket.assign(socket,
-       phase: :scan,
-       qr: nil,
-       words: "",
-       line: "On the Mac, in the operator checkout, run mix operator.login anthropic (or openai)."
-     )}
+  def mount(params, _session, socket) do
+    socket =
+      Mob.Socket.assign(socket,
+        phase: :scan,
+        qr: nil,
+        words: "",
+        line:
+          "On the Mac, in the operator checkout: mix operator.login anthropic (or openai) " <>
+            "to sign in, mix operator.handoff to carry on from omp."
+      )
+
+    case params do
+      %{link: link} when is_binary(link) -> {:ok, words_step(socket, link)}
+      _ -> {:ok, socket}
+    end
   end
 
   def render(assigns) do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        <Text text="Sign in from your Mac" text_size={:xl} text_color={:on_surface} />
+        <Text text="Scan a code from your Mac" text_size={:xl} text_color={:on_surface} />
         <Spacer size={8} />
         <Text text={assigns.line} text_color={:primary} />
         <Spacer size={16} />
@@ -54,18 +68,12 @@ defmodule Operator.LoginScanScreen do
   def handle_info({:permission, :camera, _denied}, socket),
     do: {:noreply, line(socket, "No camera access: allow it in Settings, then scan again.")}
 
-  def handle_info({:scan, :result, %{value: qr}}, socket) when is_binary(qr) do
-    case Transfer.check(qr) do
-      :ok ->
-        {:noreply,
-         socket
-         |> Mob.Socket.assign(phase: :words, qr: qr, words: "")
-         |> line("Code scanned. Type the six words shown on the Mac.")}
+  def handle_info({:scan, :result, %{value: text}}, socket) when is_binary(text),
+    do: {:noreply, scanned(socket, text)}
 
-      {:error, reason} ->
-        {:noreply, line(socket, Transfer.message(reason))}
-    end
-  end
+  # Scanned with another app while this screen shows.
+  def handle_info({:notification, %{data: %{operator_link: link}}}, socket) when is_binary(link),
+    do: {:noreply, scanned(socket, link)}
 
   def handle_info({:scan, :cancelled}, socket),
     do: {:noreply, line(socket, "Scan cancelled.")}
@@ -105,7 +113,32 @@ defmodule Operator.LoginScanScreen do
 
   # ── helpers ──
 
-  defp body(%{phase: :scan}), do: button("Scan login QR", :scan)
+  defp scanned(socket, text) do
+    case Links.handle(text) do
+      {:login, link} ->
+        words_step(socket, link)
+
+      {:handoff_part, received, total} ->
+        socket
+        |> Mob.Socket.assign(phase: :scan, qr: nil, words: "")
+        |> line("Handoff #{received} of #{total} received: scan the rest.")
+
+      # The handoff's session is current now: a fresh chat shows it.
+      {:handoff, _handoff, _loop} ->
+        Mob.Socket.reset_to(socket, Operator.ChatScreen)
+
+      {:error, text} ->
+        line(socket, text)
+    end
+  end
+
+  defp words_step(socket, link) do
+    socket
+    |> Mob.Socket.assign(phase: :words, qr: link, words: "")
+    |> line("Code scanned. Type the six words shown on the Mac.")
+  end
+
+  defp body(%{phase: :scan}), do: button("Scan QR", :scan)
 
   defp body(%{phase: :words, words: words}) do
     %{
@@ -121,7 +154,7 @@ defmodule Operator.LoginScanScreen do
     }
   end
 
-  defp body(%{phase: :done}), do: button("Scan another login", :rescan)
+  defp body(%{phase: :done}), do: button("Scan another code", :rescan)
 
   defp line(socket, text), do: Mob.Socket.assign(socket, :line, text)
 

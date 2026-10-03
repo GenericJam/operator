@@ -10,8 +10,12 @@ defmodule Operator.Test.ObserverHelpers do
   alias Operator.Core.Current
   alias Operator.Test.FakeLLM
 
-  @doc "Starts Current over `dir`; returns `%{current, llm}`. `loop_opts` go to every loop."
-  def start_current(dir, script, loop_opts \\ []) do
+  @doc """
+  Starts Current over `dir`; returns `%{current, llm}`. `loop_opts` go to
+  every loop. `name` registers it (nil: unnamed; `Operator.Core.Current`
+  for code that reaches the app-wide one).
+  """
+  def start_current(dir, script, loop_opts \\ [], name \\ nil) do
     {:ok, llm} = FakeLLM.start(script)
     tasks = start_supervised!(Task.Supervisor, id: make_ref())
     loop_sup = start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: make_ref())
@@ -28,7 +32,7 @@ defmodule Operator.Test.ObserverHelpers do
 
     current =
       start_supervised!(
-        {Current, name: nil, dir: dir, loop_sup: loop_sup, loop_opts: loop_opts},
+        {Current, name: name, dir: dir, loop_sup: loop_sup, loop_opts: loop_opts},
         id: make_ref()
       )
 

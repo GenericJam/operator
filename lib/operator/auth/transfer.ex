@@ -1,18 +1,19 @@
 defmodule Operator.Auth.Transfer do
   @moduledoc """
   Carries a provider login from the Mac to the phone: `mix operator.login`
-  seals fresh credentials into a QR text plus six words, the phone's
+  seals fresh credentials into a QR link plus six words, the phone's
   `Operator.LoginScanScreen` opens them.
 
-  The QR text is `operator-login:1:<base64url(salt16 | nonce12 | ciphertext+tag)>`.
-  The plaintext is JSON `{"provider", "credentials", "created"}` (`created`
-  in ms since the epoch), encrypted with AES-256-GCM under
-  PBKDF2-HMAC-SHA256(words joined by single spaces, salt, 200 000
-  iterations, 32 bytes); the `operator-login:1` header is the associated
-  data, so a changed version fails like a changed byte. Codes older than
-  10 minutes are refused, and so are codes dated more than a minute ahead
-  of the phone's clock (a Mac clock running ahead would otherwise stretch
-  the 10 minutes).
+  The QR holds `operator://login?c=<base64url(salt16 | nonce12 |
+  ciphertext+tag)>`, so any QR app opens Operator with it
+  (`Operator.Links`). The plaintext is JSON `{"provider", "credentials",
+  "created"}` (`created` in ms since the epoch), encrypted with AES-256-GCM
+  under PBKDF2-HMAC-SHA256(words joined by single spaces, salt, 200 000
+  iterations, 32 bytes); `operator-login:1` is the associated data, so a
+  changed version fails like a changed byte. A link with a `v` other than
+  `1` is a later format. Codes older than 10 minutes are refused, and so
+  are codes dated more than a minute ahead of the phone's clock (a Mac
+  clock running ahead would otherwise stretch the 10 minutes).
 
   Only `type`, `refresh`, `accountId` and `email` travel: an OpenAI access
   token alone is ~1.8 kB, more than a terminal QR the camera reads well.
@@ -30,9 +31,9 @@ defmodule Operator.Auth.Transfer do
   Pure: no processes, no logging (the words and tokens never reach a log).
   """
 
-  @prefix "operator-login"
+  @link "operator://login?c="
   @version "1"
-  @header @prefix <> ":" <> @version
+  @header "operator-login:" <> @version
   @iterations 200_000
   @max_age_ms 10 * 60_000
   @max_skew_ms 60_000
@@ -65,7 +66,7 @@ defmodule Operator.Auth.Transfer do
 
   @doc """
   Seals `creds` (pi's auth.json entry, string keys) for `provider` into the
-  QR text and the six words that open it. `opts[:now]` (ms) stamps the code;
+  QR link and the six words that open it. `opts[:now]` (ms) stamps the code;
   it defaults to the current time.
   """
   @spec seal(atom(), map(), keyword()) :: {String.t(), String.t()}
@@ -92,12 +93,12 @@ defmodule Operator.Auth.Transfer do
       )
 
     blob = Base.url_encode64(salt <> nonce <> ciphertext <> tag, padding: false)
-    {@header <> ":" <> blob, words}
+    {@link <> blob, words}
   end
 
   @doc """
-  Recognizes a scanned QR text without the words: `:ok` for an Operator
-  login code this version reads.
+  Recognizes a scanned QR link without the words: `:ok` for an Operator
+  login link this version reads.
   """
   @spec check(String.t()) :: :ok | {:error, :not_operator_code | :unsupported_version}
   def check(qr_text) do
@@ -108,7 +109,7 @@ defmodule Operator.Auth.Transfer do
   end
 
   @doc """
-  Opens a scanned QR text with the words typed on the phone (any case,
+  Opens a scanned QR link with the words typed on the phone (any case,
   separated by spaces or commas). Returns the provider and the credentials
   to hand to `Operator.Auth.put/2`. `opts[:now]` (ms) is the time the age
   check measures against.
@@ -150,15 +151,20 @@ defmodule Operator.Auth.Transfer do
 
   # ── internals ──
 
-  defp parse(@header <> ":" <> blob) do
+  defp parse(text) do
+    case Operator.Links.params(text, "login") do
+      {:ok, %{"v" => v}} when v != @version -> {:error, :unsupported_version}
+      {:ok, %{"c" => blob}} -> unpack(blob)
+      _ -> {:error, :not_operator_code}
+    end
+  end
+
+  defp unpack(blob) do
     case Base.url_decode64(blob, padding: false) do
       {:ok, bin} when byte_size(bin) > 16 + 12 + 16 -> {:ok, bin}
       _ -> {:error, :not_operator_code}
     end
   end
-
-  defp parse(@prefix <> ":" <> _other_version), do: {:error, :unsupported_version}
-  defp parse(_), do: {:error, :not_operator_code}
 
   defp normalize_words(input) do
     case input |> String.downcase() |> String.split(~r/[\s,]+/, trim: true) do

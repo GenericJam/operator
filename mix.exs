@@ -42,8 +42,8 @@ defmodule Operator.MixProject do
       {:mob_notify, "~> 0.2.0"},
       {:mob_camera, "~> 0.1.11"},
       {:mob_photos, "~> 0.1.3"},
-      # Scans the login QR minted on the Mac by `mix operator.login`
-      # (Operator.LoginScanScreen).
+      # Diagnostics → Scan QR: the codes `mix operator.login` and `mix
+      # operator.handoff` show on the Mac (Operator.LoginScanScreen).
       {:mob_scanner, "~> 0.1.5"},
       # Mozilla CA bundle: Android has no system CA store the BEAM can find
       # (see Operator.Certs).

@@ -6,7 +6,8 @@ defmodule Operator.Core do
   then loads it), the tool registry,
   the task supervisor tools run under, the loops, `Operator.Core.Current`
   (which session the app is showing; the latest one is resumed at boot),
-  and the observers of its runs: `Operator.Core.KeepAlive` (keeps the app
+  `Operator.Handoff.Inbox` (the parts of a handoff scanned so far), and
+  the observers of its runs: `Operator.Core.KeepAlive` (keeps the app
   running in the background during a run) and `Operator.Core.Voice`
   (reads updates aloud).
 
@@ -35,6 +36,7 @@ defmodule Operator.Core do
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
       Operator.Core.Current,
+      Operator.Handoff.Inbox,
       # After Current, which they watch for loops (they re-watch if it restarts).
       Operator.Core.KeepAlive,
       Operator.Core.Voice
@@ -56,6 +58,13 @@ defmodule Operator.Core do
   @doc "Starts a fresh session (same model as the current one) and makes it current."
   @spec new_session() :: pid()
   defdelegate new_session(), to: Operator.Core.Current
+
+  @doc """
+  Starts a fresh session that opens with `entry` and makes it current
+  (`Operator.Core.Current.new_session_with/3`).
+  """
+  @spec new_session_with(Operator.Core.Session.entry(), keyword()) :: pid()
+  def new_session_with(entry, opts \\ []), do: Current.new_session_with(entry, opts)
 
   @doc "Opens a session file (from omp, say) and makes it current (`Operator.Core.Current.open/2`)."
   @spec open_session(Path.t()) :: {:ok, pid()} | {:error, term()}
@@ -109,6 +118,16 @@ defmodule Operator.Core.Current do
   def new_session(server \\ __MODULE__), do: GenServer.call(server, :new_session)
 
   @doc """
+  Starts a fresh session (as `new_session/1`) that opens with `entry`,
+  written before its loop starts: the model sees it with the next prompt,
+  and nothing is sent until then. `opts[:title]` titles the session
+  (default: from `entry`, as for a first prompt).
+  """
+  @spec new_session_with(Session.entry(), keyword(), GenServer.server()) :: pid()
+  def new_session_with(entry, opts \\ [], server \\ __MODULE__),
+    do: GenServer.call(server, {:new_session, entry, opts})
+
+  @doc """
   Opens the session file at `path` and makes it current. A file outside
   the sessions dir (one from omp, say) is copied in first, so the phone
   appends to its own copy. A session last run on a model Operator can't
@@ -148,12 +167,18 @@ defmodule Operator.Core.Current do
   end
 
   def handle_call(:new_session, _from, s) do
-    model = if s.pid, do: Loop.snapshot(s.pid).model, else: Operator.Core.default_model()
-    if s.pid, do: stop_loop(s)
+    {session, s} = replace(s)
+    s = start(s, {session, []})
+    {:reply, s.pid, s}
+  end
 
-    s =
-      start(%{s | pid: nil, ref: nil}, {Session.new(s.dir, model, Operator.Paths.data_dir()), []})
-
+  # Read back from the file, so the loop holds what a resume would (the
+  # header's model_change included).
+  def handle_call({:new_session, entry, opts}, _from, s) do
+    {session, s} = replace(s)
+    {session, _} = Session.append(%{session | title: opts[:title]}, entry)
+    {:ok, session, entries} = Session.open(session.path, session.model)
+    s = start(s, {session, entries})
     {:reply, s.pid, s}
   end
 
@@ -230,6 +255,13 @@ defmodule Operator.Core.Current do
 
       with :ok <- File.mkdir_p(dir), :ok <- File.cp(path, dest), do: {:ok, dest}
     end
+  end
+
+  # A new, unwritten session on the shown loop's model; that loop stopped.
+  defp replace(s) do
+    model = if s.pid, do: Loop.snapshot(s.pid).model, else: Operator.Core.default_model()
+    if s.pid, do: stop_loop(s)
+    {Session.new(s.dir, model, Operator.Paths.data_dir()), %{s | pid: nil, ref: nil}}
   end
 
   # Real loops get the daily cost cap, kept next to the tools' data dir.

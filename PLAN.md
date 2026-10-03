@@ -48,13 +48,13 @@ What a transfer has to deal with:
 5. **Secrets.** Never transfer credentials; omp entries like `credentialId`
    and `credential_pin` are dropped on export.
 
-Transport options (to decide when we build it):
-- **Muster** as the relay: "send this session to my phone" posts it as an
-  attachment/card for the receiving side to pull (already authenticated on
-  both ends, works across machines).
-- **Direct**: dist/adb during development, a QR-paired local link later.
-- An omp command/extension `/send-to-phone` and an Operator action
-  "Send to omp" that produces a file omp can `--resume`.
+Transport (decided, Kevin 2026-10-03): **QR codes, no server.** Work moves
+to the phone as omp's own `/handoff` document, not as the transcript (which
+assumes omp's tools: a shell, the Mac's files). `mix operator.handoff`
+takes the latest handoff from the omp session and shows it as
+`operator://handoff?…` QR codes (as many as it needs, scanned in any order,
+with any QR app); the phone starts a new session that opens with it. Whole
+session files over adb (`scripts/session.sh`) stay for debugging only.
 
 ## Terminal rendering
 
@@ -264,10 +264,16 @@ message.
    `notify`, `camera_photo` and `pick_photos` (through the chat screen, which
    asks for permissions; cancel paths verified, no photo taken at night),
    `clipboard`; `http_get` unit-tested.
-5. **Session transfer omp ⇄ phone** (this document's compatibility section),
-   starting with export/import files, then Muster as the relay. Files over
-   adb done (`scripts/session.sh pull|push`, verified both ways); Muster
-   relay not started.
+5. **Session transfer omp ⇄ phone** (this document's compatibility section).
+   Moving work to the phone is the handoff: `/handoff` in omp, then `mix
+   operator.handoff` shows it as `operator://` QR codes; scanned with the
+   camera, any QR app or Diagnostics → Scan QR, in any order, they open
+   Operator, and the last one starts a new session that opens with the
+   handoff (`Operator.Handoff`, `Operator.Links`; on Android the link rides
+   mob's notification channel, mob having no deep-link API). Built and
+   host-tested; not yet tried on a device. Files over adb
+   (`scripts/session.sh pull|push`, verified both ways) stay for debugging
+   only; the Muster relay is dropped.
 6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
    background). Secure-store key done on Android (EncryptedSharedPreferences,
    migrated and verified on the Moto); iOS not started.
@@ -276,8 +282,9 @@ message.
    PKCE flows on the phone (browser -> localhost listener, or paste
    `code#state`); credentials pi-shaped in the secure store, refreshed by
    `Operator.Auth`. From the Mac: `mix operator.login anthropic|openai`
-   prints an encrypted QR plus six words; Diagnostics -> Scan login QR on
-   the phone. Built and reviewed (reviewer subagent: SHIP after fixes);
+   prints an encrypted `operator://login` QR plus six words; scanning it
+   (camera, any QR app, or Diagnostics -> Scan QR) opens the phone at the
+   words. Built and reviewed (reviewer subagent: SHIP after fixes);
    `/login anthropic` verified on the Moto (Kevin signed in; replies stream
    from claude-haiku-4-5 on his subscription). Not yet tried: `/login
    openai`, the QR transfer.

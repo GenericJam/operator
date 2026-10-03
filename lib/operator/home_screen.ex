@@ -7,7 +7,8 @@ defmodule Operator.HomeScreen do
   stack's status, and the Dyn layer: its current generation, sample
   proposals that run the self-modification pipeline on the phone, its
   screens, and the way to the rescue screen. The first sign-in hands over
-  to `Operator.ChatScreen`.
+  to `Operator.ChatScreen`, and so does an `operator://` link scanned with
+  another app while this screen shows (the chat handles it).
   """
   use Mob.Screen
 
@@ -49,7 +50,7 @@ defmodule Operator.HomeScreen do
         <Spacer size={8} />
         {button("Open the chat", :open_chat)}
         <Spacer size={8} />
-        {button("Scan login QR", :scan_login)}
+        {button("Scan QR", :scan_qr)}
         <Spacer size={24} />
         <Text text="Spending" text_size={:sm} text_color={:muted} />
         <Text text={assigns.spend_line} text_color={:primary} />
@@ -81,8 +82,11 @@ defmodule Operator.HomeScreen do
   def handle_info({:tap, :open_chat}, socket),
     do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)}
 
-  def handle_info({:tap, :scan_login}, socket),
+  def handle_info({:tap, :scan_qr}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen)}
+
+  def handle_info({:notification, %{data: %{operator_link: link}}}, socket) when is_binary(link),
+    do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen, %{link: link})}
 
   # The first sign-in (a scanned QR, say) goes on to the chat.
   def handle_info({:operator_auth, :changed}, socket) do

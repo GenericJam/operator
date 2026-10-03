@@ -12,8 +12,9 @@ defmodule Mix.Tasks.Operator.Login do
   sealed by `Operator.Auth.Transfer` as a QR plus six words. When the
   provider shows a code page instead of redirecting, paste what it shows
   (`code#state`, the code, or the redirect URL) into the terminal. On the
-  phone: Diagnostics → Scan login QR, then type the words; the code works
-  for 10 minutes.
+  phone: scan the QR with the camera or any QR app (it opens Operator), or
+  with Diagnostics → Scan QR, then type the words; the code works for 10
+  minutes.
 
   Every run is a new grant, so the phone never shares a rotating refresh
   token with omp's own login. If omp's `/login` is running it holds the same
@@ -23,12 +24,10 @@ defmodule Mix.Tasks.Operator.Login do
   """
   use Mix.Task
 
+  alias Mix.Operator.QR
   alias Operator.Auth.Login, as: AuthLogin
   alias Operator.Auth.OAuthFlow
   alias Operator.Auth.Transfer
-
-  # eqrcode comes with mob_dev, a :dev-only dependency.
-  @compile {:no_warn_undefined, EQRCode}
 
   @wait_ms 10 * 60_000
   @providers %{
@@ -80,14 +79,15 @@ defmodule Mix.Tasks.Operator.Login do
 
     {qr, words} = Transfer.seal(provider, creds)
     flush_stdin()
-    print_qr(qr)
+    QR.print(qr)
 
     Mix.shell().info("""
 
     Words: #{words}
 
-    On the phone: Diagnostics → Scan login QR, scan this code, then type the
-    six words. The code works for 10 minutes. Press Enter here when done.
+    On the phone: scan this code with the camera (or Diagnostics → Scan QR),
+    then type the six words. The code works for 10 minutes. Press Enter here
+    when done.
     """)
 
     await_enter(stdin)
@@ -302,33 +302,4 @@ defmodule Mix.Tasks.Operator.Login do
   defp open_browser(url) do
     if match?({:unix, :darwin}, :os.type()), do: System.cmd("open", [url])
   end
-
-  # Black modules on white, whatever the terminal's colours: two rows per
-  # line with the upper half-block, foreground the top row and background
-  # the bottom one (256-colour 16 and 231 aren't remapped by themes).
-  # EQRCode's quiet zone is 2 modules; the spec asks for 4.
-  defp print_qr(text) do
-    if Code.ensure_loaded?(EQRCode) do
-      rows =
-        EQRCode.encode(text).matrix
-        |> Tuple.to_list()
-        |> Enum.map(&([0, 0] ++ Tuple.to_list(&1) ++ [0, 0]))
-
-      blank = List.duplicate(0, length(hd(rows)))
-
-      ([blank, blank] ++ rows ++ [blank, blank])
-      |> Enum.chunk_every(2, 2, [blank])
-      |> Enum.each(fn [top, bottom] -> IO.puts(qr_line(top, bottom)) end)
-    else
-      Mix.shell().info("(No QR renderer outside :dev; run with MIX_ENV=dev.) Code:\n#{text}")
-    end
-  end
-
-  defp qr_line(top, bottom) do
-    cells = Enum.zip_with(top, bottom, &"\e[38;5;#{colour(&1)};48;5;#{colour(&2)}m▀")
-    [cells, IO.ANSI.reset()]
-  end
-
-  defp colour(1), do: 16
-  defp colour(_light), do: 231
 end

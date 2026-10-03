@@ -6,7 +6,9 @@ defmodule Operator.ChatScreenTest do
   use Mob.ScreenCase, async: false
 
   import Operator.Test.LoopHelpers
+  import Operator.Test.ObserverHelpers, only: [start_current: 4]
 
+  alias Operator.Auth.Transfer
   alias Operator.ChatScreen
   alias Operator.ChatScreen.Follow
   alias Operator.Core.Loop
@@ -14,6 +16,8 @@ defmodule Operator.ChatScreenTest do
   alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
+  alias Operator.Handoff
+  alias Operator.Handoff.Inbox
   alias Operator.Test.FakeLLM
   alias Operator.Test.FakeNative
   alias Operator.Test.FlakySecureStore
@@ -784,6 +788,77 @@ defmodule Operator.ChatScreenTest do
       assert Enum.any?(codex, &(&1.spec == "openai_codex:gpt-5.5"))
       refute Enum.any?(codex, &String.contains?(&1.spec, "image"))
       assert Models.same?("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5-20251001")
+    end
+  end
+
+  describe "operator:// links" do
+    # The envelope MainActivity hands mob for a link it was opened with,
+    # as mob delivers it.
+    defp link_tap(link) do
+      {:ok, notification} =
+        Mob.Notification.decode(
+          Jason.encode!(%{
+            "presentation" => "tap",
+            "source" => "local",
+            "id" => "operator-link",
+            "data" => %{"operator_link" => link}
+          })
+        )
+
+      {:notification, notification}
+    end
+
+    test "a handoff's last part opens a new session with it as the first message; " <>
+           "the model sees it with the next prompt, not before",
+         %{tmp_dir: dir} do
+      %{llm: llm} = start_current(dir, [[{:text, "On it."}]], [], Operator.Core.Current)
+      start_supervised!({Inbox, dir: dir})
+
+      summary = "## Goal\n" <> Base.encode64(:crypto.strong_rand_bytes(2_400))
+      handoff = %{title: "Ship it", cwd: "/Users/kevin/code/operator", summary: summary}
+      [first | rest] = links = Handoff.encode(handoff)
+
+      view = mount_screen(ChatScreen, %{settings_dir: dir})
+      shown = assigns(view).sid
+
+      view = render_info(view, link_tap(first))
+      assert text(view) =~ "Handoff 1 of #{length(links)} received: scan the rest"
+      assert assigns(view).sid == shown
+
+      view = Enum.reduce(rest, view, &render_info(&2, link_tap(&1)))
+      loop = assigns(view).loop
+      assert assigns(view).sid != shown
+      assert Operator.Core.current() == loop
+      assert text(view) =~ "Handoff from omp on the Mac (project /Users/kevin/code/operator)"
+      assert %{title: "Ship it", status: :idle, path: path} = Loop.snapshot(loop)
+      assert File.read!(path) =~ "Handoff from omp on the Mac"
+      assert FakeLLM.requests(llm) == []
+
+      view |> send_text("carry on") |> pump(:agent_end)
+      assert [%{messages: messages}] = FakeLLM.requests(llm)
+      assert [framed, "carry on"] = for(m <- messages, do: Enum.map_join(m.content, & &1.text))
+      assert framed =~ summary
+    end
+
+    test "a login link opens the scanner at the six words, also when Diagnostics forwards it",
+         %{tmp_dir: dir} do
+      {link, _words} = Transfer.seal(:anthropic, %{"type" => "oauth", "refresh" => "r"})
+
+      %{view: view} = mount_chat(dir, [])
+      view = render_info(view, link_tap(link))
+      assert {:push, Operator.LoginScanScreen, %{link: ^link}} = view.socket.__mob__.nav_action
+
+      %{loop: loop} = start_loop(dir, [])
+      view = mount_screen(ChatScreen, %{loop: loop, settings_dir: dir, link: link})
+      assert_received {:operator_link, ^link} = forwarded
+      view = render_info(view, forwarded)
+      assert {:push, Operator.LoginScanScreen, %{link: ^link}} = view.socket.__mob__.nav_action
+    end
+
+    test "a QR that isn't Operator's is said plainly", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      view = render_info(view, link_tap("operator://elsewhere?x=1"))
+      assert text(view) =~ "That QR isn't an Operator code."
     end
   end
 end

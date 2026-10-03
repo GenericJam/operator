@@ -59,7 +59,8 @@ defmodule Operator.Core.Session do
   @doc """
   A new session in `dir` for `model` (a req_llm spec, `"anthropic:…"`).
   Nothing is written until the first `append/2`, which writes the header
-  (titled after the first user message) and a `model_change` entry.
+  (titled `title` when set, else after the first entry when it is a user
+  message) and a `model_change` entry.
   """
   @spec new(String.t(), String.t(), String.t()) :: t()
   def new(dir, model, cwd) do
@@ -106,7 +107,7 @@ defmodule Operator.Core.Session do
   @spec append(t(), entry()) :: {t(), entry()}
   def append(%__MODULE__{written?: false} = s, entry) do
     File.mkdir_p!(Path.dirname(s.path))
-    title = title_for(entry)
+    title = if s.title in [nil, ""], do: title_for(entry), else: s.title
 
     header = %{
       "type" => "session",

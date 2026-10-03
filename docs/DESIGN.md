@@ -217,12 +217,20 @@ Moving a login from the Mac: `mix operator.login anthropic|openai` runs the
 provider's OAuth sign-in in the Mac's browser (a one-shot listener on the
 provider's localhost port, 54545 / 1455, so omp's own `/login` must not be
 running), and seals the fresh grant with `Operator.Auth.Transfer` into a QR
-(`operator-login:1:…`, AES-256-GCM under PBKDF2-SHA256 of six EFF
-short-list words, 10-minute lifetime) plus the six words. Diagnostics →
-Scan login QR (`Operator.LoginScanScreen`, mob_scanner) opens it and stores
-it with `Operator.Auth.put/2`. Each run is a new grant, so omp and the phone
-never share a rotating refresh token; only the refresh token travels (an
-OpenAI access token alone is ~1.8 kB), and the phone refreshes on first use.
+link (`operator://login?c=…`, AES-256-GCM under PBKDF2-SHA256 of six EFF
+short-list words, 10-minute lifetime) plus the six words. Scanning it with
+the camera or any QR app opens Operator at the words (`Operator.Links`), as
+does Diagnostics → Scan QR (`Operator.LoginScanScreen`, mob_scanner); the
+login is stored with `Operator.Auth.put/2`. Each run is a new grant, so omp
+and the phone never share a rotating refresh token; only the refresh token
+travels (an OpenAI access token alone is ~1.8 kB), and the phone refreshes
+on first use.
+
+Moving work from omp: `/handoff` in omp, then `mix operator.handoff` shows
+the handoff document as `operator://handoff?…` QR codes (`Operator.Handoff`:
+deflated, at most 1200 characters each, scanned in any order); the last one
+starts a new session on the phone whose first user message is the handoff,
+framed for the phone. Nothing is sent to the model until the next prompt.
 
 ## 6. Known constraints
 - Android 15 cuts a backgrounded app's network after ~60 s: a run pauses

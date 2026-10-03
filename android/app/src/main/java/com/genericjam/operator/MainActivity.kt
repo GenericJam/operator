@@ -242,14 +242,16 @@ class MainActivity : ComponentActivity() {
             Log.i(TAG, "onCreate: MOB_DIST_PORT=$port")
         }
 
-        // A notification tap that launched this activity. Not when it is
-        // re-created from saved state or relaunched from Recents: both replay
-        // the original intent, which would deliver the same tap again now that
-        // mob delivers to a running BEAM instead of holding it for the next boot.
+        // A notification tap or an operator:// link that launched this
+        // activity. Not when it is re-created from saved state or relaunched
+        // from Recents: both replay the original intent, which would deliver
+        // the same tap again now that mob delivers to a running BEAM instead
+        // of holding it for the next boot.
         if (savedInstanceState == null &&
             (intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
         ) {
             deliverNotificationTap(intent)
+            deliverLink(intent)
         }
 
         // The BEAM outlives the Activity, and so do MobBridge's registries of
@@ -408,11 +410,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // A notification tapped while this (singleTop) activity already exists.
+    // A notification tapped, or an operator:// link opened, while this
+    // (singleTask) activity already exists.
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         deliverNotificationTap(intent)
+        deliverLink(intent)
     }
 
     // Hands NotificationReceiver's tap payload to mob, which delivers it as
@@ -423,6 +427,25 @@ class MainActivity : ComponentActivity() {
         intent?.extras?.getString("mob_notification_json")?.let { json ->
             MobBridge.nativeDeliverNotification(io.mob.plugin.MobNotifyHub.notifyPid, json)
         }
+    }
+
+    // An operator:// link (a QR from mix operator.handoff or operator.login,
+    // scanned with any app; Operator.Links). mob has no deep-link API, so the
+    // link rides the notification channel: a tap envelope with the link in
+    // its data, delivered as {:notification, %{data: %{operator_link: uri}}}
+    // to the screen showing (pid 0: never to a mob_notify registration), and
+    // held until the root screen has mounted on a cold launch.
+    private fun deliverLink(intent: android.content.Intent?) {
+        if (intent?.action != android.content.Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        if (uri.scheme != "operator") return
+        val json = org.json.JSONObject()
+            .put("presentation", "tap")
+            .put("source", "local")
+            .put("id", "operator-link")
+            .put("data", org.json.JSONObject().put("operator_link", uri.toString()))
+            .toString()
+        MobBridge.nativeDeliverNotification(0L, json)
     }
 
     // Manifest declares `android:configChanges` including `uiMode`, so a

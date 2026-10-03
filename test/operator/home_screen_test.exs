@@ -45,9 +45,9 @@ defmodule Operator.HomeScreenTest do
     assert text(view) =~ "Claude (Anthropic): signed in · token"
   end
 
-  test "Scan login QR opens the scanner" do
+  test "Scan QR opens the scanner" do
     view = mount_screen(HomeScreen)
-    assert view |> render_info({:tap, :scan_login}) |> navigated_to() == Operator.LoginScanScreen
+    assert view |> render_info({:tap, :scan_qr}) |> navigated_to() == Operator.LoginScanScreen
   end
 
   @tag :tmp_dir

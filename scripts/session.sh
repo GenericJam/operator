@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Move sessions between the phone and omp (they're the same pi JSONL format).
+# Debugging only: move whole session files between the phone and omp (they're
+# the same pi JSONL format). To carry work from omp to the phone, use a
+# handoff instead: /handoff in omp, then `mix operator.handoff` shows it as QR
+# codes the phone scans (Operator.Handoff). A transferred transcript assumes
+# omp's tools (bash, the Mac's files), which the phone doesn't have.
 #
 #   OPERATOR_SERIAL=<serial> scripts/session.sh pull [id-prefix]
 #       Copies the phone's latest session (or the one whose id starts with

@@ -35,6 +35,11 @@ defmodule Operator.ChatScreen do
   `/logout <provider>` are the app's own commands (`Operator.Auth.Login`,
   `Operator.Auth`): they never reach the model, and their results show as
   notices.
+
+  `operator://` links scanned on the Mac's QR codes (`Operator.Links`)
+  come here: a handoff's parts are collected, and the last one switches to
+  a new session that opens with the handoff (the model sees it with the
+  next prompt); a login link opens `Operator.LoginScanScreen` at the words.
   """
   use Mob.Screen
 
@@ -54,6 +59,7 @@ defmodule Operator.ChatScreen do
   alias Operator.Core.Term
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
+  alias Operator.Links
 
   @flush_ms 100
   @stick_ms 60
@@ -74,6 +80,8 @@ defmodule Operator.ChatScreen do
     :ok = Phone.register_host(self())
     :ok = DynTheme.subscribe()
     if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
+    # A link Diagnostics received: it forwards them here.
+    with %{link: link} <- params, do: send(self(), {:operator_link, link})
 
     {:ok,
      socket
@@ -395,7 +403,7 @@ defmodule Operator.ChatScreen do
        socket |> Mob.Socket.assign(:window, socket.assigns.window + @window) |> refresh()}
 
   def handle_info({:tap, :new_session}, socket) do
-    Loop.unsubscribe(socket.assigns.loop)
+    socket = detach(socket)
     {:noreply, attach(socket, Operator.Core.new_session())}
   end
 
@@ -431,8 +439,7 @@ defmodule Operator.ChatScreen do
   def handle_info({:open_session, path}, socket) do
     case Operator.Core.open_session(path) do
       {:ok, loop} ->
-        Loop.unsubscribe(socket.assigns.loop)
-        {:noreply, socket |> attach(loop) |> toast("Opened #{Path.basename(path)}")}
+        {:noreply, socket |> detach() |> attach(loop) |> toast("Opened #{Path.basename(path)}")}
 
       {:error, reason} ->
         {:noreply, toast(socket, "Couldn't open #{Path.basename(path)}: #{inspect(reason)}")}
@@ -461,11 +468,38 @@ defmodule Operator.ChatScreen do
         _ -> ""
       end
 
-    {:noreply, login_toast(socket, "Signed in to #{Auth.label(provider)}#{who}.")}
+    {:noreply, lasting_toast(socket, "Signed in to #{Auth.label(provider)}#{who}.")}
   end
 
   def handle_info({:operator_login, provider, {:error, message}}, socket),
-    do: {:noreply, login_toast(socket, "Sign-in to #{Auth.label(provider)} failed: #{message}")}
+    do: {:noreply, lasting_toast(socket, "Sign-in to #{Auth.label(provider)} failed: #{message}")}
+
+  # ── operator:// links (Operator.Links) ──
+
+  # Scanned with another app, a link arrives as a notification tap
+  # (MainActivity; mob has no deep-link API); Diagnostics forwards its own
+  # through `mount/3`. The scan happens with that app in front, so the
+  # toasts last.
+  def handle_info({:notification, %{data: %{operator_link: link}}}, socket) when is_binary(link),
+    do: handle_info({:operator_link, link}, socket)
+
+  def handle_info({:operator_link, link}, socket) do
+    case Links.handle(link) do
+      {:handoff_part, received, total} ->
+        {:noreply,
+         lasting_toast(socket, "Handoff #{received} of #{total} received: scan the rest")}
+
+      {:handoff, handoff, loop} ->
+        socket = socket |> detach() |> attach(loop)
+        {:noreply, lasting_toast(socket, "Handoff#{titled(handoff)} received: say what's next")}
+
+      {:login, link} ->
+        {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen, %{link: link})}
+
+      {:error, text} ->
+        {:noreply, lasting_toast(socket, text)}
+    end
+  end
 
   def handle_info({:tap, :diagnostics}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.HomeScreen)}
@@ -520,6 +554,18 @@ defmodule Operator.ChatScreen do
     Process.send_after(self(), :stick, @attach_stick_ms)
     refresh(socket)
   end
+
+  # Stops following the shown loop. Current stops it when it starts another
+  # session, so it may be gone already.
+  defp detach(socket) do
+    Loop.unsubscribe(socket.assigns.loop)
+    socket
+  catch
+    :exit, _ -> socket
+  end
+
+  defp titled(%{title: title}) when is_binary(title), do: " (#{title})"
+  defp titled(_handoff), do: ""
 
   # `key` ("m<n>") prefixes the message's row ids and tags its copy events.
   defp message(entry, key, owner),
@@ -749,7 +795,7 @@ defmodule Operator.ChatScreen do
     with {:ok, provider} <- Auth.parse_provider(name),
          {:ok, url} <- Login.begin(provider) do
       host = URI.parse(url).host
-      login_toast(socket, "Opening #{host}: sign in there, then come back to Operator.")
+      lasting_toast(socket, "Opening #{host}: sign in there, then come back to Operator.")
     else
       :error -> toast(socket, login_usage())
       {:error, reason} -> toast(socket, "Couldn't start the sign-in: #{inspect(reason)}")
@@ -760,7 +806,7 @@ defmodule Operator.ChatScreen do
   defp command(socket, ["/login", name, pasted]) do
     with {:ok, provider} <- Auth.parse_provider(name),
          :ok <- Login.paste(provider, pasted) do
-      login_toast(socket, "Code received: finishing the sign-in…")
+      lasting_toast(socket, "Code received: finishing the sign-in…")
     else
       :error -> toast(socket, login_usage())
       {:error, reason} -> toast(socket, paste_error(reason, name))
@@ -774,7 +820,7 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  defp command(socket, _usage), do: login_toast(socket, login_usage())
+  defp command(socket, _usage), do: lasting_toast(socket, login_usage())
 
   defp logout(socket, provider) do
     case Auth.delete(provider) do
@@ -782,7 +828,7 @@ defmodule Operator.ChatScreen do
         toast(socket, "Signed out of #{Auth.label(provider)}.")
 
       {:error, reason} ->
-        login_toast(
+        lasting_toast(
           socket,
           "Couldn't sign out of #{Auth.label(provider)} (#{Auth.describe_error(reason)}): " <>
             "it is still signed in."
@@ -813,9 +859,10 @@ defmodule Operator.ChatScreen do
   defp paste_error(:no_code, _name),
     do: "No code in that: paste what the page shows (code#state)."
 
-  # Sign-in news arrives while the browser is in front: it stays up long
-  # enough to be seen on return.
-  defp login_toast(socket, text) do
+  # News that arrives while another app is in front (the browser during a
+  # sign-in, a QR app during a handoff) stays up long enough to be seen on
+  # return.
+  defp lasting_toast(socket, text) do
     Process.send_after(self(), {:clear_toast, text}, 20_000)
     socket |> Mob.Socket.assign(:toast, text) |> repaint()
   end

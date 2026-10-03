@@ -16,7 +16,7 @@ defmodule Operator.Auth.TransferTest do
   test "the words open what was sealed; only the refresh side travels" do
     {qr, words} = Transfer.seal(:anthropic, @creds)
 
-    assert "operator-login:1:" <> _ = qr
+    assert "operator://login?c=" <> _ = qr
     assert Transfer.check(qr) == :ok
 
     assert Transfer.open(qr, words) ==
@@ -59,13 +59,13 @@ defmodule Operator.Auth.TransferTest do
   end
 
   test "a changed byte fails authentication" do
-    {"operator-login:1:" <> blob, words} = Transfer.seal(:anthropic, @creds)
+    {"operator://login?c=" <> blob, words} = Transfer.seal(:anthropic, @creds)
     bin = Base.url_decode64!(blob, padding: false)
     at = byte_size(bin) - 20
     <<head::binary-size(^at), byte, tail::binary>> = bin
     tampered = Base.url_encode64(head <> <<Bitwise.bxor(byte, 1)>> <> tail, padding: false)
 
-    assert Transfer.open("operator-login:1:" <> tampered, words) == {:error, :wrong_words}
+    assert Transfer.open("operator://login?c=" <> tampered, words) == {:error, :wrong_words}
   end
 
   test "codes older than ten minutes are refused" do
@@ -88,12 +88,18 @@ defmodule Operator.Auth.TransferTest do
   end
 
   test "other versions and other QR codes are told apart" do
-    {"operator-login:1:" <> blob, words} = Transfer.seal(:anthropic, @creds)
+    {"operator://login?c=" <> blob, words} = Transfer.seal(:anthropic, @creds)
 
-    assert Transfer.open("operator-login:2:" <> blob, words) == {:error, :unsupported_version}
-    assert Transfer.check("operator-login:2:" <> blob) == {:error, :unsupported_version}
+    assert {:ok, :anthropic, _} = Transfer.open("operator://login?v=1&c=" <> blob, words)
+
+    assert Transfer.open("operator://login?v=2&c=" <> blob, words) ==
+             {:error, :unsupported_version}
+
+    assert Transfer.check("operator://login?v=2&c=" <> blob) == {:error, :unsupported_version}
+    assert Transfer.check("operator-login:1:" <> blob) == {:error, :not_operator_code}
     assert Transfer.check("https://example.com/") == {:error, :not_operator_code}
-    assert Transfer.check("operator-login:1:short") == {:error, :not_operator_code}
+    assert Transfer.check("operator://login?c=short") == {:error, :not_operator_code}
+    assert Transfer.check("operator://handoff?c=" <> blob) == {:error, :not_operator_code}
     assert Transfer.open("WIFI:S:home;;", words) == {:error, :not_operator_code}
   end
 end
