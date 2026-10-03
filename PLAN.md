@@ -263,4 +263,5 @@ message.
    adb done (`scripts/session.sh pull|push`, verified both ways); Muster
    relay not started.
 6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
-   background).
+   background). Secure-store key done on Android (EncryptedSharedPreferences,
+   migrated and verified on the Moto); iOS not started.
