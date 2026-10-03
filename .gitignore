@@ -35,3 +35,6 @@ _build/mob_release/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# ExUnit @tag :tmp_dir output
+/tmp/
