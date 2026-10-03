@@ -17,6 +17,7 @@ defmodule Operator.Core do
 
   alias Operator.Core.Current
   alias Operator.Core.Dyn
+  alias Operator.Core.DynTheme
 
   @default_model "openrouter:anthropic/claude-haiku-4.5"
 
@@ -28,6 +29,8 @@ defmodule Operator.Core do
     children = [
       Operator.Core.Dyn.Approval.Biometric,
       Operator.Core.Dyn.Keeper,
+      # After the Keeper, whose events it follows.
+      DynTheme,
       Operator.Core.ToolRegistry,
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
@@ -70,7 +73,7 @@ defmodule Operator.Core do
     monospace terminal, so keep lines and tables short. Put anything the user is likely to copy \
     (commands, values, URLs, IDs, snippets) in a fenced code block: each block gets a Copy button.
 
-    """ <> Dyn.agent_guide()
+    """ <> Dyn.agent_guide() <> "\n" <> DynTheme.agent_guide()
   end
 end
 

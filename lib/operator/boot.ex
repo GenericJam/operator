@@ -6,6 +6,7 @@ defmodule Operator.Boot do
   """
 
   alias Operator.Core.Dyn
+  alias Operator.Core.DynTheme
   alias Operator.OpenRouter.OAuth
 
   require Logger
@@ -44,7 +45,9 @@ defmodule Operator.Boot do
       core: fn -> {:ok, _} = Operator.Core.start_link() end,
       # The current Dyn generation (or boot probation's revert, or safe mode:
       # Core only), see Operator.Core.Dyn.Keeper.
-      dyn: fn -> %{} = Dyn.boot() end
+      dyn: fn -> %{} = Dyn.boot() end,
+      # The theme that generation defines, if any (Operator.Core.DynTheme).
+      dyn_theme: fn -> :ok = DynTheme.refresh() end
     ]
 
     timings =

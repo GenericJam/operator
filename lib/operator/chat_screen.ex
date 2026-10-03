@@ -33,6 +33,7 @@ defmodule Operator.ChatScreen do
   alias Operator.ChatScreen.Native
   alias Operator.Core.DictationButton
   alias Operator.Core.Dyn
+  alias Operator.Core.DynTheme
   alias Operator.Core.Loop
   alias Operator.Core.Phone
   alias Operator.Core.Session
@@ -57,6 +58,7 @@ defmodule Operator.ChatScreen do
     settings_dir = Map.get(params, :settings_dir) || Operator.Paths.data_dir()
     _ = Dyn.subscribe()
     :ok = Phone.register_host(self())
+    :ok = DynTheme.subscribe()
     if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
 
     {:ok,
@@ -438,10 +440,12 @@ defmodule Operator.ChatScreen do
 
   def handle_info({:tap, :toggle_renderer}, socket) do
     Term.put_renderer(if Term.renderer() == :native, do: :term, else: :native)
-    owner = self()
-    done_rev = Enum.map(socket.assigns.done_rev, &message(&1.entry, &1.key, owner))
-    {:noreply, socket |> Mob.Socket.assign(:done_rev, done_rev) |> refresh()}
+    {:noreply, rerender(socket)}
   end
+
+  # A Dyn generation changed the theme (Operator.Core.DynTheme): rows have
+  # its colours baked in.
+  def handle_info({:operator_theme, :changed}, socket), do: {:noreply, rerender(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
@@ -600,6 +604,12 @@ defmodule Operator.ChatScreen do
   defp short_of_end?(%{at_end: at_end}), do: not at_end
   defp short_of_end?(%{}), do: false
   defp short_of_end?(_unavailable), do: true
+
+  defp rerender(socket) do
+    owner = self()
+    done_rev = Enum.map(socket.assigns.done_rev, &message(&1.entry, &1.key, owner))
+    socket |> Mob.Socket.assign(:done_rev, done_rev) |> refresh()
+  end
 
   defp refresh(socket) do
     a = socket.assigns
