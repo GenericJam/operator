@@ -10,6 +10,7 @@ defmodule Operator.ChatScreenTest do
   alias Operator.ChatScreen
   alias Operator.ChatScreen.Follow
   alias Operator.Core.Loop
+  alias Operator.Core.Models
   alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
@@ -719,6 +720,70 @@ defmodule Operator.ChatScreenTest do
           Operator.Core.Tools.PickPhotos
         ] do
       assert tool.selftest() == :ok, inspect(tool)
+    end
+  end
+
+  describe "model picker" do
+    setup do
+      start_supervised!(Operator.Auth)
+      creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
+      :ok = Operator.Auth.put(:anthropic, creds)
+
+      on_exit(fn ->
+        for p <- Operator.Auth.providers(), do: Operator.SecureStore.delete("auth:#{p}")
+      end)
+    end
+
+    defp sheet(view), do: find(view, :sheet)
+
+    test "the model chip lists the signed-in provider's models; tapping one switches", %{
+      tmp_dir: dir
+    } do
+      %{view: view, loop: loop} = mount_chat(dir, [])
+      assert sheet(view) == nil
+
+      view = render_info(view, {:tap, :edit_model})
+      shown = view |> sheet() |> text()
+      assert shown =~ "Claude Sonnet"
+      assert shown =~ "Claude Haiku 4.5"
+      # retired models aren't offered
+      refute shown =~ "Claude Haiku 3"
+      # ChatGPT isn't signed in: a hint, no Codex models
+      assert shown =~ "/login openai to add these"
+      refute shown =~ "GPT-6"
+
+      opus = Enum.find(Models.catalog(:anthropic), &(&1.name =~ "Opus"))
+      view = render_info(view, {:tap, {:pick_model, opus.spec}})
+      assert sheet(view) == nil
+      assert Loop.snapshot(loop).model == opus.spec
+
+      # the current one is marked
+      view = render_info(view, {:tap, :edit_model})
+      assert view |> sheet() |> text() =~ "● " <> opus.name
+    end
+
+    test "/models opens it without reaching the model; Custom… opens the field", %{
+      tmp_dir: dir
+    } do
+      %{view: view, llm: llm} = mount_chat(dir, [])
+      view = send_text(view, "/models")
+      assert sheet(view) != nil
+      assert FakeLLM.requests(llm) == []
+
+      view = render_info(view, {:tap, :custom_model})
+      assert sheet(view) == nil
+      assert button?(view, "save")
+    end
+
+    test "ChatGPT signed in: omp's Codex models are listed" do
+      creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
+      :ok = Operator.Auth.put(:openai_codex, creds)
+
+      assert [{:anthropic, true, [_ | _]}, {:openai_codex, true, codex}] = Models.by_provider()
+
+      assert Enum.any?(codex, &(&1.spec == "openai_codex:gpt-5.5"))
+      refute Enum.any?(codex, &String.contains?(&1.spec, "image"))
+      assert Models.same?("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5-20251001")
     end
   end
 end

@@ -47,6 +47,7 @@ defmodule Operator.ChatScreen do
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
   alias Operator.Core.Loop
+  alias Operator.Core.Models
   alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
@@ -85,7 +86,8 @@ defmodule Operator.ChatScreen do
        proposal: pending_proposal(),
        activated: nil,
        phone: %{},
-       foreground: true
+       foreground: true,
+       model_picker: false
      )
      |> attach(loop)}
   end
@@ -111,7 +113,7 @@ defmodule Operator.ChatScreen do
           approval_bar(assigns, t) ++
           [
             composer(assigns, t)
-          ]
+          ] ++ model_sheet(assigns, t)
     }
   end
 
@@ -397,9 +399,29 @@ defmodule Operator.ChatScreen do
     {:noreply, attach(socket, Operator.Core.new_session())}
   end
 
-  def handle_info({:tap, :edit_model}, socket) do
-    draft = if socket.assigns.model_draft, do: nil, else: socket.assigns.model
-    {:noreply, Mob.Socket.assign(socket, :model_draft, draft)}
+  # The model chip (and `/models`) opens the list of models you can use;
+  # "Custom…" there opens the text field for anything else.
+  def handle_info({:tap, :edit_model}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, model_picker: true, model_draft: nil)}
+
+  def handle_info({:tap, :close_models}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :model_picker, false)}
+
+  def handle_info({:tap, :custom_model}, socket),
+    do:
+      {:noreply,
+       Mob.Socket.assign(socket, model_picker: false, model_draft: socket.assigns.model)}
+
+  def handle_info({:tap, {:pick_model, spec}}, socket) do
+    socket = Mob.Socket.assign(socket, :model_picker, false)
+
+    case Loop.set_model(socket.assigns.loop, spec) do
+      :ok ->
+        {:noreply, Mob.Socket.assign(socket, :model, spec)}
+
+      {:error, :running} ->
+        {:noreply, toast(socket, "Can't change the model while the agent runs")}
+    end
   end
 
   def handle_info({:change, :model_draft, value}, socket),
@@ -718,8 +740,10 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  # `/login` and `/logout` are the app's: they never reach the model.
-  defp command?(text), do: Regex.match?(~r{^/log(in|out)(\s|$)}, text)
+  # `/login`, `/logout` and `/models` are the app's: they never reach the model.
+  defp command?(text), do: Regex.match?(~r{^/(log(in|out)|models)(\s|$)}, text)
+
+  defp command(socket, ["/models" | _]), do: Mob.Socket.assign(socket, :model_picker, true)
 
   defp command(socket, ["/login", name]) do
     with {:ok, provider} <- Auth.parse_provider(name),
@@ -1015,6 +1039,82 @@ defmodule Operator.ChatScreen do
       header_chip("md:#{Term.renderer(t)}", :toggle_renderer, t)
     ])
   end
+
+  defp model_sheet(%{model_picker: false}, _t), do: []
+
+  # The models you can use now (Operator.Core.Models), by provider; the
+  # current one marked. Tapping one switches this session to it.
+  defp model_sheet(a, t) do
+    rows =
+      Enum.flat_map(Models.by_provider(), fn {provider, signed_in, models} ->
+        heading = text(Auth.label(provider), t, "dim", text_size: t.text_size - 1)
+
+        body =
+          if signed_in,
+            do: Enum.map(models, &model_row(&1, a.model, t)),
+            else: [
+              text("/login #{Auth.name(provider)} to add these", t, "dim", font: :term_italic)
+            ]
+
+        [heading | body] ++ [%{type: :spacer, props: %{size: 12}, children: []}]
+      end)
+
+    custom = %{
+      type: :text,
+      props: %{
+        text: "Custom model…",
+        on_tap: {self(), :custom_model},
+        font: :term,
+        text_size: t.text_size,
+        text_color: Term.color(t, "accent"),
+        padding: 10
+      },
+      children: []
+    }
+
+    [
+      Mob.UI.sheet(
+        %{
+          type: :scroll,
+          props: %{fill_width: true, background: Term.color(t, "bar")},
+          children: [
+            %{
+              type: :column,
+              props: %{fill_width: true, padding: 12, background: Term.color(t, "bar")},
+              children: rows ++ [custom]
+            }
+          ]
+        },
+        detents: [:medium, :large],
+        on_dismiss: {self(), :close_models},
+        background: Term.color(t, "bar")
+      )
+    ]
+  end
+
+  defp model_row(model, current, t) do
+    chosen = Models.same?(model.spec, current)
+    context = if model.context, do: "  " <> context_label(model.context), else: ""
+
+    %{
+      type: :text,
+      props: %{
+        text: if(chosen, do: "● ", else: "  ") <> model.name <> context,
+        on_tap: {self(), {:pick_model, model.spec}},
+        font: if(chosen, do: :term_bold, else: :term),
+        text_size: t.text_size,
+        text_color: Term.color(t, if(chosen, do: "user", else: "fg")),
+        padding: 6,
+        fill_width: true
+      },
+      children: []
+    }
+  end
+
+  defp context_label(tokens) when tokens >= 1_000_000 and rem(tokens, 1_000_000) == 0,
+    do: "#{div(tokens, 1_000_000)}M"
+
+  defp context_label(tokens), do: "#{div(tokens, 1000)}k"
 
   defp model_editor(%{model_draft: nil}, _t), do: []
 
