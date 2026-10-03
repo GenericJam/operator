@@ -21,8 +21,8 @@ defmodule Operator.ChatScreen do
   message. The `md:` chip switches the renderer (`Term.put_renderer/1`).
 
   On Android the composer has a mic (`Operator.Core.DictationButton`):
-  dictated text streams into the draft after what was already typed;
-  long-press it to talk and send. `[voice:…]` cycles what the agent says
+  hold it and talk; on release the transcript lands in the draft (after
+  what was already typed) to edit and send. `[voice:…]` cycles what the agent says
   aloud (`Operator.Core.Settings.voice/0`). The first send asks for the
   notification permission (the background-run notification needs it on
   Android 13+).
@@ -201,15 +201,18 @@ defmodule Operator.ChatScreen do
     {:noreply, Mob.Socket.assign(socket, draft: append(base, text), dictation_base: base)}
   end
 
-  def handle_info({:dictation, "final", %{"text" => text} = payload}, socket) do
+  # Dictation never sends: the text waits in the draft to be edited.
+  def handle_info({:dictation, "final", %{"text" => text}}, socket) do
     draft = append(dictation_base(socket), text)
-    socket = Mob.Socket.assign(socket, draft: draft, dictation_base: nil)
-    if payload["send"] == true, do: send_draft(socket), else: {:noreply, socket}
+    {:noreply, Mob.Socket.assign(socket, draft: draft, dictation_base: nil)}
   end
+
+  def handle_info({:dictation, "hint", _}, socket),
+    do: {:noreply, toast(socket, "Hold mic while you talk; let go to stop")}
 
   def handle_info({:dictation, "needs_permission", _}, socket) do
     Native.impl().request_permission(:microphone)
-    {:noreply, toast(socket, "Allow the microphone, then tap mic again")}
+    {:noreply, toast(socket, "Allow the microphone, then hold mic and talk")}
   end
 
   def handle_info({:dictation, "error", %{"reason" => reason}}, socket),
@@ -218,7 +221,7 @@ defmodule Operator.ChatScreen do
   def handle_info({:dictation, _event, _payload}, socket), do: {:noreply, socket}
 
   def handle_info({:permission, :microphone, :granted}, socket),
-    do: {:noreply, toast(socket, "Microphone allowed: tap mic to talk")}
+    do: {:noreply, toast(socket, "Microphone allowed: hold mic and talk")}
 
   def handle_info({:permission, :microphone, _denied}, socket),
     do: {:noreply, toast(socket, "No microphone access: allow it in Settings to dictate")}
@@ -890,7 +893,7 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  defp dictation_error("no_speech"), do: "Didn't catch that: tap mic and speak"
+  defp dictation_error("no_speech"), do: "Didn't catch that: hold mic while you speak"
   defp dictation_error("network"), do: "Dictation needs the network (no offline speech model)"
   defp dictation_error("unavailable"), do: "No speech recognizer on this phone"
   defp dictation_error("busy"), do: "The speech recognizer is busy: try again"

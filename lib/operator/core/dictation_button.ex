@@ -5,8 +5,8 @@ defmodule Operator.Core.DictationButton do
   registered as `"Operator_Core_DictationButton"` in `MainActivity`; there's
   no iOS view yet, so the chat screen only shows it on Android.
 
-  Tap to talk (partial results stream into the draft), tap again or pause
-  to stop; long-press to talk and send when done.
+  Hold to talk (partial results stream into the draft); on release the
+  final transcript lands in the draft to edit and send. Nothing is sent.
 
   Props:
 
@@ -17,8 +17,8 @@ defmodule Operator.Core.DictationButton do
 
   Each native event goes to `:notify` as `{:dictation, event, payload}`:
   `"state"` (`%{"state" => "listening" | "processing" | "idle"}`),
-  `"partial"` and `"final"` (`%{"text" => ...}`, final adds `"send"`),
-  `"error"` (`%{"reason" => ...}`), `"needs_permission"`.
+  `"partial"` and `"final"` (`%{"text" => ...}`), `"hint"` (released too
+  quickly to say anything), `"error"` (`%{"reason" => ...}`), `"needs_permission"`.
   """
   use Mob.Component
 

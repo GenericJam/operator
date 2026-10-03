@@ -36,11 +36,12 @@ import androidx.core.content.res.ResourcesCompat
  * `Mob.UI.native_view` registered as "Operator_Core_DictationButton"
  * (driven by `Operator.Core.DictationButton`).
  *
- * Tap: listen, streaming partial results; tap again (or silence) ends it.
- * Long-press: the same, but the final text is sent right away.
+ * Hold to talk: pressing starts listening (partial results stream into the
+ * draft), releasing stops it and the final text lands in the draft to edit
+ * and send. A press too short to say anything is cancelled with a hint.
  *
  * Events: `state` {"state": "listening" | "processing" | "idle"},
- * `partial` {"text"}, `final` {"text", "send": Boolean},
+ * `partial` {"text"}, `final` {"text"}, `hint` {} (released too quickly),
  * `error` {"reason"}, `needs_permission` {} (RECORD_AUDIO not granted; the
  * screen asks through Mob.Permissions, since a native view has no Activity
  * result hook).
@@ -68,7 +69,8 @@ private enum class Phase { IDLE, LISTENING, PROCESSING }
 /** One recognizer per mic, created on first use and destroyed with the view. */
 private class Dictation(private val context: Context) {
     var recognizer: SpeechRecognizer? = null
-    var sendOnFinal = false
+    // Long pauses while the button is held mustn't end the recognition.
+    private val holdSilenceMs = 10_000
 
     fun start(listener: RecognitionListener) {
         val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it }
@@ -78,11 +80,15 @@ private class Dictation(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, holdSilenceMs)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, holdSilenceMs)
         }
         r.startListening(intent)
     }
 
     fun stop() = recognizer?.stopListening()
+
+    fun cancel() = recognizer?.cancel()
 
     fun destroy() {
         recognizer?.destroy()
@@ -133,7 +139,7 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
 
             override fun onResults(results: Bundle?) {
                 phase = Phase.IDLE
-                currentSend("final", mapOf("text" to firstResult(results), "send" to dictation.sendOnFinal))
+                currentSend("final", mapOf("text" to firstResult(results)))
                 currentSend("state", mapOf("state" to "idle"))
             }
 
@@ -157,19 +163,23 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
         }
     }
 
-    fun begin(sendOnFinal: Boolean) {
+    fun begin(): Boolean =
         when {
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
-                PackageManager.PERMISSION_GRANTED -> currentSend("needs_permission", emptyMap())
-            !SpeechRecognizer.isRecognitionAvailable(context) ->
+                PackageManager.PERMISSION_GRANTED -> {
+                currentSend("needs_permission", emptyMap())
+                false
+            }
+            !SpeechRecognizer.isRecognitionAvailable(context) -> {
                 currentSend("error", mapOf("reason" to "unavailable"))
+                false
+            }
             else -> {
-                dictation.sendOnFinal = sendOnFinal
                 phase = Phase.LISTENING
                 dictation.start(listener)
+                true
             }
         }
-    }
 
     val label = when (phase) {
         Phase.IDLE -> "mic"
@@ -182,8 +192,21 @@ fun OperatorDictationButton(props: Map<String, Any?>, send: MobNativeSend) {
             .background(background)
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { if (phase == Phase.IDLE) begin(false) else dictation.stop() },
-                    onLongPress = { if (phase == Phase.IDLE) begin(true) },
+                    onPress = {
+                        if (phase == Phase.IDLE && begin()) {
+                            val pressedAt = System.currentTimeMillis()
+                            tryAwaitRelease()
+                            if (System.currentTimeMillis() - pressedAt < 300) {
+                                dictation.cancel()
+                                phase = Phase.IDLE
+                                currentSend("hint", emptyMap())
+                                currentSend("state", mapOf("state" to "idle"))
+                            } else {
+                                phase = Phase.PROCESSING
+                                dictation.stop()
+                            }
+                        }
+                    },
                 )
             }
             .padding(horizontal = 10.dp, vertical = 12.dp),

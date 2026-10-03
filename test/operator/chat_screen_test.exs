@@ -439,7 +439,7 @@ defmodule Operator.ChatScreenTest do
 
       view =
         view
-        |> render_info({:dictation, "final", %{"text" => "flaky test please", "send" => false}})
+        |> render_info({:dictation, "final", %{"text" => "flaky test please"}})
         |> render_info({:dictation, "state", %{"state" => "idle"}})
 
       assert assigns(view).draft == "fix the flaky test please"
@@ -449,41 +449,42 @@ defmodule Operator.ChatScreenTest do
         view
         |> render_info({:change, :draft, "fix the flaky test please, then"})
         |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "final", %{"text" => "commit", "send" => false}})
+        |> render_info({:dictation, "final", %{"text" => "commit"}})
 
       assert assigns(view).draft == "fix the flaky test please, then commit"
     end
 
-    test "long-press dictation sends when done; nothing heard leaves the draft", %{tmp_dir: dir} do
-      %{view: view, loop: loop} = mount_chat(dir, [[{:text, "ok"}]])
+    test "dictation never sends; nothing heard leaves the draft; a quick tap hints", %{
+      tmp_dir: dir
+    } do
+      %{view: view, loop: loop, llm: llm} = mount_chat(dir, [[{:text, "ok"}]])
 
       view =
         view
         |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "final", %{"text" => "", "send" => false}})
+        |> render_info({:dictation, "final", %{"text" => ""}})
 
       assert assigns(view).draft == ""
 
       view =
         view
         |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "final", %{"text" => "say hi", "send" => true}})
-        |> pump(:agent_end)
+        |> render_info({:dictation, "final", %{"text" => "say hi"}})
+        |> render_info({:dictation, "state", %{"state" => "idle"}})
 
-      assert assigns(view).draft == ""
+      assert assigns(view).draft == "say hi"
+      assert FakeLLM.requests(llm) == []
+      assert Loop.snapshot(loop).entries == []
 
-      assert Enum.any?(
-               Loop.snapshot(loop).entries,
-               &(&1["message"]["role"] == "user" and
-                   hd(&1["message"]["content"])["text"] == "say hi")
-             )
+      view = render_info(view, {:dictation, "hint", %{}})
+      assert text(view) =~ "Hold mic while you talk"
     end
 
     test "no microphone permission: asks the OS, then says what to do", %{tmp_dir: dir} do
       %{view: view} = mount_chat(dir, [])
       view = render_info(view, {:dictation, "needs_permission", %{}})
       assert_received {:requested_permission, :microphone}
-      assert text(view) =~ "tap mic again"
+      assert text(view) =~ "hold mic and talk"
 
       view = render_info(view, {:dictation, "error", %{"reason" => "no_speech"}})
       assert text(view) =~ "Didn't catch that"
