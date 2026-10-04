@@ -42,7 +42,9 @@ config :mob, :plugins, [
   # Offline dictation (whisper.cpp + the microphone capture), the MobWhisper
   # engine Operator.ChatScreen hands MobSpeech. mob_speech itself isn't
   # activated: its own NIF is the platform recognizer, which Operator doesn't use.
-  :mob_whisper
+  :mob_whisper,
+  # The <Mishka…> composite tags the default front (the widget gallery) uses.
+  :mob_mishka
 ]
 
 # Trust gate for the first-party plugins. Each is signed in CI with the shared
@@ -74,6 +76,10 @@ config :mob, :trusted_plugins, %{
 # checkout carries no signature (CI signs only what it publishes to Hex): until
 # then the trust gate is acknowledged for it. Drop this with the switch to Hex.
 config :mob, :acknowledge_unsafe_plugins, [:mob_whisper]
+
+# Style packages the front may use (mob_themes, as `mix mob.new` sets up). No
+# :default_style: Operator's own theme stays as the Core and Dyn set it.
+config :mob, :styles, [:mob_themes]
 
 config :mob_dev, beam_flags: "-S 0:0"
 

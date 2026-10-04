@@ -56,6 +56,11 @@ defmodule Operator.MixProject do
       # (`mix operator.deliver.*`, `mix operator.publish`): dev/test only, so
       # mob_dev never ships them to the phone.
       {:mob_deliver, "~> 0.3.1"},
+      # The default front (PLAN.md step 9): the Mishka Chelekom widget gallery
+      # `mix mob.new` generates. mob_mishka supplies its <Mishka…> composite
+      # tags (a mob plugin, mob.exs); mob_themes is the style package it uses.
+      {:mob_mishka, "~> 0.1.3"},
+      {:mob_themes, "~> 0.1.0"},
       {:mob_deliver_server, "~> 0.2.0", only: [:dev, :test], runtime: false},
       {:bandit, "~> 1.6", only: [:dev, :test], runtime: false},
       # Mozilla CA bundle: Android has no system CA store the BEAM can find
