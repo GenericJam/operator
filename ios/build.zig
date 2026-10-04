@@ -368,6 +368,7 @@ pub fn build(b: *std.Build) void {
         .plugin_static_libs = plugin_static_libs,
         .plugin_frameworks = plugin_frameworks,
         .objects = objs.items,
+        .simulator_entitlements = .{ .cwd_relative = b.fmt("{s}/simulator_entitlements.plist", .{project_ios_dir}) },
     });
 }
 
@@ -535,6 +536,12 @@ const LinkOptions = struct {
     // Plugin-contributed extra iOS frameworks (comma-separated).
     plugin_frameworks: []const u8 = "",
     objects: []const std.Build.LazyPath,
+    // The simulator's "simulated entitlements" (ios/simulator_entitlements.plist),
+    // linked into __TEXT,__entitlements as Xcode does: the simulator reads an
+    // app's entitlements from there, not from its ad-hoc signature, and the
+    // Keychain (c_src/operator_secure_store.c) refuses an app without
+    // application-identifier / keychain-access-groups (errSecMissingEntitlement).
+    simulator_entitlements: std.Build.LazyPath,
 };
 
 fn addLink(b: *std.Build, step: *std.Build.Step, opts: LinkOptions) void {
@@ -656,6 +663,9 @@ fn addLink(b: *std.Build, step: *std.Build.Step, opts: LinkOptions) void {
     if (opts.mlx_static) {
         run.addArgs(&.{ "-Xlinker", "-framework", "-Xlinker", "Accelerate" });
     }
+
+    run.addArgs(&.{ "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__entitlements", "-Xlinker" });
+    run.addFileArg(opts.simulator_entitlements);
 
     run.addArg("-o");
     const binary = run.addOutputFileArg(opts.module_name);

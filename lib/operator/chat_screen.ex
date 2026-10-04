@@ -89,7 +89,7 @@ defmodule Operator.ChatScreen do
     with %{link: link} <- params, do: send(self(), {:operator_link, link})
     # Dictation's offline speech model: fetched once, then loaded in the
     # background so the first hold doesn't wait for it.
-    if Term.platform() == :android, do: MobWhisper.prefetch(notify: self())
+    if Term.platform() in [:android, :ios], do: MobWhisper.prefetch(notify: self())
 
     {:ok,
      socket
@@ -1278,10 +1278,10 @@ defmodule Operator.ChatScreen do
 
   # Hold to talk: a plain box observing the finger (on_press_in / on_press_out,
   # always paired). "● rec" from the touch, "…" while Whisper transcribes (it
-  # has no partial results). Android only: the whisper engine is Android-only
-  # so far.
+  # has no partial results). On the phone only: Whisper's capture is native
+  # (Android AudioRecord, iOS AudioQueue).
   defp mic(a, t) do
-    if Term.platform() == :android do
+    if Term.platform() in [:android, :ios] do
       label =
         cond do
           a.mic_down_at != nil or a.dictation == :listening -> "● rec"

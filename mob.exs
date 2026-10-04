@@ -23,7 +23,14 @@ config :mob_dev,
   # operator.login and operator.deliver.qr make on the Mac, scanned with any app).
   # The native build adds the Android intent filter (MainActivity must stay
   # singleTask) and the iOS URL type; each link arrives as {:link, ...}.
-  url_schemes: ["operator"]
+  url_schemes: ["operator"],
+  # Operator's own iOS native views (the iOS side of OperatorApproval.kt and
+  # OperatorMarkdown.kt), registered by operator_register_views() in AppDelegate.m.
+  project_swift_sources:
+    Enum.map(
+      ~w(OperatorApproval OperatorMarkdown OperatorViews),
+      &Path.join(File.cwd!(), "ios/#{&1}.swift")
+    )
 
 # Activated capability plugins (the packages added in mix.exs). Each contributes
 # its native code, permissions, and any demo screens at build time. Drop a name
