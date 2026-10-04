@@ -74,8 +74,12 @@ private class Approval {
     var request = ""
     var attempt = 0
 
+    /** API 28: the attempt whose keyguard credential screen is up (0: none). */
+    var keyguardAttempt = 0
+
     fun cancel() {
         active = false
+        keyguardAttempt = 0
         signal?.cancel()
         signal = null
     }
@@ -109,8 +113,10 @@ fun OperatorApproveButton(props: Map<String, Any?>, send: MobNativeSend) {
 
     // API 28 only: the keyguard's credential screen answers through an activity result.
     val keyguardLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (it.resultCode == Activity.RESULT_OK) finish(approval.attempt, "approved")
-        else finish(approval.attempt, "failed", mapOf("reason" to "canceled"))
+        val attempt = approval.keyguardAttempt
+        approval.keyguardAttempt = 0
+        if (it.resultCode == Activity.RESULT_OK) finish(attempt, "approved")
+        else finish(attempt, "failed", mapOf("reason" to "canceled"))
     }
 
     fun color(key: String, default: Long) = Color(((props[key] as? Number)?.toLong() ?: default).toInt())
@@ -142,7 +148,12 @@ fun OperatorApproveButton(props: Map<String, Any?>, send: MobNativeSend) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             @Suppress("DEPRECATION")
             val intent = keyguard.createConfirmDeviceCredentialIntent(title, subtitle)
-            if (intent == null) finish(attempt, "unavailable") else keyguardLauncher.launch(intent)
+            if (intent == null) {
+                finish(attempt, "unavailable")
+            } else {
+                approval.keyguardAttempt = attempt
+                keyguardLauncher.launch(intent)
+            }
             return
         }
 
