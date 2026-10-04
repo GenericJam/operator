@@ -21,8 +21,9 @@ defmodule Operator.ChatScreen do
   message. The `md:` chip switches the renderer (`Term.put_renderer/1`).
 
   On Android the composer has a mic (`Operator.Core.DictationButton`):
-  hold it and talk; on release the transcript lands in the draft (after
-  what was already typed) to edit and send. `[voice:…]` cycles what the agent says
+  hold it and talk; on release the phone transcribes it offline (`MobSpeech`
+  with the `MobWhisper` engine; the chip shows "…" meanwhile) and the text
+  lands in the draft (after what was already typed) to edit and send. `[voice:…]` cycles what the agent says
   aloud (`Operator.Core.Settings.voice/0`). The first send asks for the
   notification permission (the background-run notification needs it on
   Android 13+).
@@ -82,6 +83,9 @@ defmodule Operator.ChatScreen do
     if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
     # A link Diagnostics received: it forwards them here.
     with %{link: link} <- params, do: send(self(), {:operator_link, link})
+    # Dictation's offline speech model: fetched once, then loaded in the
+    # background so the first hold doesn't wait for it.
+    if Term.platform() == :android, do: MobWhisper.prefetch(notify: self())
 
     {:ok,
      socket
@@ -90,6 +94,7 @@ defmodule Operator.ChatScreen do
        settings_dir: settings_dir,
        voice: Settings.voice(settings_dir),
        dictation_base: nil,
+       dictation: :idle,
        notifications_asked: false,
        proposal: pending_proposal(),
        activated: nil,
@@ -186,39 +191,57 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
-  # ── dictation (Operator.Core.DictationButton) ──
+  # ── dictation (Operator.Core.DictationButton → MobSpeech, whisper engine) ──
 
-  def handle_info({:dictation, "state", %{"state" => "listening"}}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :dictation_base, dictation_base(socket))}
-
-  def handle_info({:dictation, "state", %{"state" => "idle"}}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :dictation_base, nil)}
-
-  def handle_info({:dictation, "state", _processing}, socket), do: {:noreply, socket}
-
-  def handle_info({:dictation, "partial", %{"text" => text}}, socket) do
-    base = dictation_base(socket)
-    {:noreply, Mob.Socket.assign(socket, draft: append(base, text), dictation_base: base)}
+  def handle_info({:dictation, "press", _}, socket) do
+    {engine, opts} = dictation_engine()
+    socket = MobSpeech.listen(socket, [engine: engine] ++ opts)
+    {:noreply, Mob.Socket.assign(socket, :dictation, :listening)}
   end
 
-  # Dictation never sends: the text waits in the draft to be edited.
-  def handle_info({:dictation, "final", %{"text" => text}}, socket) do
-    draft = append(dictation_base(socket), text)
-    {:noreply, Mob.Socket.assign(socket, draft: draft, dictation_base: nil)}
-  end
+  def handle_info({:dictation, "release", _}, socket),
+    do: {:noreply, MobSpeech.stop(socket)}
 
-  def handle_info({:dictation, "hint", _}, socket),
-    do: {:noreply, toast(socket, "Hold mic while you talk; let go to stop")}
+  def handle_info({:dictation, "cancel", _}, socket) do
+    socket = socket |> MobSpeech.cancel() |> toast("Hold mic while you talk; let go to stop")
+    {:noreply, socket}
+  end
 
   def handle_info({:dictation, "needs_permission", _}, socket) do
     Native.impl().request_permission(:microphone)
     {:noreply, toast(socket, "Allow the microphone, then hold mic and talk")}
   end
 
-  def handle_info({:dictation, "error", %{"reason" => reason}}, socket),
+  def handle_info({:dictation, _event, _payload}, socket), do: {:noreply, socket}
+
+  def handle_info({:speech, :state, :listening}, socket) do
+    {:noreply,
+     Mob.Socket.assign(socket, dictation: :listening, dictation_base: dictation_base(socket))}
+  end
+
+  def handle_info({:speech, :state, :processing}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :dictation, :processing)}
+
+  def handle_info({:speech, :state, :idle}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, dictation: :idle, dictation_base: nil)}
+
+  def handle_info({:speech, :partial, text}, socket) do
+    base = dictation_base(socket)
+    {:noreply, Mob.Socket.assign(socket, draft: append(base, text), dictation_base: base)}
+  end
+
+  # Dictation never sends: the text waits in the draft to be edited.
+  def handle_info({:speech, :final, text}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :draft, append(dictation_base(socket), text))}
+
+  def handle_info({:speech, :error, reason}, socket),
     do: {:noreply, toast(socket, dictation_error(reason))}
 
-  def handle_info({:dictation, _event, _payload}, socket), do: {:noreply, socket}
+  # The speech model downloads once (MobWhisper.prefetch/1 at mount).
+  def handle_info({:mob_whisper, :model, :ready}, socket), do: {:noreply, socket}
+
+  def handle_info({:mob_whisper, :model, {:error, reason}}, socket),
+    do: {:noreply, toast(socket, model_error(reason))}
 
   def handle_info({:permission, :microphone, :granted}, socket),
     do: {:noreply, toast(socket, "Microphone allowed: hold mic and talk")}
@@ -895,23 +918,30 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  defp dictation_error("no_speech"), do: "Didn't catch that: hold mic while you speak"
-  defp dictation_error("network"), do: "Dictation needs the network (no offline speech model)"
-  defp dictation_error("unavailable"), do: "No speech recognizer on this phone"
+  # The engine and its options: Whisper on the phone (the platform recognizer
+  # depends on the Google app's language packs and returns nothing without
+  # them); tests script MobSpeech.Engine.Fake.
+  defp dictation_engine, do: Application.get_env(:operator, :dictation_engine, {MobWhisper, []})
 
-  defp dictation_error("language"),
-    do: "The speech recognizer has no model for this language: check Google's voice settings"
+  defp dictation_error(:no_speech), do: "Didn't catch that: hold mic while you speak"
 
-  defp dictation_error("busy"), do: "The speech recognizer is busy: try again"
+  defp dictation_error(:network),
+    do: "The speech model isn't downloaded yet: connect to the internet and try again"
 
-  defp dictation_error("permission"),
+  defp dictation_error(:unavailable), do: "Speech to text isn't available in this build"
+  defp dictation_error(:language), do: "The speech model only understands English"
+  defp dictation_error(:busy), do: "Still transcribing the last one: try again"
+
+  defp dictation_error(:permission),
     do: "No microphone access: allow it in Settings to dictate"
 
-  defp dictation_error("service_permission"),
-    do:
-      "The phone's speech service has no microphone access: allow it for the Google app (Settings › Apps › Google › Permissions)"
+  defp dictation_error(:audio), do: "The microphone stopped (headset change?): try again"
+  defp dictation_error(reason), do: "Dictation failed (#{inspect(reason)})"
 
-  defp dictation_error(reason), do: "Dictation failed (#{reason})"
+  defp model_error(:network),
+    do: "Couldn't download the speech model (60 MB): dictation needs it once"
+
+  defp model_error(reason), do: "The speech model didn't load (#{inspect(reason)})"
 
   defp voice_hint(:off), do: "silent"
   defp voice_hint(:important), do: "speaks when a run ends"
@@ -1224,17 +1254,19 @@ defmodule Operator.ChatScreen do
           weight: 1,
           on_submit: {self(), :draft}
         )
-      ] ++ mic(t) ++ [chip(send_label, :send, t, "user")] ++ stop
+      ] ++ mic(a.dictation, t) ++ [chip(send_label, :send, t, "user")] ++ stop
     )
   end
 
-  # Speech to text; only Android has the native view so far.
-  defp mic(t) do
+  # Speech to text; only Android has the native view so far. `phase` shows
+  # "…" on the chip while Whisper transcribes (it has no partial results).
+  defp mic(phase, t) do
     if Term.platform() == :android do
       [
         Mob.UI.native_view(DictationButton,
           id: :dictation,
           notify: self(),
+          phase: Atom.to_string(phase),
           text_color: Term.color(t, "fg"),
           active_color: Term.color(t, "error"),
           background: Term.color(t, "code_bg"),

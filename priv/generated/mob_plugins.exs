@@ -4,9 +4,9 @@
 # Regenerated whenever `config :mob, :plugins` changes (the deploy/regen hook).
 %{
   nifs: [:mob_background_nif, :mob_location_nif, :mob_notify_nif,
-   :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif],
+   :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif, :mob_whisper_nif],
   plugins: [:mob_background, :mob_location, :mob_notify, :mob_camera,
-   :mob_photos, :mob_scanner, :mob_deliver],
+   :mob_photos, :mob_scanner, :mob_deliver, :mob_whisper],
   settings: [],
   screens: [
     %{

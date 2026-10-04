@@ -38,7 +38,11 @@ config :mob, :plugins, [
   :mob_scanner,
   # OTA updates of Operator's own code: pure Elixir, no NIF (config in
   # config/config.exs, Operator.Deliver).
-  :mob_deliver
+  :mob_deliver,
+  # Offline dictation (whisper.cpp + the microphone capture), the MobWhisper
+  # engine Operator.ChatScreen hands MobSpeech. mob_speech itself isn't
+  # activated: its own NIF is the platform recognizer, which Operator doesn't use.
+  :mob_whisper
 ]
 
 # Trust gate for the first-party plugins. Each is signed in CI with the shared
@@ -62,8 +66,14 @@ config :mob, :trusted_plugins, %{
   mob_notify: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_mishka: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_ash: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
-  mob_deliver: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
+  mob_deliver: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_whisper: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
 }
+
+# mob_whisper comes from its git tag until Hex has it (mix.exs), and a git
+# checkout carries no signature (CI signs only what it publishes to Hex): until
+# then the trust gate is acknowledged for it. Drop this with the switch to Hex.
+config :mob, :acknowledge_unsafe_plugins, [:mob_whisper]
 
 config :mob_dev, beam_flags: "-S 0:0"
 

@@ -425,59 +425,87 @@ defmodule Operator.ChatScreenTest do
   end
 
   describe "dictation" do
-    test "streams after what was typed, the final text replaces the partials", %{tmp_dir: dir} do
-      %{view: view} = mount_chat(dir, [])
+    # The screen hands MobSpeech the engine from config; MobSpeech's scripted
+    # Fake engine stands in for Whisper, through MobSpeech's real session.
+    defp dictate(view, script, on_stop) do
+      Application.put_env(
+        :operator,
+        :dictation_engine,
+        {MobSpeech.Engine.Fake, script: script, on_stop: on_stop}
+      )
+
+      on_exit(fn -> Application.delete_env(:operator, :dictation_engine) end)
+      view |> render_info({:dictation, "press", %{}}) |> speech(:listening)
+    end
+
+    # Feed the session's {:speech, ...} events to the screen until `until`
+    # (:listening, :processing or :idle) has been handled.
+    defp speech(view, until) do
+      receive do
+        {:speech, :state, state} = msg ->
+          view = render_info(view, msg)
+          if state == until, do: view, else: speech(view, until)
+
+        {:speech, _, _} = msg ->
+          speech(render_info(view, msg), until)
+      after
+        2_000 -> flunk("no {:speech, :state, #{inspect(until)}}")
+      end
+    end
+
+    test "hold: the transcript lands after what was typed, unsent", %{tmp_dir: dir} do
+      %{view: view, loop: loop, llm: llm} = mount_chat(dir, [[{:text, "ok"}]])
 
       view =
         view
         |> render_info({:change, :draft, "fix the "})
-        |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "partial", %{"text" => "flaky"}})
-        |> render_info({:dictation, "partial", %{"text" => "flaky test"}})
+        |> dictate([:listening], [{:final, "flaky test please"}])
 
-      assert assigns(view).draft == "fix the flaky test"
+      assert assigns(view).dictation == :listening
 
-      view =
-        view
-        |> render_info({:dictation, "final", %{"text" => "flaky test please"}})
-        |> render_info({:dictation, "state", %{"state" => "idle"}})
+      view = view |> render_info({:dictation, "release", %{}}) |> speech(:processing)
+      assert assigns(view).dictation == :processing
 
+      view = speech(view, :idle)
       assert assigns(view).draft == "fix the flaky test please"
+      assert assigns(view).dictation == :idle
+      assert FakeLLM.requests(llm) == []
+      assert Loop.snapshot(loop).entries == []
 
       # a second dictation appends to the edited draft, not the old base
       view =
         view
         |> render_info({:change, :draft, "fix the flaky test please, then"})
-        |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "final", %{"text" => "commit"}})
+        |> dictate([:listening], [{:final, "commit"}])
+        |> render_info({:dictation, "release", %{}})
+        |> speech(:idle)
 
       assert assigns(view).draft == "fix the flaky test please, then commit"
     end
 
-    test "dictation never sends; nothing heard leaves the draft; a quick tap hints", %{
+    test "a quick tap cancels with a hint; nothing heard says so and keeps the draft", %{
       tmp_dir: dir
     } do
-      %{view: view, loop: loop, llm: llm} = mount_chat(dir, [[{:text, "ok"}]])
+      %{view: view} = mount_chat(dir, [])
 
       view =
         view
-        |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "final", %{"text" => ""}})
+        |> render_info({:change, :draft, "keep me"})
+        |> dictate([:listening], [{:final, "never"}])
+        |> render_info({:dictation, "cancel", %{}})
+        |> speech(:idle)
 
-      assert assigns(view).draft == ""
-
-      view =
-        view
-        |> render_info({:dictation, "state", %{"state" => "listening"}})
-        |> render_info({:dictation, "final", %{"text" => "say hi"}})
-        |> render_info({:dictation, "state", %{"state" => "idle"}})
-
-      assert assigns(view).draft == "say hi"
-      assert FakeLLM.requests(llm) == []
-      assert Loop.snapshot(loop).entries == []
-
-      view = render_info(view, {:dictation, "hint", %{}})
       assert text(view) =~ "Hold mic while you talk"
+      assert assigns(view).draft == "keep me"
+
+      view =
+        view
+        |> dictate([:listening], [{:error, :no_speech}])
+        |> render_info({:dictation, "release", %{}})
+        |> speech(:idle)
+
+      assert text(view) =~ "Didn't catch that"
+      assert assigns(view).draft == "keep me"
     end
 
     test "no microphone permission: asks the OS, then says what to do", %{tmp_dir: dir} do
@@ -485,9 +513,12 @@ defmodule Operator.ChatScreenTest do
       view = render_info(view, {:dictation, "needs_permission", %{}})
       assert_received {:requested_permission, :microphone}
       assert text(view) =~ "hold mic and talk"
+    end
 
-      view = render_info(view, {:dictation, "error", %{"reason" => "no_speech"}})
-      assert text(view) =~ "Didn't catch that"
+    test "a failed speech-model download is reported", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      view = render_info(view, {:mob_whisper, :model, {:error, :network}})
+      assert text(view) =~ "Couldn't download the speech model"
     end
   end
 

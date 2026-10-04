@@ -25,7 +25,7 @@ defmodule Operator.MixProject do
   defp deps do
     [
       {:mob, "~> 0.9.11"},
-      {:mob_dev, "~> 0.7.12", only: :dev, runtime: false},
+      {:mob_dev, "~> 0.7.13", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,
       # tool calling) and req_llm (provider clients; Anthropic, OpenAI Codex).
@@ -45,6 +45,12 @@ defmodule Operator.MixProject do
       # Diagnostics → Scan QR: the codes `mix operator.login` and `mix
       # operator.handoff` show on the Mac (Operator.LoginScanScreen).
       {:mob_scanner, "~> 0.1.5"},
+      # Dictation: hold the mic, the phone transcribes offline (whisper.cpp,
+      # Operator.ChatScreen). mob_speech is the speech API, mob_whisper its
+      # on-device engine (a mob plugin, mob.exs). Git tags until Hex has them
+      # (their HEX_API_KEY is pending); then "~> 0.1" and drop the override.
+      {:mob_speech, github: "GenericJam/mob_speech", tag: "0.1.0", override: true},
+      {:mob_whisper, github: "GenericJam/mob_whisper", tag: "0.1.0"},
       # Over-the-air updates of Operator's own code (docs/DESIGN.md §1, the
       # Core's release path; Operator.Deliver). mob_deliver is the phone side,
       # a mob plugin (mob.exs). mob_deliver_server and Bandit are the Mac side
