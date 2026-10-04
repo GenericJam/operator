@@ -59,6 +59,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
+    <!-- mob_nfc: optional, so NFC-less phones still install (host requirement). -->
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+
     <!-- POST_NOTIFICATIONS (API 33+, runtime-granted) makes the mob_background
          keep-alive notification visible in the tray; without the grant the
          foreground service still runs, its notification only shows in the
@@ -99,6 +102,7 @@
 
     <!-- mob:plugin-permissions BEGIN (managed — regenerated each build; do not edit) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.NFC" />
     <!-- mob:plugin-permissions END -->
     <application
         android:label="Operator"
@@ -166,6 +170,12 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- mob_audio_capture: AudioPlaybackCapture via MediaProjection runs in
+             a typed foreground service (mob_audio_capture host requirement). -->
+        <service android:name="io.mob.audiocapture.AudioCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
         <!-- mob:plugin-components BEGIN (managed — regenerated each build; do not edit) -->
         <service android:name="io.mob.notify.MobFirebaseService"
             android:exported="false">
@@ -184,6 +194,16 @@
         <activity android:name="io.mob.scanner.MobScannerActivity"
             android:exported="false"
             android:theme="@style/Theme.AppCompat.NoActionBar" />
+
+        <service android:name="io.mob.nfc.MobNfcApduService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/mob_nfc_hce_apduservice" />
+        </service>
         <!-- mob:plugin-components END -->
     </application>
 </manifest>

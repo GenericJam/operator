@@ -38,6 +38,7 @@ extern fn asn1rt_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn crypto_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn operator_secure_store_nif_init() callconv(.c) ?*anyopaque;
+extern fn lab_physics_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_background_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_location_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_notify_nif_nif_init() callconv(.c) ?*anyopaque;
@@ -50,16 +51,21 @@ extern fn mob_screencast_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_video_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_touch_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_wake_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_sms_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_vision_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_nfc_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_midi_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_audio_capture_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_scene3d_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn nx_eigen_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_whisper_nif_nif_init() callconv(.c) ?*anyopaque;
 
 // Comptime flags threaded from build.zig via b.addOptions().
 // Each per-feature flag defaults to false; the build sets it to true
 // when the project opts into the corresponding statically-linked NIF.
 const build_options = @import("build_options");
-const nx_eigen_static = build_options.nx_eigen_static;
 const tflite_static = build_options.tflite_static;
 
-extern fn nx_eigen_nif_init() callconv(.c) ?*anyopaque;
 extern fn tflite_nif_nif_init() callconv(.c) ?*anyopaque;
 
 export var driver_tab: [3]ErtsStaticDriver = .{
@@ -83,6 +89,7 @@ const base_nifs = [_]ErtsStaticNif{
     .{ .nif_init = crypto_nif_init, .is_builtin = 1, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = operator_secure_store_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = lab_physics_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_background_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_location_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_notify_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
@@ -95,21 +102,23 @@ const base_nifs = [_]ErtsStaticNif{
     .{ .nif_init = mob_video_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_touch_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_wake_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_sms_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_vision_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_nfc_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_midi_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_audio_capture_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_scene3d_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = nx_eigen_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_whisper_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
 };
 
-const nx_eigen_const = ErtsStaticNif{ .nif_init = nx_eigen_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null };
 const tflite_nif_const = ErtsStaticNif{ .nif_init = tflite_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null };
 
 const sentinel = ErtsStaticNif{ .nif_init = null, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null };
 
 export var erts_static_nif_tab = blk: {
-    if (nx_eigen_static and tflite_static) {
-        break :blk base_nifs ++ [_]ErtsStaticNif{ nx_eigen_const, tflite_nif_const, sentinel };
-    } else if (tflite_static) {
+    if (tflite_static) {
         break :blk base_nifs ++ [_]ErtsStaticNif{ tflite_nif_const, sentinel };
-    } else if (nx_eigen_static) {
-        break :blk base_nifs ++ [_]ErtsStaticNif{ nx_eigen_const, sentinel };
     } else {
         break :blk base_nifs ++ [_]ErtsStaticNif{sentinel};
     }

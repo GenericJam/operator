@@ -126,7 +126,16 @@ pub fn build(b: *std.Build) void {
         module_name,
         "-import-objc-header",
     });
-    swift_run.addArg(b.fmt("{s}/ios/MobDemo-Bridging-Header.h", .{mob_dir}));
+    // mob_scene3d host wiring (its manifest host_requirements): the project
+    // bridging header adds the plugin's ObjC viewport to mob's; both resolve
+    // through the -Xcc -I paths. MOB_SCENE3D_PATH overrides the dep checkout.
+    const scene3d_dir = b.graph.environ_map.get("MOB_SCENE3D_PATH") orelse
+        b.fmt("{s}/deps/mob_scene3d", .{project_root});
+    swift_run.addArg(b.fmt("{s}/Operator-Bridging-Header.h", .{project_ios_dir}));
+    swift_run.addArg("-Xcc");
+    swift_run.addArg(b.fmt("-I{s}/ios", .{mob_dir}));
+    swift_run.addArg("-Xcc");
+    swift_run.addArg(b.fmt("-I{s}/priv/native/ios", .{scene3d_dir}));
     swift_run.addArg("-I");
     swift_run.addArg(b.fmt("{s}/ios", .{mob_dir}));
     swift_run.addArgs(&.{ "-parse-as-library", "-wmo" });
@@ -273,6 +282,23 @@ pub fn build(b: *std.Build) void {
         installAndCollect(b, objects_step, &objs, obj_lp, b.fmt("{s}.o", .{spec.name}));
     }
 
+    // --- mob_scene3d's Filament renderer (manifest host_requirements) ────────
+    // ObjC++ (C++17, as Filament requires) against the vendored Filament
+    // headers (ios/vendor/filament, from scripts/fetch_filament_ios.sh).
+    {
+        const mm_run = b.addSystemCommand(&.{
+            "xcrun",                            "-sdk",       "iphonesimulator", "cc", "-arch", "arm64",
+            "-mios-simulator-version-min=17.0", "-std=gnu++17", "-Os",
+            "-ffunction-sections",              "-fdata-sections", "-fobjc-arc",
+        });
+        mm_run.addArg(b.fmt("-I{s}/vendor/filament/include", .{project_ios_dir}));
+        mm_run.addArg(b.fmt("-isysroot{s}", .{sdkroot}));
+        mm_run.addArg("-c");
+        mm_run.addFileArg(.{ .cwd_relative = b.fmt("{s}/priv/native/ios/MobScene3dView.mm", .{scene3d_dir}) });
+        mm_run.addArg("-o");
+        installAndCollect(b, objects_step, &objs, mm_run.addOutputFileArg("MobScene3dView.o"), "MobScene3dView.o");
+    }
+
     // --- Project-side C NIFs (auto-wired from mob.exs :static_nifs) ───────────
     // Same logic as build_device.zig. See that file for the full rationale.
     if (project_c_nifs.len > 0) {
@@ -367,6 +393,7 @@ pub fn build(b: *std.Build) void {
         .project_rust_libs = project_rust_libs,
         .plugin_static_libs = plugin_static_libs,
         .plugin_frameworks = plugin_frameworks,
+        .filament_lib_dir = b.fmt("{s}/vendor/filament/lib", .{project_ios_dir}),
         .objects = objs.items,
         .simulator_entitlements = .{ .cwd_relative = b.fmt("{s}/simulator_entitlements.plist", .{project_ios_dir}) },
     });
@@ -535,6 +562,8 @@ const LinkOptions = struct {
     plugin_static_libs: []const u8 = "",
     // Plugin-contributed extra iOS frameworks (comma-separated).
     plugin_frameworks: []const u8 = "",
+    // mob_scene3d: the vendored Filament xcframeworks (ios/vendor/filament/lib).
+    filament_lib_dir: []const u8,
     objects: []const std.Build.LazyPath,
     // The simulator's "simulated entitlements" (ios/simulator_entitlements.plist),
     // linked into __TEXT,__entitlements as Xcode does: the simulator reads an
@@ -623,6 +652,22 @@ fn addLink(b: *std.Build, step: *std.Build.Step, opts: LinkOptions) void {
             const lp: std.Build.LazyPath = .{ .cwd_relative = lib_path };
             run.addFileArg(lp);
         }
+    }
+
+    // mob_scene3d: Filament's static archives (the xcframeworks' simulator
+    // slices). After OTP's libzstd.a, so Filament's zstd only fills gaps.
+    const filament_libs = [_][]const u8{
+        "filament",      "backend",     "filabridge",  "filaflat",
+        "utils",         "geometry",    "smol-v",      "ibl",
+        "image",         "gltfio_core", "ktxreader",   "basis_transcoder",
+        "meshoptimizer", "dracodec",    "uberarchive", "uberzlib",
+        "stb",           "zstd",        "perfetto",    "abseil",
+    };
+    for (filament_libs) |lib| {
+        run.addFileArg(.{ .cwd_relative = b.fmt(
+            "{s}/lib{s}.xcframework/ios-arm64_x86_64-simulator/lib{s}.a",
+            .{ opts.filament_lib_dir, lib, lib },
+        ) });
     }
 
     run.addArgs(&.{ "-lz", "-lc++", "-lpthread" });

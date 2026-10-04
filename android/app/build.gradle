@@ -75,8 +75,15 @@ android {
         kotlinCompilerExtensionVersion '1.5.8'
     }
 
+    // Java 17: mob_scene3d's filament-utils-android ships Java-17 bytecode
+    // (mob_scene3d host requirement).
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
 
     signingConfigs {
@@ -182,5 +189,10 @@ dependencies {
     implementation "androidx.biometric:biometric:1.1.0"
     implementation "androidx.work:work-runtime-ktx:2.9.0"
     implementation "com.google.firebase:firebase-messaging:23.4.1"
+    implementation "com.google.android.gms:play-services-auth-api-phone:18.0.2"
+    implementation "com.google.mlkit:text-recognition:16.0.1"
+    implementation "com.google.android.filament:filament-android:1.75.1"
+    implementation "com.google.android.filament:gltfio-android:1.75.1"
+    implementation "com.google.android.filament:filament-utils-android:1.75.1"
     // mob:plugin-deps END
 }

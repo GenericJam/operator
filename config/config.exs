@@ -168,6 +168,14 @@ trusted_publish_key =
     _ -> nil
   end
 
+# mob_rapier's Rustler on_load looks its NIF up through this app's lib dir:
+# the phone's flat OTP bundle has no per-dep lib dirs (MOB-254).
+config :mob_rapier, :otp_app, :operator
+
+# Ash (mob_ash): front screens declare their own resources, which Ash refuses
+# to compile until it knows how to count string length.
+config :ash, default_string_length_count: :codepoints
+
 config :mob_deliver,
   trusted_publish_key: trusted_publish_key,
   app: "com.genericjam.operator",

@@ -22,7 +22,8 @@ defmodule Mix.Tasks.Operator.DocsTest do
           {"mob_mishka", "9.9.2", "Mishka composites for Mob apps"},
           {"mob_camera", "9.9.3", "Native camera capture for Mob apps (extracted from mob core)"},
           {"mob_deliver", "9.9.4", "OTA updates"},
-          {"mob_themes", "9.9.5", "Themes — five looks in one package"}
+          {"mob_themes", "9.9.5", "Themes — five looks in one package"},
+          {"mob_rapier", "9.9.6", "Rapier 3D physics for Mob apps"}
         ] do
       dir = Path.join(deps, app)
       File.mkdir_p!(dir)
@@ -146,7 +147,7 @@ defmodule Mix.Tasks.Operator.DocsTest do
       out |> Path.join("*.md") |> Path.wildcard() |> Enum.map(&Path.basename(&1, ".md"))
 
     assert Enum.sort(names) ==
-             Enum.sort(@guides ++ ~w(mob_rules mishka mob_camera mob_themes index))
+             Enum.sort(@guides ++ ~w(mob_rules mishka mob_camera mob_rapier mob_themes index))
 
     # Guides are the dep's version's HexDocs, as they are.
     assert read(out, "components") == "# components\n"
@@ -156,6 +157,7 @@ defmodule Mix.Tasks.Operator.DocsTest do
     index = read(out, "index")
     assert index =~ "\nmob_camera: Native camera capture\n"
     assert index =~ "\nmob_themes: Themes\n"
+    assert index =~ "\nmob_rapier: Rapier 3D physics\n"
     assert index =~ "mob 9.9.1, mob_mishka 9.9.2"
     assert index =~ "\ncomponents: "
 

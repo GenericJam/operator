@@ -25,8 +25,9 @@ defmodule Mix.Tasks.Operator.Docs do
       the first sentence of its moduledoc.
     * Each activated capability plugin's README (`config :mob, :plugins`
       and `:styles` in `mob.exs`), except mob_deliver (the Core's own
-      updates, which Dyn code may not call) and mob_mishka (above). The
-      line in the index is the package's description.
+      updates, which Dyn code may not call) and mob_mishka (above), plus
+      mob_rapier's (linked as a static NIF, not a plugin). The line in the
+      index is the package's description.
 
   Anything the sources no longer have (a guide, an AGENTS.md section) stops
   the task rather than writing a partial set.
@@ -66,6 +67,9 @@ defmodule Mix.Tasks.Operator.Docs do
   ]
 
   @not_capabilities [:mob_deliver, :mob_mishka]
+  # Packages front screens can call that aren't mob plugins: mob_rapier is
+  # linked as the `:lab_physics` static NIF (mob.exs).
+  @static_nif_packages [:mob_rapier]
 
   @impl Mix.Task
   def run(args) do
@@ -93,7 +97,7 @@ defmodule Mix.Tasks.Operator.Docs do
     mob = version!(deps, :mob)
     mishka = version!(deps, :mob_mishka)
     {plugins, styles} = activated(opts[:mob_exs] || "mob.exs")
-    capabilities = (plugins -- @not_capabilities) ++ styles
+    capabilities = (plugins -- @not_capabilities) ++ @static_nif_packages ++ styles
 
     guides =
       Enum.map(@guides, fn {name, line} ->

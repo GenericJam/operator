@@ -41,3 +41,6 @@ _build/mob_release/
 
 # Copied from priv/fonts by mob_dev on every native build
 /android/app/src/main/res/font/
+
+# Filament iOS artifacts for mob_scene3d (scripts/fetch_filament_ios.sh)
+ios/vendor/

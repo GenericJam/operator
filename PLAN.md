@@ -307,7 +307,11 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
     `mob_screencast`, `mob_video`, `mob_touch`, `mob_wake`, and
     `mob_biometric` for front screens (approval of self-changes stays on
     `OperatorApproval.kt` / `ios/OperatorApproval.swift`). Already in: camera, location, notify, photos,
-    scanner, background, deliver, speech/whisper.
+    scanner, background, deliver, speech/whisper. Added 2026-10-04 (every
+    other first-party plugin on Hex): `mob_sms`, `mob_vision`, `mob_nfc`,
+    `mob_midi`, `mob_audio_capture` (Android only), `mob_scene3d`,
+    `mob_nx_eigen`, `mob_rapier` (static NIF `:lab_physics`) and `mob_ash`;
+    left out: `mob_push` (a server-side sender) and the unpublished ones.
   - Android permissions (Sloppy Joe's manifest): CAMERA (+ camera and
     autofocus features, not required), ACCESS_FINE/COARSE_LOCATION,
     READ_MEDIA_IMAGES / READ_MEDIA_VIDEO (+ READ_EXTERNAL_STORAGE up to
@@ -546,5 +550,13 @@ finger on the iPhone (list sent 2026-10-04).
 | front tools (screens, open, screenshot), read_guide, read_doc | verified | verified | verified | |
 | Self-modification (Dyn compile + load) | verified | seed + proposals compile (IosViews: probation, rescue) | seed generation proven; G2 proposal compiled | auto-revert after crashes not rerun on iOS |
 | Sloppy Joe plugins started | verified | all 17 apps started, NIFs answer | all 17 apps started, NIFs answer (wake, video, touch, screencast, camera, location, notify, whisper, background) | Bluetooth Classic is Android-only by design (BLE is cross-platform); push needs an explicit App ID with Push |
+| mob_vision (OCR) | verified: "Operator OCR 42" from a generated PNG | verified: same text | not run | |
+| mob_sms | composer intent opens Google Messages (this Moto has no SIM: "Could not start conversation") | `{:sms, :not_available}` (no Messages on the sim) | not run | |
+| mob_nfc | `available?` false (Moto G Power 2021 has no NFC) | false (no NFC on the sim) | not run; device builds need the NFC entitlement in the provisioning profile | tag read/write/HCE need NFC hardware + tags |
+| mob_midi | `list_devices` → `[]` | `[]` | not run | needs a USB/BLE MIDI device |
+| mob_audio_capture | MediaProjection consent → capturing (`:silent`), stop → `:not_capturing` | `:unsupported_on_platform` (by design) | n/a | Android only |
+| mob_scene3d | glb cube rendered in a throwaway screen | glb cube rendered | not run | iOS: `scripts/fetch_filament_ios.sh` first (ios/vendor, gitignored); device link wired in build_device.zig but not yet built |
+| mob_rapier, mob_nx_eigen | ball drops and comes to rest; `Nx.dot` on `NxEigen.Backend` | same | not run | rapier is the `:lab_physics` static NIF |
+| mob_ash | an Ash resource compiles on the phone in 675 ms, create/read on ETS, `MobAsh.ListScreen` shows it | apps start | not run | `config :ash, default_string_length_count` set |
 | OTA updates (mob_deliver) | verified 1-3 | verified: deliver link → server set → publish → installed → runs after relaunch | link + server set; install not run | |
 | Background (mob_background) | verified | n/a | verified: without the keep-alive the BEAM froze while Safari was in front (no tick for 100 s); with `MobBackground.keep_alive/0` it ticked every 5 s and HTTPS returned 200 at 30/60/90 s, dist stayed up | screen-locked case not tested; the run-start hook (`Operator.Core.KeepAlive`) needs a login to exercise |

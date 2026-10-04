@@ -6,12 +6,13 @@
   nifs: [:mob_background_nif, :mob_location_nif, :mob_notify_nif,
    :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif, :mob_biometric_nif,
    :mob_bluetooth_nif, :mob_screencast_nif, :mob_video_nif, :mob_touch_nif,
-   :mob_wake_nif, :mob_whisper_nif],
+   :mob_wake_nif, :mob_sms_nif, :mob_vision_nif, :mob_nfc_nif, :mob_midi_nif,
+   :mob_audio_capture_nif, :mob_scene3d_nif, :nx_eigen, :mob_whisper_nif],
   plugins: [:mob_background, :mob_location, :mob_notify, :mob_camera,
    :mob_photos, :mob_scanner, :mob_biometric, :mob_bluetooth, :mob_screencast,
-   :mob_video, :mob_touch, :mob_wake, :mob_deliver, :mob_whisper, :mob_mishka],
-  styles: [%{name: :mob_themes, theme: MobThemes.Obsidian}],
-  settings: [],
+   :mob_video, :mob_touch, :mob_wake, :mob_sms, :mob_vision, :mob_nfc,
+   :mob_midi, :mob_audio_capture, :mob_scene3d, :mob_nx_eigen, :mob_ash,
+   :mob_deliver, :mob_whisper, :mob_mishka],
   screens: [
     %{
       module: MobLocation.DemoScreen,
@@ -37,10 +38,30 @@
       module: MobTouch.DemoScreen,
       plugin: :mob_touch,
       default_route: "/mob_touch/demo"
+    },
+    %{
+      module: MobSms.DemoScreen,
+      plugin: :mob_sms,
+      default_route: "/mob_sms/demo"
+    },
+    %{
+      module: MobMidi.KeyboardScreen,
+      plugin: :mob_midi,
+      default_route: "/midi_keyboard"
+    },
+    %{
+      module: MobMidi.InputScreen,
+      plugin: :mob_midi,
+      default_route: "/midi_input"
+    },
+    %{
+      module: MobAudioCapture.DemoScreen,
+      plugin: :mob_audio_capture,
+      default_route: "/mob_audio_capture/demo"
     }
   ],
-  notification_handlers: [],
   lifecycle: [
+    %{plugin: :mob_nx_eigen, on_start: {MobNxEigen, :configure, []}},
     %{
       plugin: :mob_deliver,
       on_start: {MobDeliver, :on_start, []},
@@ -49,7 +70,10 @@
     },
     %{plugin: :mob_mishka, on_start: {MobMishka, :register_all, []}}
   ],
+  settings: [],
+  notification_handlers: [],
   default_font: nil,
+  composites: [],
   default_style: nil,
-  composites: []
+  styles: [%{name: :mob_themes, theme: MobThemes.Obsidian}]
 }

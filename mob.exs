@@ -18,7 +18,12 @@ config :mob_dev,
     System.get_env("MOB_ELIXIR_LIB", :code.lib_dir(:elixir) |> to_string() |> Path.dirname()),
   # App-owned C NIF (c_src/<module>.c): the Keychain / EncryptedSharedPrefs
   # store that holds the provider sign-ins (Operator.SecureStore, Operator.Auth).
-  static_nifs: [%{module: :operator_secure_store, archs: [:all]}],
+  # lab_physics is mob_rapier's Rustler crate (Rapier 3D physics, MobRapier.Physics),
+  # cross-compiled for both platforms and linked in like the store.
+  static_nifs: [
+    %{module: :operator_secure_store, archs: [:all]},
+    %{module: :lab_physics, archs: [:all]}
+  ],
   # operator:// links (Operator.Links: the QR codes mix operator.handoff,
   # operator.login and operator.deliver.qr make on the Mac, scanned with any app).
   # The native build adds the Android intent filter (MainActivity must stay
@@ -50,6 +55,20 @@ config :mob, :plugins, [
   :mob_video,
   :mob_touch,
   :mob_wake,
+  :mob_sms,
+  :mob_vision,
+  :mob_nfc,
+  :mob_midi,
+  # Android only; on iOS its NIF answers :unsupported_on_platform.
+  :mob_audio_capture,
+  # Declarative 3D scenes (the <Scene3d> tag, Filament) and Nx's Eigen CPU
+  # backend (set as the global Nx backend at boot).
+  :mob_scene3d,
+  :mob_nx_eigen,
+  # Pure Elixir: Ash runs on the phone; front screens declare their own
+  # resources and open mob_ash's screens with MobAsh.navigate/3 (no build-time
+  # :ash_domains, so it generates no routes).
+  :mob_ash,
   # OTA updates of Operator's own code: pure Elixir, no NIF (config in
   # config/config.exs, Operator.Deliver).
   :mob_deliver,
@@ -86,7 +105,13 @@ config :mob, :trusted_plugins, %{
   mob_video: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_touch: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_wake: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
-  mob_whisper: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
+  mob_whisper: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_sms: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_vision: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_nfc: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_midi: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_scene3d: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_nx_eigen: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
 }
 
 # mob_whisper comes from its git tag until Hex has it (mix.exs), and a git

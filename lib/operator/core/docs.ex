@@ -87,10 +87,14 @@ defmodule Operator.Core.Docs do
     - Capabilities (each has a guide; `device_capabilities` for `Mob.*`): `MobCamera` \
     (`:camera`), `MobLocation` (`:location`), `MobPhotos` (`:media`), `MobScanner` (`:camera`), \
     `MobNotify` (`:notifications`), `MobBluetooth` (`:bluetooth_connect`), `MobBiometric`, \
-    `MobTouch`, `MobVideo`, `MobScreencast`, `Mob.Speech`, `Mob.Haptic`, `Mob.Clipboard`, \
-    `Mob.Share`, `Mob.Alert`, `Mob.Device.open_url/1` (browser, `tel:`, `geo:`), `Req` for \
-    HTTP. E.g. `MobLocation.get_once(socket)` → `{:location, %{lat: _, lon: _}}` or \
-    `{:location, :error, reason}` to `handle_info/2`; read the guide for each call's messages.
+    `MobTouch`, `MobVideo`, `MobScreencast`, `MobSms` (composer), `MobVision` (OCR of an \
+    image file), `MobNfc`, `MobMidi`, `MobAudioCapture` (Android), `Mob.Scene3d` (the \
+    `<Scene3d>` 3D viewport), `MobRapier.Physics` (3D physics), `Nx` (Eigen backend), Ash \
+    resources on `Ash.DataLayer.Ets` with `MobAsh.navigate/3`, `Mob.Speech`, `Mob.Haptic`, \
+    `Mob.Clipboard`, `Mob.Share`, `Mob.Alert`, `Mob.Device.open_url/1` (browser, `tel:`, \
+    `geo:`), `Req` for HTTP. E.g. `MobLocation.get_once(socket)` → \
+    `{:location, %{lat: _, lon: _}}` or `{:location, :error, reason}` to `handle_info/2`; \
+    read the guide for each call's messages.
     """
   end
 

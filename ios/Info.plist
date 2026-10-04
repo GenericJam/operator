@@ -47,6 +47,8 @@
     <string>Operator uses Bluetooth to find and connect to nearby devices.</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Operator uses Face ID to approve changes and to unlock screens you built.</string>
+    <key>NFCReaderUsageDescription</key>
+    <string>Operator uses NFC when a screen you built reads or writes a nearby tag.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSceneManifest</key>

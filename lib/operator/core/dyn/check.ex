@@ -64,7 +64,11 @@ defmodule Operator.Core.Dyn.Check do
   @mob_allowed ~w(Mob.Screen Mob.Socket Mob.Sigil Mob.UI Mob.Style Mob.Theme Mob.SizeClass
                   Mob.List Mob.Font Mob.Motion Mob.Haptic Mob.Clipboard Mob.Alert Mob.Share
                   Mob.Event Mob.Canvas Mob.Speech Mob.State Mob.Permissions Mob.Device
-                  Mob.Audio Mob.Files Mob.Notification Mob.WebView Mob.Wake)
+                  Mob.Audio Mob.Files Mob.Notification Mob.WebView Mob.Wake
+                  Mob.Scene3d Mob.Scene3d.Projection Mob.Scene3d.IR Mob.Scene3d.IR.Entity
+                  Mob.Scene3d.IR.Transform Mob.Scene3d.IR.Material Mob.Scene3d.IR.Model
+                  Mob.Scene3d.IR.Animation Mob.Scene3d.IR.Camera Mob.Scene3d.IR.Light
+                  Mob.Scene3d.IR.Environment)
 
   # The built-in themes a screen may hand `Mob.Theme.set/1`.
   @mob_themes ~w(Mob.Theme.Dark Mob.Theme.Light Mob.Theme.Adaptive)

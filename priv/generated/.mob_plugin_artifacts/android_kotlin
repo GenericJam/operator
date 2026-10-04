@@ -10,3 +10,9 @@ android/app/src/main/java/io/mob/screencast/MobScreencastBridge.kt
 android/app/src/main/java/io/mob/video/MobVideoBridge.kt
 android/app/src/main/java/io/mob/touch/MobTouchBridge.kt
 android/app/src/main/java/io/mob/wake/MobWakeBridge.kt
+android/app/src/main/java/io/mob/sms/MobSmsBridge.kt
+android/app/src/main/java/io/mob/vision/MobVisionBridge.kt
+android/app/src/main/java/io/mob/nfc/MobNfcBridge.kt
+android/app/src/main/java/io/mob/midi/MobMidiBridge.kt
+android/app/src/main/java/io/mob/audiocapture/MobAudioCaptureBridge.kt
+android/app/src/main/java/io/mob/scene3d/MobScene3dBridge.kt

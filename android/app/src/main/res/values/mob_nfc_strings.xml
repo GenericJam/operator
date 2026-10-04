@@ -1,0 +1,5 @@
+<resources>
+    <!-- Shown in the system NFC "Choose app to scan" / tap-and-pay UI for the
+         mob_nfc HCE service. Plugin-owned so the host needs no app_name string. -->
+    <string name="mob_nfc_hce_description">NFC tag emulation</string>
+</resources>

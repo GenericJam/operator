@@ -13,6 +13,7 @@ object MobPluginBootstrap {
 
     @JvmStatic
     fun registerAll(activity: Activity) {
+        registerUiComponents()
         io.mob.background.MobBackgroundBridge.register()
         handOff(io.mob.background.MobBackgroundBridge, activity)
         collectPermissionProvider(io.mob.background.MobBackgroundBridge)
@@ -49,6 +50,24 @@ object MobPluginBootstrap {
         io.mob.wake.MobWakeBridge.register()
         handOff(io.mob.wake.MobWakeBridge, activity)
         collectPermissionProvider(io.mob.wake.MobWakeBridge)
+        io.mob.sms.MobSmsBridge.register()
+        handOff(io.mob.sms.MobSmsBridge, activity)
+        collectPermissionProvider(io.mob.sms.MobSmsBridge)
+        io.mob.vision.MobVisionBridge.register()
+        handOff(io.mob.vision.MobVisionBridge, activity)
+        collectPermissionProvider(io.mob.vision.MobVisionBridge)
+        io.mob.nfc.MobNfcBridge.register()
+        handOff(io.mob.nfc.MobNfcBridge, activity)
+        collectPermissionProvider(io.mob.nfc.MobNfcBridge)
+        io.mob.midi.MobMidiBridge.register()
+        handOff(io.mob.midi.MobMidiBridge, activity)
+        collectPermissionProvider(io.mob.midi.MobMidiBridge)
+        io.mob.audiocapture.MobAudioCaptureBridge.register()
+        handOff(io.mob.audiocapture.MobAudioCaptureBridge, activity)
+        collectPermissionProvider(io.mob.audiocapture.MobAudioCaptureBridge)
+        io.mob.scene3d.MobScene3dBridge.register()
+        handOff(io.mob.scene3d.MobScene3dBridge, activity)
+        collectPermissionProvider(io.mob.scene3d.MobScene3dBridge)
     }
 
     // Returns the first plugin-supplied Android permission mapping for `cap`,
@@ -74,6 +93,14 @@ object MobPluginBootstrap {
     private fun collectPermissionProvider(bridge: Any) {
         (bridge as? MobPermissionProvider)?.let {
             if (!permissionProviders.contains(it)) permissionProviders.add(it)
+        }
+    }
+
+    // Registers explicitly opted-in plugin ui_components factories.
+    private fun registerUiComponents() {
+        // mob_scene3d: Mob_Scene3d_Viewport
+        com.genericjam.operator.MobNativeViewRegistry.register("Mob_Scene3d_Viewport") { props, send ->
+            io.mob.scene3d.MobScene3dViewport(props, send)
         }
     }
 }

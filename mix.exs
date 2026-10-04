@@ -55,6 +55,22 @@ defmodule Operator.MixProject do
       {:mob_video, "~> 0.1.1"},
       {:mob_touch, "~> 0.1.1"},
       {:mob_wake, "~> 0.1.1"},
+      {:mob_sms, "~> 0.2.3"},
+      {:mob_vision, "~> 0.1.2"},
+      {:mob_nfc, "~> 0.1.3"},
+      {:mob_midi, "~> 0.1.1"},
+      # Android only (iOS has no output-mix capture; its NIF answers
+      # :unsupported_on_platform).
+      {:mob_audio_capture, "~> 0.1.1"},
+      # Declarative 3D scenes (Filament) for front screens.
+      {:mob_scene3d, "~> 0.1.2"},
+      # Nx on the phone: the Eigen CPU backend (configured at boot by the plugin).
+      {:mob_nx_eigen, "~> 0.1.1"},
+      # 3D physics: a Rustler NIF, linked as the :lab_physics static NIF (mob.exs).
+      {:mob_rapier, "~> 0.1.0"},
+      # Ash resources (front screens declare them; Ash.DataLayer.Ets) and
+      # mob_ash's list/detail/create screens for them (MobAsh.navigate/3).
+      {:mob_ash, "~> 0.1.2"},
       # Dictation: hold the mic, the phone transcribes offline (whisper.cpp,
       # Operator.ChatScreen). mob_speech is the speech API, mob_whisper its
       # on-device engine (a mob plugin, mob.exs).
