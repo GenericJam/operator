@@ -182,21 +182,22 @@ Android 11, which has no such restriction.
 ## Speech to text (quick entry)
 
 Talking is faster than typing on a phone, and the agent already talks back
-(`Mob.Speech`), so input should work by voice too. mob has no speech
-recognition today (`Mob.Speech` only speaks).
-- **Works now, no code:** the keyboard's own mic (Gboard on the Moto)
-  dictates into the composer.
-- **Built in (Android first):** a mic button next to Send. Tap to talk:
-  Android `SpeechRecognizer` (prefer on-device recognition when available;
-  `RECORD_AUDIO` permission requested on first use) streams partial results
-  into the composer live; stopping (tap again, or silence) leaves the text
-  for a quick edit. Long-press the mic = talk and send immediately (or
-  steer, if a run is going). App-local Kotlin + a component event bridge,
-  like the Markdown view.
-- **iOS later:** `SFSpeechRecognizer` (needs the speech + microphone usage
-  strings in Info.plist).
-- If it proves generally useful, lift it into a mob plugin (needs Kevin's
-  OK for a Hex release).
+(`Mob.Speech`), so input works by voice too.
+- **Hold to talk** (Kevin, 2026-10-03): hold the mic next to Send while
+  speaking; on release the transcript goes into the composer to edit, and
+  is never sent by itself. A press under 300 ms only shows a hint.
+- **Built on mob, not app code:** the mic is a plain box with mob's
+  `on_press_in` / `on_press_out` (mob 0.9.12, MOB-380); recognition is
+  `mob_speech` with the `mob_whisper` engine (offline whisper.cpp,
+  `base.en`, 60 MB model downloaded once and prefetched when the chat
+  opens; MOB-381). Text arrives ~1.5–2.5 s after release on the Moto G 2021.
+- **Why not Android's `SpeechRecognizer`:** on the Moto G 2021 the Google
+  app's service returned empty results (no language pack; Gboard voice
+  typing fails too) and took 10–20 s to report back after stop.
+- `mob_speech` and `mob_whisper` come from git tags (0.1.0) until their
+  repos have a `HEX_API_KEY` (Kevin).
+- **iOS:** `mob_whisper` builds for iOS (AudioQueue capture) but hasn't
+  run on an iPhone.
 
 ## Transcript rendering contract (phone ⇄ omp)
 
@@ -325,11 +326,11 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    notification, network verified past 60 s) plus **spoken updates**
    (`Mob.Speech`). Done and device-verified, including the notification
    permission ask (first send) and the `[voice:…]` setting.
-2b. **Speech to text** (section above): mic chip with live partials into
-   the composer; long-press to talk and send (or steer). Built; verified on
-   the Android 15 emulator up to recognition (no audio played at night);
-   on the Moto G 2021 the Google app's own mic permission is denied, a
-   phone setting (op-i2w).
+2b. **Speech to text** (section above): hold-to-talk mic, transcript into
+   the composer, unsent. Done: offline Whisper via `mob_speech` +
+   `mob_whisper`, mob's press events; verified on the Moto G 2021 by hand
+   (Kevin) and with `Mob.Test.press_down_xy` / `press_up_xy` while the Mac
+   spoke a sentence.
 3. **Self-modification**: generations with versioned module names, static
    check, selftests, screen-lock approval, probation, automatic revert, safe
    mode + rescue screen; agent-editable terminal theme as the first Dyn
