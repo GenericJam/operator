@@ -144,72 +144,33 @@ defmodule Operator.Core.Front do
     """
     ## The front: the app the user sees
 
-    Operator has a front and a back. The back is this terminal. The front is the app's UI, \
-    built by the user with you: Dyn screens (modules with `use Mob.Screen`). The user switches \
-    between them with the toggle, Operator's logo in the upper left corner, which Operator draws \
-    over every screen: keep the top-left 56×48 dp of a front screen free of anything tappable. \
-    Nothing can hide, cover or move it; only its symbol is yours, `Operator.Dyn.Front.toggle/0`: \
-    `:dial` (the logo, default) or `{:text, "☎"}` (1 to 8 characters).
+    The front is the app's UI, Dyn screens (`use Mob.Screen`) the user builds with you. The \
+    toggle, Operator's logo in the upper left corner, is drawn over every screen: keep the \
+    top-left 56×48 dp of a front screen free of anything tappable. Nothing can hide, cover or \
+    move it; only its symbol is yours, `Operator.Dyn.Front.toggle/0`: `:dial` (the logo, \
+    default) or `{:text, "☎"}` (1 to 8 characters).
 
-    A front change is a Dyn change like any other: `dyn_write`/`dyn_edit`, then `dyn_propose`; \
-    the human approves it with the screen lock, and the front restarts on the new code. \
+    A front change is a Dyn change like any other, and the front restarts on the new code. \
     `front_screens` lists the screens and says which is open and whether it crashed, \
     `front_open` switches the front to a screen (when asked, or when a screen has no way to \
     it), `front_screenshot` shows you the front: look at it after a change is active.
 
-    The default front is the widget gallery: `Operator.Dyn.Showcase.GalleryScreen` lists every \
-    Mishka Chelekom widget, and each has its own screen `Operator.Dyn.Showcase.Components.<Name>` \
-    (`showcase/components/<name>.ex`; the shared page is `showcase/page.ex`, the helpers \
-    `showcase/kit.ex`, the theme chips `theme_bar.ex`). They're worked examples of every widget: \
-    `dyn_read` one before you use its widget. `Operator.Dyn.Front.start/0` is the screen the front \
-    opens on. The user restores the defaults by reverting to the seed's generation (Diagnostics \
-    → Rescue); propose a change for anything else.
+    The default front is the widget gallery: `Operator.Dyn.Showcase.GalleryScreen` lists most \
+    Mishka widgets, each with its own screen `Operator.Dyn.Showcase.Components.<Name>` \
+    (`showcase/components/<name>.ex`, named in the `mishka` guide; also `showcase/page.ex`, \
+    `showcase/kit.ex`, `theme_bar.ex`): worked examples, `dyn_read` one before you use its widget. \
+    `Operator.Dyn.Front.start/0` is the screen the front opens on. Reverting to the seed's \
+    generation (Diagnostics → Rescue) restores the defaults.
 
-    Writing a front screen:
-    - `mount(params, session, socket)` seeds every assign `render/1` reads \
-    (`{:ok, Mob.Socket.assign(socket, ...)}`); `render(assigns)` returns a `~MOB` template or \
-    node maps (`%{type: :column, props: %{...}, children: [...]}`); `handle_info/2` takes \
-    events and always ends with a catch-all `def handle_info(_msg, socket), do: {:noreply, socket}`.
-    - Components: Column, Row, Box, Scroll, Text, Button, Spacer, Image (`src` a file path or \
-    URL), TextField, Toggle, Slider. Props: `padding`, `background`, `fill_width`, `fill_height`, \
-    `weight`, `text_size` (`:xs`..`:"2xl"` or a number), `text_color`, `corner_radius`. \
-    Colours are theme atoms (`:background`, `:surface`, `:surface_raised`, `:on_surface`, \
-    `:primary`, `:on_primary`, `:muted`, `:border`) or `0xAARRGGBB` integers.
-    - Events: `on_tap={{self(), :tag}}` sends `{:tap, :tag}`; inputs `on_change={{self(), :tag}}` \
-    send `{:change, :tag, value}`. Mishka widgets take a bare atom (`on_change={:volume}`).
-    - Mishka widgets are tags: `<MishkaSlider value={@v} on_change={:v} color={0xFF7C3AED} />`, \
-    MishkaSwitch, MishkaChip, MishkaTabs, MishkaDialog, MishkaDrawer, MishkaSelect, \
-    MishkaAccordion, ... (one gallery screen each; `MobMishka.Components.Mishka<Name>` has helpers \
-    such as `MishkaSlider.snap/2`).
-    - Navigation: `Mob.Socket.push_screen(socket, Operator.Dyn.Other)`, `pop_screen/1`, \
-    `reset_to/2`, between front screens only. Android's back button goes to the terminal.
-    - Themes: `Mob.Theme.set(Mob.Theme.Dark)` (or `Mob.Theme.Light`, `MobThemes.Material3`, \
-    `MobThemes.ObsidianGlass`, ...) themes the front; the terminal keeps its own.
-    - The open screen runs in a process of its own: plugin results, permission answers, timers \
-    (`Process.send_after(self(), ...)`) all come to its `handle_info/2`, also from `mount/3`. It \
-    keeps its state while the user is in the terminal, and restarts when a new generation \
-    activates. If it raises, the front shows the error (the toggle still works) and \
-    front_screens reports it; 3 crashes within 60 s of a new generation revert it.
-
-    Phone capabilities (plugins), each permission asked when first used, never at launch: call \
-    `Mob.Permissions.request(socket, perm)` and start the capability at once (an \
-    already-granted permission sends no message), then handle the results:
-    - camera (`:camera`): `MobCamera.capture_photo(socket)` → `{:camera, :photo, %{path: p, \
-    width: w, height: h}}` / `{:camera, :cancelled}`; also `capture_video/2`, `start_preview/2`.
-    - location (`:location`): `MobLocation.get_once(socket)` → `{:location, %{lat: _, lon: _, \
-    accuracy: _}}` / `{:location, :error, reason}`; `start/2`, `stop/1` to stream.
-    - photos (`:media`): `MobPhotos.pick(socket)` → `{:photos, :picked, items}` / \
-    `{:photos, :cancelled}`.
-    - QR codes (`:camera`): `MobScanner.scan(socket)` → `{:scan, :result, %{type: _, value: _}}` \
-    / `{:scan, :cancelled}`.
-    - notifications (`:notifications`): `MobNotify.schedule(socket, opts)`, `cancel/2`.
-    - Bluetooth (`:bluetooth_connect`): `MobBluetooth`. Fingerprint/face: \
-    `MobBiometric.authenticate(socket)` → `{:biometric, :success | :failure | :not_available}`.
-    - touches: `MobTouch.start(socket)` → `{:touch, %{phase: _, x: _, y: _, pointer: _}}`; \
-    video: `MobVideo.probe/2`, `clip/4`, `thumbnail/4` → `{:video, ...}`; screen capture: \
-    `MobScreencast.start_stream/2`; speech: `Mob.Speech`; also `Mob.Haptic`, `Mob.Clipboard`, \
-    `Mob.Share`, `Mob.Alert`, `Mob.Device.open_url/1` (browser, `tel:`, `geo:`), `Mob.State` \
-    (a small persistent key-value store), `Req` for HTTP.
+    A front screen is a Dyn screen (Building with mob, above) with these differences: \
+    `push_screen`, `pop_screen` and `reset_to` go between front screens only, and Android's \
+    back button goes to the terminal; `Mob.Theme.set/1` themes the front, the terminal keeps \
+    its own theme. The open screen runs in a process of its own: plugin results, permission \
+    answers and timers (`Process.send_after(self(), ...)`) all come to its `handle_info/2`, \
+    also from `mount/3`. It keeps its state while the user is in the terminal, and restarts \
+    when a new generation activates. If it raises, the front shows the error (the toggle \
+    still works) and `front_screens` reports it; 3 crashes within 60 s of a new generation \
+    revert it.
     """
   end
 

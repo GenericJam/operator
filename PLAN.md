@@ -479,3 +479,16 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    Not tried on the device: the gallery replacing the old stack when the
    seed installs (host-tested; this phone was seeded before that change).
    The Light theme draws the gallery's cards white on white.
+10. **Agent onboarding** (Kevin, 2026-10-04). The agent on the phone has no
+   mob docs otherwise. `mix operator.docs` writes `priv/docs/` from the
+   locked deps (mob's app guides from that version's HexDocs, the app parts
+   of mob's AGENTS.md, the Mishka widgets with their gallery screens, each
+   activated plugin's README; commit the output), embedded by
+   `Operator.Core.Docs`; Core tools `read_guide` (section, lines, budget)
+   and `read_doc` (`Code.fetch_docs`: dev deploys keep Docs chunks, checked
+   on the Moto; an OTA update strips Operator's own). System prompt: "This
+   environment", "Building with mob" (read the guide / `read_doc` before an
+   unfamiliar API) and the guide index. Done; on the Moto G 2021 Haiku read
+   the guides and docs and proposed a location screen with Mishka tabs from
+   the gallery (G11 pending: Kevin approves). Haiku often hits the 12-call
+   limit on a new screen.

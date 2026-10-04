@@ -44,7 +44,9 @@ defmodule Operator.Core.ToolsTest do
              "notes",
              "notify",
              "pick_photos",
-             "read_artifact"
+             "read_artifact",
+             "read_doc",
+             "read_guide"
            ]
 
     assert {:ok, Notes} = ToolRegistry.lookup("notes")

@@ -35,7 +35,10 @@ defmodule Operator.Core.ToolRegistry do
     # The front: its screens, which one shows, what it looks like.
     Operator.Core.Tools.FrontScreens,
     Operator.Core.Tools.FrontOpen,
-    Operator.Core.Tools.FrontScreenshot
+    Operator.Core.Tools.FrontScreenshot,
+    # The docs bundled with the app: mob's guides, the plugins, module docs.
+    Operator.Core.Tools.ReadGuide,
+    Operator.Core.Tools.ReadDoc
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

@@ -1,0 +1,1139 @@
+# Components
+
+The `~MOB` sigil (imported automatically by `use Mob.Screen`) is the primary way to write Mob UI. It compiles to plain Elixir maps at compile time — there is no runtime overhead.
+
+## Sigil syntax
+
+```elixir
+~MOB"""
+<Column padding={16}>
+  <Text text="Hello" text_size={:xl} />
+  <Button text="Save" on_tap={tap} />
+</Column>
+"""
+```
+
+Expression attributes use `{...}` and support any Elixir expression. For `on_tap` and similar handler props, pre-compute the `{pid, tag}` tuple before the sigil to avoid nested parentheses:
+
+```elixir
+def render(assigns) do
+  save_tap = {self(), :save}
+  ~MOB"""
+  <Column padding={16}>
+    <Text text={"Count: #{assigns.count}"} text_size={:xl} />
+    <Button text="Save" on_tap={save_tap} />
+  </Column>
+  """
+end
+```
+
+Expression child slots use `{...}` and accept a single node map or a list:
+
+```elixir
+~MOB"""
+<Column>
+  {Enum.map(assigns.items, fn item ->
+    ~MOB(<Text text={item} />)
+  end)}
+</Column>
+"""
+```
+
+## Control flow
+
+The sigil borrows three authoring idioms from Phoenix HEEx, so screens read the way LiveView developers expect.
+
+### `@assigns` shorthand
+
+Inside a `{...}` expression, `@foo` rewrites to `assigns.foo` at compile time. It works in attribute values, `{expr}` children, and the `:if`/`:for` directives below. Nested access like `@user.name` works too.
+
+```elixir
+def render(assigns) do
+  ~MOB"""
+  <Column padding={16}>
+    <Text text={@title} text_size={:xl} />
+    <Text text={"by #{@author.name}"} />
+  </Column>
+  """
+end
+```
+
+`@title` is exactly `assigns.title` — the two forms are interchangeable, so reach for whichever reads better.
+
+> **`@foo` only works where `assigns` is in scope** — that is, a screen's or component's `render(assigns)`. Reusable helper functions (the [function composites](#pure-elixir-composite-components) below) take **positional arguments**, and there is no `assigns` inside them, so interpolate the argument directly:
+>
+> ```elixir
+> # Screen render — assigns is in scope:
+> def render(assigns), do: ~MOB(<Text text={@title} />)
+>
+> # Helper — NO @; use the argument:
+> def label(title), do: ~MOB(<Text text={title} />)   # not @title
+> ```
+>
+> Reaching for `@foo` inside a helper is the most common mistake here. It raises a `CompileError` naming the fix (`{title}` instead of `@title`) rather than a cryptic "undefined variable assigns". If your `render` parameter is named something other than `assigns` (e.g. `socket`), `@foo` won't find it either — name it `assigns`.
+
+### `:if` — conditional rendering
+
+`:if={expr}` renders the element only when the expression is truthy. A falsy `:if` drops the element entirely (it does not render an empty placeholder):
+
+```elixir
+~MOB"""
+<Column>
+  <Badge text="New" :if={@unread > 0} />
+  <Text text="All caught up" :if={@unread == 0} />
+</Column>
+"""
+```
+
+### `:for` — comprehension
+
+`:for={x <- list}` repeats the element once per item and splices the results into the parent's children:
+
+```elixir
+~MOB"""
+<Column>
+  <Row :for={user <- @users}>
+    <Text text={user.name} />
+  </Row>
+</Column>
+"""
+```
+
+This is the declarative equivalent of the `{Enum.map(...)}` child slot shown above — use whichever is clearer for the case at hand.
+
+### Combining `:for` and `:if`
+
+When both are present on the same element, `:if` acts as a comprehension filter (matching LiveView): an element is produced only for items where the condition holds.
+
+```elixir
+# Renders a Text for 2 and 4 only
+<Text text={to_string(n)} :for={n <- 1..4} :if={rem(n, 2) == 0} />
+```
+
+`:if` and `:for` each require a `{expr}` value — `:if="true"` (a string) raises a `CompileError`. Only `:if` and `:for` are recognised; any other `:`-prefixed attribute is a compile-time error.
+
+## Map syntax
+
+The sigil compiles to plain maps. You can also write them directly — useful when building components programmatically:
+
+```elixir
+%{
+  type:     :column,
+  props:    %{padding: 16},
+  children: [
+    %{type: :text,   props: %{text: "Hello", text_size: :xl}, children: []},
+    %{type: :button, props: %{text: "Save",  on_tap: {self(), :save}}, children: []}
+  ]
+}
+```
+
+The two styles are fully interchangeable — you can mix them freely in the same `render/1` function.
+
+---
+
+`Mob.Renderer` serialises the component tree to JSON and passes it to the native side in a single NIF call. Compose (Android) and SwiftUI (iOS) handle diffing and rendering.
+
+## Prop values
+
+Props accept:
+
+- **Integers and floats** — used as-is (dp on Android, pt on iOS)
+- **Strings** — used as-is
+- **Booleans** — used as-is
+- **Color atoms** (`:primary`, `:blue_500`, etc.) — resolved via the active theme and the base palette to ARGB integers. See [Theming](theming.md).
+- **Raw colors** — a 32-bit **`0xAARRGGBB` integer** (alpha first, e.g. `0xFF2196F3`), **not** a CSS `"#RRGGBB"` string and **not** alpha-last. Include the `0xFF` alpha byte or the color renders transparent. See [Theming → Raw colors](theming.md#raw-colors-are-0xaarrggbb-integers-not-css-hex-strings).
+- **Spacing tokens** (`:space_xs`, `:space_sm`, `:space_md`, `:space_lg`, `:space_xl`) — scaled by `theme.space_scale` and resolved to integers.
+- **Radius tokens** (`:radius_sm`, `:radius_md`, `:radius_lg`, `:radius_pill`) — resolved to integers from the active theme.
+- **Text size tokens** (`:xs`, `:sm`, `:base`, `:lg`, `:xl`, `:2xl`, `:3xl`, `:4xl`, `:5xl`, `:6xl`) — scaled by `theme.type_scale` and resolved to floats.
+
+## Platform-specific props
+
+Wrap props in `:ios` or `:android` to apply them only on that platform:
+
+```elixir
+props: %{
+  padding: 12,
+  ios: %{padding: 20}   # iOS sees 20; Android sees 12
+}
+```
+
+## Layout components
+
+### `:column`
+
+Stacks children vertically.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `padding` | number / token | Uniform padding |
+| `padding_top`, `padding_bottom`, `padding_left`, `padding_right` | number / token | Per-side padding |
+| `gap` | number / token | Space between children |
+| `background` | color | Background color |
+| `width` | positive number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `height` | positive number | Fixed height in dp/pt. Overrides `fill_height`. |
+| `fill_width` | boolean | Stretch to fill available width (default `true`) |
+| `fill_height` | boolean | Stretch to fill available height |
+| `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
+
+Positive `width` and `height` win over `fill_*` on both platforms. Setting `width`
+also pins a `weight`-flexed child on the parent's flex axis, so
+`<Column width={90} weight={1}>` inside a Row stays 90 wide.
+
+### `:row`
+
+Lays out children horizontally.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `padding` | number / token | Uniform padding |
+| `gap` | number / token | Space between children |
+| `background` | color | Background color |
+| `width` | positive number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `height` | positive number | Fixed height in dp/pt. |
+| `fill_width` | boolean | Stretch to fill available width |
+| `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
+
+To distribute children evenly across a row, give each child a `weight` prop (analogous to `flex: 1` in CSS):
+
+```elixir
+save_tap   = {self(), :save}
+cancel_tap = {self(), :cancel}
+~MOB"""
+<Row fill_width={true}>
+  <Button text="Cancel" on_tap={cancel_tap} weight={1} background={:surface} text_color={:on_surface} />
+  <Spacer size={8} />
+  <Button text="Save" on_tap={save_tap} weight={1} />
+</Row>
+"""
+```
+
+A single weighted child expands into the parent's remaining main-axis space. Multiple
+weighted children divide that space evenly on iOS; Android additionally honors unequal
+numeric ratios. Weight values must be positive. Use equal weights for cross-platform layouts.
+
+### `:wrap`
+
+Greedily lays out children from start to end and starts a new run when the
+next child's measured native width would exceed the available width. This is
+the layout to use for chips, tags, filters, and other content-sized items:
+
+```elixir
+~MOB"""
+<Wrap spacing={:space_sm} run_spacing={:space_sm} fill_width={true}>
+  <Box :for={tag <- @tags} fill_width={false} padding={:space_sm} corner_radius={:radius_lg}>
+    <Text text={tag} />
+  </Box>
+</Wrap>
+"""
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `spacing` | number / token | Horizontal space between children |
+| `run_spacing` | number / token | Vertical space between runs |
+| `padding` | number / token | Uniform padding |
+| `background` | color | Background color |
+| `fill_width` | boolean | Stretch the wrap container to the available width |
+
+Children with `fill_width: true` occupy a complete run. `weight` is not
+supported inside a wrap; it remains a row/column main-axis concept.
+
+### `:box`
+
+A single-child container. Use it to add background, padding, or corner radius to a child:
+
+```elixir
+box_style = {self(), :box}
+~MOB"""
+<Box background={:surface} padding={:space_md} corner_radius={:radius_md}>
+  <Text text="Card content" />
+</Box>
+"""
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `padding` | number / token | Uniform padding |
+| `background` | color | Background color |
+| `corner_radius` | number / token | Corner radius |
+| `fill_width` | boolean | Stretch to fill available width |
+
+### `:scroll`
+
+A vertically scrolling container.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `padding` | number / token | Padding inside the scroll area |
+| `background` | color | Background color |
+| `lazy` | boolean | Build only the rows currently on screen. Opt-in; see below |
+
+For a scrolling body with a pinned footer, use
+`box(width, fill_height) > column(fill_width, fill_height) > [header, scroll(weight: 1), footer]`.
+This gives the weighted scroll bounded height while the footer remains in the
+column's non-scrolling space.
+
+#### `lazy: true`
+
+By default a `:scroll` builds every child up front. With `lazy: true`, a scroll
+whose direct content is a single `column` builds only what is on screen. On a
+500-row screen on a Moto G Power this takes main-thread frame cost from 498.9 ms
+to 115.8 ms (p50), and the worst frame from 1385.9 ms to 164.8 ms. Lazy cost is
+flat in list length where eager grows, so short lists gain nothing and may be
+marginally slower: this is a long-list optimisation.
+
+It is opt-in rather than automatic because laziness has consequences beyond
+speed, and all of them are silent:
+
+* **Rows below the fold are never built**, so they never register a frame.
+  `Mob.Test.element_frames/1` and `Mob.Test.tap_id/2` cannot address them.
+* **`scroll_to(:bottom)` under-scrolls**, because content size reflects only
+  what has been built.
+* **`screenshot_tour` truncates** for the same reason.
+* **Scroll position becomes index-based** rather than pixel-based.
+
+`:lazy_list` already makes that trade explicitly, which is why it is a separate
+component. Applying it silently to every `:scroll` would change harness
+behaviour under apps that never asked for it.
+
+The narrowing is deliberate: only a **vertical** scroll whose sole child is a
+plain `column` qualifies. A `row` under a horizontal scroll would be lazy on the
+wrong axis, and a child carrying `weight` needs its siblings measured, so both
+stay eager. Anything deeper than the scroll's direct child stays eager too.
+
+Available on both platforms from mob 0.7.39 / mob_new 0.4.31. An app that
+upgrades `mob` alone gets it on iOS only.
+
+### `:spacer`
+
+Inserts fixed space in a row or column, or fills available space when no `size` is given.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `size` | number | Fixed size in dp/pt. Omit to fill remaining space. |
+
+```elixir
+# Fixed gap:
+~MOB(<Spacer size={16} />)
+
+# Push children to opposite ends of a row:
+~MOB"""
+<Row>
+  <Text text="Left" />
+  <Spacer />
+  <Text text="Right" />
+</Row>
+"""
+```
+
+## Giving children a stable `:id`
+
+Set `:id` on the children of any container and their view state follows the
+child rather than the slot it happens to occupy.
+
+```elixir
+for user <- @users do
+  %{type: :text_field, props: %{id: user.id, text: user.name}, children: []}
+end
+```
+
+Without an `:id`, children are identified by position. Insert a row at the top
+and every row below it becomes a different view to the platform, so each one
+adopts the previous occupant's state: typed text, scroll offset, focus, and any
+in-flight animation all shift by one. With an `:id`, they move with the row.
+
+This is the same idea as `:key` in LiveView's `for` comprehensions, and the same
+failure mode when it is missing.
+
+### What it affects
+
+Anything the platform owns rather than your socket:
+
+* text a user has typed into a `:text_field` but not submitted
+* which field holds focus, and the keyboard's position in it
+* scroll offset inside a nested scroll
+* toggle and slider positions mid-drag
+* animations that are partway through
+
+Values you render from assigns are unaffected either way, because those come
+from the tree on every frame.
+
+### Rules
+
+* **An `:id` is opt-in.** A list without one keeps positional identity, so
+  nothing changes for code that never asked.
+* **Ids only need to be unique among siblings**, not app-wide.
+* **A duplicate falls back to position** for the second occurrence rather than
+  merging two rows.
+* **An authored id and a positional key cannot collide.** They live in separate
+  namespaces, so a child whose id is literally `"3"` is distinct from the child
+  at position 3.
+* **Numbers are coerced**, so `id: user.id` works with integer ids exactly as
+  `id: "#{user.id}"` would.
+
+### Limits worth knowing
+
+The coercion is scoped to top-level props. An id nested inside a prop *value* —
+`tabs: [%{id: 1}]` — is not coerced and falls back to positional.
+
+Coverage differs by platform for one component. Column, row, box, both scroll
+axes, the lazy list and the sheet body key children on both platforms from
+mob 0.7.39 / mob_new 0.4.31. **The tab bar is iOS-only**: Compose's
+`NavigationBar` still iterates tabs positionally, so reordering or inserting a
+tab moves per-tab state on Android and not on iOS.
+
+An app that upgrades `mob` without regenerating from `mob_new` gets the iOS half
+only.
+
+## List components
+
+### `:list`
+
+A platform-native scrolling list optimised for rendering many rows efficiently. Prefer this over `:scroll` + `:column` for any list of more than ~20 items.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `id` | atom | Required list identity; selections arrive as `{:select, id, index}`. |
+| `items` | list | Data items. Each renders as a child. |
+
+```elixir
+~MOB"""
+<List id={:names} items={assigns.names}>
+  {Enum.map(assigns.names, fn name ->
+    ~MOB(<Text text={name} padding={:space_md} />)
+  end)}
+</List>
+"""
+```
+
+### `:lazy_list`
+
+A virtualized list that renders rows on demand. Supports `on_end_reached` for pagination.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `on_end_reached` | `{pid, tag}` | Fired when the last row appears: `{:tap, tag}` |
+
+`on_end_reached` fires when the final row becomes visible, and is latched on the
+row count so that replacing the list's contents does not re-fire it. That
+matters because children key on `:id` (see below): replacing the contents gives
+every row a new identity, which without the latch reads as a fresh arrival at
+the end. A search screen re-queried on each keystroke would otherwise fire one
+pagination request per keystroke.
+
+The latch releases when the count changes, which is what makes pagination work:
+reach the end, load a page, the list grows, the callback re-arms. Three cases it
+does **not** cover, so write the handler to be idempotent:
+
+* a re-query whose result count differs every time still fires once per
+  distinct count;
+* a **windowed** list holding a rolling buffer at constant length fires once and
+  then never again;
+* a page load that fails or returns nothing leaves the count unchanged, so
+  scrolling away and back will not retry it.
+
+## Content components
+
+### `:text`
+
+Displays a string.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `text` | string | The text to display (required) |
+| `text_size` | number / token | Font size |
+| `text_color` | color | Text color |
+| `font` | token / string | A named font token from `Mob.Theme`'s `fonts:` map (e.g. `:heading`), or a raw platform font name. See [Styling → Custom fonts](styling.md#custom-fonts). |
+| `font_weight` | `"regular"` / `"medium"` / `"bold"` | Font weight |
+| `text_align` | `"left"` / `"center"` / `"right"` | Horizontal alignment |
+| `max_lines` | integer, 1–2,147,483,647 | Maximum lines to render; overflow is truncated with an ellipsis. Omit to wrap without limit. |
+
+A one-line name beside an amount that must not shrink:
+
+```elixir
+~MOB"""
+<Row fill_width={true}>
+  <Text text={@merchant} max_lines={1} weight={1} />
+  <Text text={@amount} />
+</Row>
+"""
+```
+
+### `:button`
+
+A tappable button. Has sensible defaults injected by the renderer (primary background, on_primary text, medium radius, fill width).
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `text` | string | Button label |
+| `on_tap` | `{pid, tag}` | Tap handler. Delivers `{:tap, tag}` to `handle_info/2`. |
+| `background` | color | Background color (default `:primary`) |
+| `text_color` | color | Label color (default `:on_primary`) |
+| `text_size` | number / token | Font size (default `:base`) |
+| `font_weight` | string | Font weight (default `"medium"`) |
+| `padding` | number / token | Padding (default `:space_md`) |
+| `corner_radius` | number / token | Corner radius (default `:radius_md`) |
+| `fill_width` | boolean | Fill available width (default `true`) |
+| `weight` | float | Flex weight inside a `:row` or `:column` |
+| `disabled` | boolean | Disable tap interaction |
+
+```elixir
+save_tap   = {self(), :save}
+cancel_tap = {self(), :cancel}
+~MOB(<Button text="Save" on_tap={save_tap} />)
+~MOB(<Button text="Cancel" on_tap={cancel_tap} background={:surface} text_color={:on_surface} />)
+```
+
+### `:text_field`
+
+An editable text input. Has defaults injected by the renderer (surface_raised background, border, small radius).
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `value` | string | Current text (controlled) |
+| `placeholder` | string | Hint text when empty |
+| `on_change` | `{pid, tag}` | Fires as the user types. Delivers `{:change, tag, value}` to `handle_info/2`. |
+| `on_submit` | `{pid, tag}` | Fires on keyboard return. Delivers `{:submit, tag}`. |
+| `on_focus` | `{pid, tag}` | Fires when the field gains focus. Delivers `{:focus, tag}`. |
+| `on_blur` | `{pid, tag}` | Fires when the field loses focus. Delivers `{:blur, tag}`. |
+| `secure` | boolean | Password masking |
+| `keyboard_type` | `:default` / `:email` / `:number` / `:phone` | Keyboard variant |
+| `background` | color | Background (default `:surface_raised`) |
+| `text_color` | color | Input text color (default `:on_surface`) |
+| `placeholder_color` | color | Placeholder color (default `:muted`) |
+| `border_color` | color | Border color (default `:border`) |
+| `padding` | number / token | Padding (default `:space_sm`) |
+| `corner_radius` | number / token | Corner radius (default `:radius_sm`) |
+| `border_width` | number | Border width |
+| `caret_color` | color | Caret colour (default: follows `text_color`, so transparent text hides the caret) |
+| `text_size`, `font_weight`, `italic`, `font`, `letter_spacing` | as `:text` | Type of the typed text and the placeholder |
+| `text_align` | `:left` / `:center` / `:right` | Alignment of the text and the placeholder |
+| `disabled` / `enabled` | boolean | `disabled: true` or `enabled: false` makes the field read-only and dims its text to 38% |
+| `max_length` | integer | Rejects edits that would lengthen the text past this many UTF-16 units; a longer value set by the screen can still be shortened |
+| `lines` | integer | Above 1: a multi-line field this many rows tall; return inserts a newline and `on_submit` does not fire |
+| `caret` | `"end"` | Pins the insertion point to the end of the text wherever the field is tapped (segmented code inputs). On iOS a pinned field (as one with `on_compose`) is single-line: `lines` is ignored with it |
+| `underline` | boolean | Android only: Material's indicator line (default: on unless the field draws its own border) |
+
+### `:divider`
+
+A horizontal rule. Default color is `:border`.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `color` | color | Line color (default `:border`) |
+
+### `:progress`
+
+An indeterminate activity indicator (spinner).
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `color` | color | Indicator color (default `:primary`) |
+
+### `:toggle`
+
+A boolean switch. Delivers `{:change, tag, value}` to `handle_info/2` where `value` is `true` or `false`.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `value` | boolean | Current checked state |
+| `label` | string | Label text displayed beside the toggle |
+| `on_change` | `{pid, tag}` | Fires when toggled. Delivers `{:change, tag, bool}`. |
+| `color` | color | Thumb/track tint color |
+
+```elixir
+toggle_change = {self(), :notifications_toggled}
+~MOB(<Toggle value={assigns.notifications_on} label="Enable notifications" on_change={toggle_change} />)
+
+def handle_info({:change, :notifications_toggled, enabled}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :notifications_on, enabled)}
+end
+```
+
+### `:slider`
+
+A continuous value input. Delivers `{:change, tag, value}` to `handle_info/2` where `value` is a float.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `value` | float | Current value |
+| `min` | float | Minimum value (default `0.0`) |
+| `max` | float | Maximum value (default `1.0`) |
+| `on_change` | `{pid, tag}` | Fires as the user drags. Delivers `{:change, tag, float}`. |
+| `color` | color | Track and thumb color |
+
+```elixir
+volume_change = {self(), :volume_changed}
+~MOB(<Slider value={assigns.volume} min={0.0} max={1.0} on_change={volume_change} />)
+
+def handle_info({:change, :volume_changed, value}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :volume, value)}
+end
+```
+
+### `:canvas`
+
+A declarative 2D drawing surface (SwiftUI `Canvas` on iOS, Compose `Canvas` on Android). Build the op list with `Mob.Canvas` helpers. Coordinates are canvas-local in pt/dp, top-left origin.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `width` | number | Canvas width in pt/dp |
+| `height` | number | Canvas height in pt/dp |
+| `draw` | list | Draw ops (`Mob.Canvas.line/5`, `circle/4`, …) |
+| `on_tap` | `{pid, tag}` | A tap anywhere on the canvas delivers `{:tap, tag}`. |
+| `on_drag` | `{pid, tag}` / `{pid, tag, throttle_opts}` | Finger drag. Delivers `{:drag, tag, payload}` with canvas-local `x`/`y` (see the [Events guide](events.md)). On iOS a stationary tap also fires a zero-length drag; on Android a drag starts only past touch slop. |
+
+```elixir
+import Mob.Canvas
+
+board_tap = {self(), :board}
+ops = [circle(60, 60, 50, color: :primary, width: 4)]
+~MOB(<Canvas width={120} height={120} draw={ops} on_tap={board_tap} />)
+
+def handle_info({:tap, :board}, socket), do: {:noreply, socket}
+```
+
+## Overlay components
+
+### `:sheet`
+
+A native modal bottom sheet (iOS `.sheet`, Android Material 3
+`ModalBottomSheet`) that composes ordinary Mob nodes as its content. Build one
+with `Mob.UI.sheet/2` or the `<Sheet>` tag.
+
+There is no `presented` boolean: **presence in the render tree is
+presentation**. Rendering the sheet node presents it, a re-render that still
+includes it updates its content in place, and removing it from the tree
+dismisses it. So sheet visibility is an ordinary assign plus `:if`:
+
+```elixir
+def render(assigns) do
+  dismiss = {self(), :sheet_dismissed}
+  ~MOB"""
+  <Column padding={:space_md}>
+    <Text text="Main content" />
+    <Sheet detents={[:medium, :large]} on_dismiss={dismiss} :if={@show_sheet}>
+      <Text text="Hello from the sheet" padding={:space_md} />
+    </Sheet>
+  </Column>
+  """
+end
+
+def handle_info({:dismiss, :sheet_dismissed}, socket) do
+  # The user swiped the sheet down — mirror that in your state, or the next
+  # render will present it again.
+  {:noreply, Mob.Socket.assign(socket, :show_sheet, false)}
+end
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `detents` | list | Stops the sheet can rest at: a subset of `[:medium, :large]`, or the exclusive content-height detent `[:content]` / `[{:content, max_height: n}]`. Default `[:medium, :large]`. Invalid detents raise, both in `Mob.UI.sheet/2` and again at render time. |
+| `on_dismiss` | `{pid, tag}` | Delivered as `{:dismiss, tag}` to `handle_info/2`, exactly once, when the user dismisses the sheet (swipe-down, back gesture, outside tap) |
+| `background` | color | Sheet container color |
+| `scrim` | color | Dimming-layer color. Applied exactly on Android; **iOS cannot set the system dimming opacity** and stays system-black |
+| `corner_radius` | number / token | Top-corner radius |
+| `drag_indicator_color` / `_width` / `_height` / `_rail_height` | color / numbers | Custom drag-indicator capsule. All four together, or omit all four for the platform default |
+| `ios` / `android` | map | Per-platform overrides of the style props above |
+
+A `:content` detent sizes the sheet from its content's *intrinsic* height —
+it hugs short content and caps at `max_height` (and at live screen geometry).
+Because a scrollable child (`scroll`, `lazy_list`) reports its full content
+height, it expands inside the sheet rather than scrolling independently; use
+`:medium`/`:large` when the sheet's body is itself scrollable. On iOS a
+content sheet presents at `:medium` for its first frame and resizes once the
+content has been measured.
+
+See `Mob.UI.sheet/2` for the full option reference and validation rules.
+
+### `:anchored`
+
+A floating panel positioned relative to an in-flow anchor: the first child is
+the **anchor** (a popover's trigger) and renders in place; the second child is
+the **panel** and renders over the page, above every Box and Scroll between it
+and the screen root, so nothing on the way up can clip it. Omit the panel to
+render the anchor alone (a closed popover). The screen owns open and closed:
+the panel never dismisses itself.
+
+```elixir
+close = {self(), :close_menu}
+
+~MOB"""
+<Anchored side="bottom" align="start" side_offset={4} on_tap={close}>
+  <Button text="Options" on_tap={{self(), :open_menu}} />
+  <Box :if={@menu_open} background={:surface} corner_radius={:radius_md} padding={:space_sm}>
+    <Text text="Rename" />
+  </Box>
+</Anchored>
+"""
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `side` | `"top"` / `"right"` / `"bottom"` / `"left"` | Which side of the anchor the panel sits on (default `"bottom"`) |
+| `align` | `"start"` / `"center"` / `"end"` | Alignment along the other axis (default `"center"`) |
+| `side_offset` | number | Gap between anchor and panel |
+| `align_offset` | number | Nudge along the align axis; positive pushes inward on `"end"` |
+| `panel_offset_x`, `panel_offset_y` | number | Raw nudge applied last (the node's own `offset_x`/`offset_y` would move the anchor) |
+| `flip` | boolean | Swap to the opposite side when the requested one has no room and the other does (default `true`) |
+| `clamp` | boolean | Keep the panel inside the window while the anchor is on screen (default `true`) |
+| `edge_padding` | number | Distance kept from the window edges, added to the safe area (default `8`) |
+| `panel_max_width`, `panel_max_height` | number | Caps on the panel (default: window minus twice `edge_padding`) |
+| `on_tap` | `{pid, tag}` | A tap **outside** the panel delivers `{:tap, tag}` — the dismiss request. Without it an outside tap does nothing. |
+
+Placement is the same arithmetic on both platforms (the web `positionPopup()`
+transliterated): a main-axis flip only when both conditions hold, then a clamp
+on both axes. Android renders the panel in its own window; iOS collects the
+anchor's bounds with an anchor preference and draws the panel at the root.
+The Mishka Chelekom popover, tooltip, menu, select and combobox ports build on
+it.
+
+## Native view components
+
+### `:webview`
+
+Embeds a native web view. Communicates bidirectionally with JS via the `window.mob` bridge. See [WebView](device_capabilities.md#webview) for the full message-passing API.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `url` | string | Initial URL to load (required) |
+| `allow` | list of strings | URL prefixes that are allowed to navigate; others are blocked and delivered as `{:webview, :blocked, url}` |
+| `show_url` | boolean | Show the native URL bar |
+| `title` | string | Static title label, overrides `show_url` |
+| `width` | number | Fixed width in dp/pt |
+| `height` | number | Fixed height in dp/pt |
+| `weight` | float | Flex weight inside a `:row` or `:column` |
+
+```elixir
+~MOB"""
+<WebView url="https://example.com"
+         allow={["https://example.com"]}
+         show_url={true}
+         weight={1} />
+"""
+```
+
+### `:camera_preview`
+
+Displays a live camera feed inline. The `<CameraPreview>` node itself ships in core, but the preview session is driven by `MobCamera` (the `mob_camera` plugin — add the dep + activate in `mob.exs`; see the [Plugins guide](plugins.md)). Call `MobCamera.start_preview/2` before rendering and `MobCamera.stop_preview/1` in `terminate/2`. No OS permission dialog is shown for preview alone.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `facing` | `:back` / `:front` | Camera to use |
+| `weight` | float | Flex weight inside a `:row` or `:column` |
+| `width` | number | Fixed width in dp/pt |
+| `height` | number | Fixed height in dp/pt |
+
+```elixir
+def mount(_params, _session, socket) do
+  socket = MobCamera.start_preview(socket, facing: :back)
+  {:ok, socket}
+end
+
+def render(assigns) do
+  flip_tap = {self(), :flip}
+  ~MOB"""
+  <Column>
+    <CameraPreview facing={:back} weight={1} />
+    <Button text="Flip" on_tap={flip_tap} />
+  </Column>
+  """
+end
+
+def terminate(_reason, socket) do
+  MobCamera.stop_preview(socket)
+  :ok
+end
+```
+
+<a id="pure-elixir-composite-components"></a>
+
+## Defining your own components
+
+You can build reusable components out of the built-in widgets with no native
+code, in two forms: **function composites** (a plain function you call) and
+**tag composites** (a custom `<Tag>` you register). Both are stateless, pure
+Elixir, and hot-pushable. Events raised from inside either kind route to the
+**screen's** `handle_info/2`, exactly like a built-in widget does.
+
+> **Reached for `use Mob.Component`?** Easy mix-up: it's a *different* feature.
+> `Mob.Component` is the behaviour for **native view components**, a stateful BEAM
+> process paired with a platform-native view (declared via `Mob.UI.native_view/2`),
+> whose `render/1` returns a **props map for a native factory** rather than a `~MOB`
+> tree. That's an advanced, native-code path (see the [Plugins guide](plugins.md)). If
+> you just want a reusable widget or custom `<Tag>` built out of the **built-in**
+> components, with no native code, that's the `Mob.Composite` path below. The names are
+> close; for pure-Elixir tags the one you want is **Composite**, and its module returns
+> a `~MOB` tree from `expand/3`.
+
+### Function composites
+
+A function composite is a function that returns a render tree. You call it
+through `{...}` interpolation inside the sigil. This is the lightest way to
+factor out a chunk of UI you repeat.
+
+Here is a complete screen that defines a `stat_card/3` composite and uses it.
+The tap target is built in `render/1` and passed in as an argument, so the
+button inside the composite delivers to this screen's `handle_info/2`:
+
+```elixir
+defmodule MyApp.DashboardScreen do
+  use Mob.Screen
+
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, Mob.Socket.assign(socket, :taps, 0)}
+  end
+
+  # A function composite: returns a render tree, so it drops into the screen
+  # via {...}. `on_tap` is a pre-built {pid, tag} tuple passed in by the caller.
+  defp stat_card(label, value, on_tap) do
+    ~MOB"""
+    <Box background={:surface_raised} corner_radius={:radius_md} padding={:space_md}>
+      <Column gap={4}>
+        <Text text={label} text_size={:sm} text_color={:muted} />
+        <Text text={to_string(value)} text_size={:2xl} text_color={:on_surface} />
+        <Button text="Tap me" on_tap={on_tap} />
+      </Column>
+    </Box>
+    """
+  end
+
+  @impl true
+  def render(assigns) do
+    bump = {self(), :bump}
+
+    ~MOB"""
+    <Column padding={:space_lg} gap={12}>
+      <Text text="Dashboard" text_size={:xl} text_color={:on_surface} />
+      {stat_card("Taps", @taps, bump)}
+    </Column>
+    """
+  end
+
+  @impl true
+  def handle_info({:tap, :bump}, socket) do
+    {:noreply, Mob.Socket.update(socket, :taps, &(&1 + 1))}
+  end
+end
+```
+
+Two things to notice:
+
+- `@taps` inside `{stat_card(...)}` is `assigns.taps` (the `@` shorthand works
+  in any `{...}` expression, including a composite call).
+- The composite is a plain function call in `render/1`, which runs in the screen
+  process, so events from the `<Button>` inside it reach this screen. Building
+  the `{self(), :bump}` tuple in `render/1` and passing it in keeps the
+  composite reusable and follows the pre-compute-the-tuple convention.
+
+### Tag composites
+
+A tag composite gives you custom tag syntax, like `<Card title="...">`. You
+register an *expander* for the tag, then write the tag in any screen.
+
+The sigil turns a PascalCase tag into a snake_case atom (`<Card>` becomes
+`:card`, `<LabeledButton>` becomes `:labeled_button`), and the expander is
+looked up by that atom. An expander is a function `expand(props, children, ctx)`
+that returns a render tree (`~MOB` output).
+
+**Step 1 — write the expanders.** `Card` wraps its children in a titled
+surface; `LabeledButton` raises a tap event:
+
+```elixir
+defmodule MyApp.UI.Card do
+  @moduledoc "`<Card title=\"...\">children</Card>` — a titled raised surface."
+  import Mob.Sigil
+
+  @spec expand(map(), [map()], map()) :: map()
+  def expand(props, children, _ctx) do
+    title = Map.get(props, :title, "")
+
+    ~MOB"""
+    <Column background={:surface_raised} corner_radius={:radius_md} padding={:space_md}>
+      <Text text={title} text_size={:lg} text_color={:on_surface} />
+      <Spacer size={8} />
+      {children}
+    </Column>
+    """
+  end
+end
+
+defmodule MyApp.UI.LabeledButton do
+  @moduledoc ~S(`<LabeledButton label="..." on_press="save" />` — a button with an auto-injected tap target.)
+  import Mob.Sigil
+
+  @spec expand(map(), [map()], map()) :: map()
+  def expand(props, _children, _ctx) do
+    label = Map.get(props, :label, "")
+    # `on_press` arrives already shaped as {screen_pid, :save} (see "Event
+    # ergonomics" below), so we pass it straight to the button's on_tap.
+    on_press = Map.fetch!(props, :on_press)
+
+    ~MOB"""
+    <Button text={label} on_tap={on_press} />
+    """
+  end
+end
+```
+
+`~MOB` is auto-imported inside `use Mob.Screen`, but an expander is a plain
+module, so it needs `import Mob.Sigil`.
+
+**Step 2 — register the tags.** Through a plugin manifest's `ui_components`:
+
+```elixir
+ui_components: [
+  %{tag: "Card",          atom: :card,           expand: {MyApp.UI.Card, :expand}},
+  %{tag: "LabeledButton", atom: :labeled_button, expand: {MyApp.UI.LabeledButton, :expand}}
+]
+```
+
+…or at runtime, for a plain Hex UI kit with no manifest (call from the host's
+`on_start/0`) via `Mob.Composite.register/2`:
+
+```elixir
+Mob.Composite.register(:card, {MyApp.UI.Card, :expand})
+Mob.Composite.register(:labeled_button, {MyApp.UI.LabeledButton, :expand})
+```
+
+**Declare the tag in config so the sigil accepts it at compile time.**
+Registration happens at *runtime* (from `on_start/0` or a plugin manifest), so
+the `~MOB` macro can't see it while compiling a screen. Without a declaration
+every custom tag prints a warning the first time it's compiled:
+
+```
+~MOB: <Card> is not in the Mob tag whitelist — pass-through as :card
+```
+
+That is informational, not an error — the sigil compiles `<Card>` to the atom
+`:card` and defers resolution to whatever expander is registered under that atom
+at render time — but under `--warnings-as-errors` it is a wall. List the tags
+your app registers and the warning goes away:
+
+```elixir
+# config/config.exs
+config :mob, :extra_tags, ~w(Card LabeledButton)   # PascalCase strings, [:card, ...], or [Card, ...]
+```
+
+This whitelists the tag for the sigil only. `Mob.ScreenCase.assert_renderable/2`
+checks the *expanded* tree against the native whitelist, so expand composites
+first (`Mob.Composite.expand/2`) or pass the type via `extra:`.
+
+The list is read at each screen's compile time from the app's own config, so
+nothing in `deps/mob` is edited. Mix does not track that read: after editing
+the list, `mix compile --force` (or touching the screens) recompiles modules
+that were already built. (A tag that is declared but never registered
+renders nothing, which is the real "it doesn't work" symptom to look for.)
+
+**Step 3 — use them in a screen.** Note there is no `self()` anywhere in this
+markup:
+
+```elixir
+defmodule MyApp.ProfileScreen do
+  use Mob.Screen
+
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, Mob.Socket.assign(socket, :status, "not saved yet")}
+  end
+
+  @impl true
+  def render(assigns) do
+    ~MOB"""
+    <Column padding={:space_lg} gap={12}>
+      <Card title="Profile">
+        <Text text="Tap save to record it." text_color={:muted} />
+        <Spacer size={8} />
+        <LabeledButton label="Save" on_press="save" />
+      </Card>
+      <Card title="Status">
+        <Text text={@status} text_color={:primary} />
+      </Card>
+    </Column>
+    """
+  end
+
+  @impl true
+  def handle_info({:tap, :save}, socket) do
+    {:noreply, Mob.Socket.assign(socket, :status, "saved")}
+  end
+end
+```
+
+**The expander contract.** `expand(props, children, ctx)` returns a node map or
+a list of nodes, which is re-expanded to a fixpoint so composites can build on
+other composites. `ctx` carries the screen process as `ctx.screen`.
+
+**Event ergonomics (auto-injected targets).** Any `on_*` prop you write on a
+composite tag as a bare string or atom (`on_press="save"`) arrives in the
+expander's `props` already shaped as `{screen_pid, :save}`. That is why
+`ProfileScreen` never writes `self()`, and why the screen receives
+`{:tap, :save}` in `handle_info/2`.
+
+This auto-injection applies only to a composite tag's **own** props. A built-in
+widget you place directly (a `<TextField>` or `<Button>` in a screen's own
+markup, even one nested inside a composite's children) still needs an explicit
+`{self(), tag}` tuple, because its props are not run through an expander. That
+is why `DashboardScreen` above builds `bump = {self(), :bump}` for its plain
+`<Button>`, while `ProfileScreen` can write `<LabeledButton on_press="save">`
+unadorned: `LabeledButton` is a composite tag, so its `on_press` is shaped for
+you.
+
+For the full design see `Mob.Composite` and the "Pure-Elixir composite
+components" section of [`MOB_PLUGINS.md`](../MOB_PLUGINS.md). The `mob_demo_kit`
+plugin in `mob_plugin_demo` (`<DemoCard>` / `<DemoCombobox>`) is a worked,
+device-verified example.
+
+## Using `Mob.Style` for reusable styles
+
+Define shared styles as module attributes and attach them via the `:style` prop. Inline props override style values:
+
+```elixir
+@card_style %Mob.Style{props: %{background: :surface, padding: :space_md, corner_radius: :radius_md}}
+@title_style %Mob.Style{props: %{text_size: :xl, font_weight: "bold", text_color: :on_surface}}
+
+def render(assigns) do
+  %{type: :box, props: %{style: @card_style}, children: [
+    %{type: :text, props: %{style: @title_style, text: assigns.title}, children: []},
+    %{type: :text, props: %{text: assigns.body,  text_color: :muted,  text_size: :sm}, children: []}
+  ]}
+end
+```
+
+## Tap handler conventions
+
+Use tagged tuples for tap handlers so you can pattern-match on the tag in `handle_info/2`. Pre-compute the tuple before the sigil to avoid nesting parentheses inside `{...}`:
+
+```elixir
+def render(assigns) do
+  save_tap = {self(), :save}
+  ~MOB"""
+  <Button text="Save" on_tap={save_tap} />
+  """
+end
+
+def handle_info({:tap, :save}, socket) do
+  ...
+end
+```
+
+## Event routing
+
+**All events are delivered to the screen process via `handle_info/2`.** `self()` inside `render/1` is always the screen's GenServer pid. Event handler props such as `on_tap` and `on_change` send directly to that process, regardless of how deeply the component is nested in the tree. `Mob.List` selections are routed separately through the list's `id`.
+
+| Handler or component | Message delivered to `handle_info/2` |
+|---|---|
+| `on_tap: {pid, tag}` | `{:tap, tag}` |
+| `on_change: {pid, tag}` | `{:change, tag, value}` |
+| `Mob.List` with `id: id` | `{:select, id, index}` |
+| `on_submit: {pid, tag}` | `{:submit, tag}` |
+| `on_focus: {pid, tag}` | `{:focus, tag}` |
+| `on_blur: {pid, tag}` | `{:blur, tag}` |
+| `on_long_press: {pid, tag}` | `{:long_press, tag}` |
+| `on_press_in: {pid, tag}` | `{:press_in, tag}` |
+| `on_press_out: {pid, tag}` | `{:press_out, tag}` |
+
+### Press and release: `on_press_in` / `on_press_out`
+
+`on_press_in` fires when a finger goes down on the node; `on_press_out` when
+that finger lifts **or** its touch is cancelled (the system took the gesture,
+the node left the screen). Sliding off the node, or an ancestor scrolling
+under the finger, does not end the press: it lasts until the finger lifts.
+On a node that declares both, every `{:press_in, tag}` is followed by exactly
+one `{:press_out, tag}`, even when the screen re-renders in between, which a
+press usually causes. They work on every node type, `:button` included, and
+they observe without consuming: `on_tap`, `on_long_press` and an ancestor's
+scrolling keep working on the same node. A quick tap delivers
+`{:press_in, tag}`, `{:press_out, tag}`, then `{:tap, tag}`.
+
+On iOS 17 the observer is a SwiftUI `DragGesture` fallback (iOS 18 added the
+UIKit bridge the 18+ path uses), not yet run on an iOS 17 device: there it may
+stop an enclosing ScrollView from scrolling when the drag starts on the node,
+and inside a ScrollView a quick tap's `{:tap, tag}` may arrive before its
+`{:press_in, tag}`. Don't rely on the order of `tap` and `press_in` there.
+
+That is what hold-to-talk, push-to-record, "peek" previews and press-and-hold
+buttons need:
+
+```elixir
+def render(assigns) do
+  ~MOB"""
+  <Box id="mic" padding={16} background={:primary}
+       on_press_in={{self(), :mic}} on_press_out={{self(), :mic}}>
+    <Text text={if @listening, do: "● listening", else: "hold to talk"} />
+  </Box>
+  """
+end
+
+def handle_info({:press_in, :mic}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, listening: true, pressed_at: System.monotonic_time(:millisecond))}
+
+def handle_info({:press_out, :mic}, socket) do
+  held = System.monotonic_time(:millisecond) - socket.assigns.pressed_at
+  # A press too short to say anything: cancel instead of transcribing.
+  {:noreply, Mob.Socket.assign(socket, listening: false, too_short: held < 300)}
+end
+```
+
+Measure the hold on the BEAM as above: both events cross the same channel,
+so the latency cancels out. Test it without a finger: `Mob.Test.hold/3`
+sends the pair by tag on any platform, and on Android `Mob.Test.hold_xy/4`
+(or `press_down_xy/4` … `press_up_xy/3`) holds a real touch through the
+native detector. Android needs a bridge generated by `mob_new` 0.6.5 or newer.
+
+### Handle limits
+
+The native layer stores event handlers per committed frame:
+
+- **4096 interactive handles per frame.** Every `on_tap`, `on_change`,
+  `on_focus`, etc. in the rendered tree registers one handle. The tables grow
+  on demand — they start small and are allocated to fit — so an app that uses
+  a few dozen handles pays for a few dozen. Past 4096 the element still renders
+  but its handler is silently unwired, and the count of unwired elements is
+  logged once per frame; it does not crash the screen.
+
+  This was 256 until MOB-133, which is low enough that an ordinary long list
+  reached it: a 200-row list with three interactive elements per row left more
+  than half of them inert. If you are anywhere near the current limit, prefer
+  `:list` / `:lazy_list`, or `lazy: true` on a `:scroll`, so only what is on
+  screen registers at all.
+- **256 native component slots.** `Mob.UI.native_view/2` / `Mob.Component`
+  instances each take a slot. A full pool returns
+  `{:error, :component_slots_exhausted}`; the framework logs and fails just
+  that one component, leaving the screen alive.
+
+### Sub-component event isolation (planned, not yet implemented)
+
+Per-subtree event isolation, where a render subtree owns its own `handle_info/2` so its events route to a dedicated process instead of the screen, is planned but not yet implemented. (Distinct from `Mob.Composite`, the tag-composite mechanism under "Defining your own components" above, which exists today for reusable widgets and custom tags; and from `Mob.Component`, the existing native-view behaviour.) Until then, use the `tag` field to distinguish events from different parts of the same screen:
+
+```elixir
+top_save_tap    = {self(), :top_save}
+bottom_save_tap = {self(), :bottom_save}
+~MOB"""
+<Button text="Top Save"    on_tap={top_save_tap} />
+<Button text="Bottom Save" on_tap={bottom_save_tap} />
+"""
+```
+
+---
+
+## Code formatting
+
+`mix format` understands `~MOB` sigils through `Mob.Formatter`, a first-class
+formatter plugin. Generated projects include a `.formatter.exs` that enables it
+automatically:
+
+```elixir
+# .formatter.exs
+[
+  plugins: [Mob.Formatter],
+  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
+]
+```
+
+Running `mix format` then normalises indentation, wraps long attribute lists, and
+aligns expression children — in a single pass alongside all other Elixir code.
+
+See [Tooling & Formatting](tooling.md) for the full guide and `Mob.Formatter` for
+the API reference.

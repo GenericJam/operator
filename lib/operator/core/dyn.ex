@@ -513,15 +513,15 @@ defmodule Operator.Core.Dyn do
 
     You can add your own tools and screens. They live in the Dyn layer: Elixir sources you \
     edit in a staging copy with `dyn_files`, `dyn_read`, `dyn_write`, `dyn_edit`, `dyn_delete` \
-    and `dyn_reset` (back to what runs now). The loop, sessions, sign-in, the core tools and \
-    the rescue screen are the Core: you can't change them.
+    and `dyn_reset` (back to what runs now).
 
     Rules (a static check enforces them and reports file:line):
     - Each `.ex` file holds one or more `defmodule Operator.Dyn.<Name>`, nothing else at the \
     top level. Refer to your other modules as `Operator.Dyn.<Name>` (an `alias` is fine).
     - No file, OS, node or code-loading access: no `File`, `Path`, `Mob.Storage`, `System.cmd`, \
     `Port`, `:os`, `Code`, `Module`, `:code`, `Node`; no tracing, suspending or listing \
-    processes; no `:persistent_term.put`; no macros; no `apply`/`spawn` on a module held in a \
+    processes; no `:persistent_term.put`; no `defmacro`, `quote` or `unquote` (`use Mob.Screen` \
+    and `~MOB` are fine); no `apply`/`spawn` on a module held in a \
     variable; no `String.to_atom`. No Operator modules except `Operator.Core.Tool`. Of Mob, its \
     app-facing modules (screens, UI, theme, permissions, device features; not the router or \
     renderer) and the capability plugins (`MobCamera`, `MobLocation`, `MobMishka`, ...).
