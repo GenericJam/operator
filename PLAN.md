@@ -239,10 +239,8 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
   **It can't be removed** (Kevin, 2026-10-03): no change can hide it, cover
   it, move it off screen or make it untappable, so the way back to the
   terminal always exists. What a user *can* change is its **symbol**: a
-  different glyph or image instead of the dial. That's a Dyn setting the
-  shell validates (it must render at the toggle's fixed size and be
-  visible against its background; anything that fails falls back to the
-  dial), not front code drawing its own button.
+  different glyph or image instead of the dial, kept as a Dyn setting the
+  shell draws, not front code drawing its own button.
 - **A shell hosts the front, and draws nothing else.** A Core screen owns
   the toggle and mounts the current front screen full-bleed under
   try/rescue: a screen that raises shows its error and stacktrace, and the
@@ -258,24 +256,15 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
   from the terminal (a tool), or rebuild the navigation.
 - **The front can't nuke the terminal** (Kevin, 2026-10-03). Whatever a
   front change does, the worst outcome is a blank front; the logo toggle
-  and the terminal always work, so the agent can always fix it. What
-  enforces that:
-  - The terminal, the shell's toggle, approval and rescue are Core and
-    never depend on front code: no front module is called from the
-    terminal's render or event path.
-  - The static check limits front modules to the front: they can't call
-    Core internals, the Dyn engine, `Operator.Core.*` state, settings or
-    secrets, or `:erlang.halt` / `System.stop` / code loading.
-  - A front screen runs in its own process with a heap limit
-    (`max_heap_size`) and a watchdog for runaway CPU; a screen that
-    raises, hangs, or blows its limits is killed and the front shows
-    blank (or its error), never the terminal.
-  - Agent changes to the terminal itself (its Dyn theme) stay possible but
-    are checked so they can't make it unusable (e.g. text the same colour
-    as the background); the Rescue screen stays outside Dyn entirely.
-  - Open risk: a plugin's native code called from a front screen could
-    still crash the whole app; the next launch's probation then reverts
-    the change.
+  and the terminal always work, so the agent can always fix it. For now
+  that's structural only: the terminal, the toggle, approval and rescue
+  are Core and never call front code, and the existing static check keeps
+  Dyn modules out of Core internals.
+- **Scope: personal use** (Kevin, 2026-10-03). Operator is Kevin's own
+  tool; if a change ever leaves it unusable, reinstalling is the fallback.
+  So no extra hardening now (per-screen heap/CPU limits, validating the
+  toggle's symbol or the terminal theme for visibility, sandboxing plugin
+  calls). Revisit if it's ever released for others.
 - **Front screens are Dyn artifacts.** The agent writes them with its
   `dyn_*` tools as modules of a generation; they go through the static
   check, selftests, approval and probation like everything else in Dyn, and
