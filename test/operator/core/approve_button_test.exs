@@ -19,20 +19,32 @@ defmodule Operator.Core.ApproveButtonTest do
         title: "Revert to generation 2"
       })
 
-    assert ApproveButton.render(socket.assigns) == %{
-             label: "Approve revert to G2",
-             title: "Revert to generation 2"
-           }
+    assert %{label: "Approve revert to G2", title: "Revert to generation 2", request: request} =
+             props = ApproveButton.render(socket.assigns)
 
-    ApproveButton.handle_event("failed", %{"reason" => "canceled"}, socket)
+    assert map_size(props) == 3
+
+    ApproveButton.handle_event("failed", %{"reason" => "canceled", "request" => request}, socket)
     assert_received {:approval, "failed", %{"reason" => "canceled", "subject" => {:revert_to, 2}}}
   end
 
-  test "a re-render with another subject answers for the new one" do
-    socket = mount(%{notify: self(), subject: {:revert_to, 2}})
-    {:ok, socket} = ApproveButton.update(%{notify: self(), subject: {:revert_to, 1}}, socket)
+  test "a prompt opened for one subject never answers for the next one" do
+    socket = mount(%{notify: self(), subject: {:activate, 2}})
+    old = ApproveButton.render(socket.assigns).request
+    {:ok, socket} = ApproveButton.update(%{notify: self(), subject: {:activate, 3}}, socket)
+    new = ApproveButton.render(socket.assigns).request
+    assert old != new
 
+    # the pass the human gave generation 2's prompt doesn't approve generation 3
+    ApproveButton.handle_event("approved", %{"request" => old}, socket)
+    refute_received {:approval, _, _}
+
+    # nor does an answer that names no request
     ApproveButton.handle_event("approved", %{}, socket)
-    assert_received {:approval, "approved", %{"subject" => {:revert_to, 1}}}
+    refute_received {:approval, _, _}
+
+    ApproveButton.handle_event("approved", %{"request" => new}, socket)
+    assert_received {:approval, "approved", %{"subject" => {:activate, 3}} = payload}
+    refute Map.has_key?(payload, "request")
   end
 end

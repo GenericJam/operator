@@ -183,9 +183,9 @@ defmodule Operator.RescueScreen do
     end
   end
 
-  # The system screen-lock prompt; only Android has the native view so far.
+  # The system screen-lock prompt (a native view on the phone).
   defp approve_revert(n) do
-    if Term.platform() == :android do
+    if Term.platform() in [:android, :ios] do
       palette = Mob.Theme.resolved_palette()
 
       Mob.UI.native_view(ApproveButton,

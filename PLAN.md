@@ -87,10 +87,26 @@ session files over adb (`scripts/session.sh`) stay for debugging only.
    of a reply is one native view; fenced code blocks and `$$` math stay
    Term rows so Copy-per-block survives; the streaming reply's views grow
    in place (stable ids). The theme's `renderer: :native | :term | :auto`
-   picks it (`:auto` = native on Android only); the `md:` chip in the chat
+   picks it (`:auto` = native on the phone); the `md:` chip in the chat
    header toggles it for the running app (not persisted). At most 200
    native views are in the window (mob has 256 component slots; a view
-   without one renders nothing). iOS stays on Term until its view exists.
+   without one renders nothing).
+
+   **Status (2b, iOS, 2026-10-04): built and verified on the iOS 26.5
+   simulator.** `ios/OperatorMarkdown.swift`: Foundation's Markdown parser
+   (`AttributedString(markdown:)`, full syntax: GFM tables, strikethrough,
+   autolinks) walked into an attributed string in a read-only selectable
+   TextKit 1 `UITextView` (TextKit 2 under-measured long replies). Textual
+   was not used: it's a SwiftPM package and mob's iOS build is one
+   `swiftc` call over source files (no package resolution); the
+   `UITextView` gives partial selection natively. Tables are drawn
+   as box-drawing text in the monospace face, columns shrunk to the view's
+   width and cells wrapped, a rule under every row (Markwon's grid); they
+   select and copy as text. Links go to the BEAM (`open_link`) on tap and
+   through a custom long-press menu, never opened by UIKit. Verified:
+   streaming growth, partial drag-selection + Copy, headings, lists,
+   quotes, rules, inline HTML, wide tables, link routing (a `javascript:`
+   link refused).
 3. Rust is available if we ever want one parser for both platforms: mob
    builds Rustler NIFs statically (`mix mob.add_nif <name> --type
    rustler`), so MDEx/comrak could run on device; not needed with step 2.
@@ -290,7 +306,7 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
   - Plugins to add: `mob_mishka`, `mob_themes`, `mob_bluetooth`,
     `mob_screencast`, `mob_video`, `mob_touch`, `mob_wake`, and
     `mob_biometric` for front screens (approval of self-changes stays on
-    `OperatorApproval.kt`). Already in: camera, location, notify, photos,
+    `OperatorApproval.kt` / `ios/OperatorApproval.swift`). Already in: camera, location, notify, photos,
     scanner, background, deliver, speech/whisper.
   - Android permissions (Sloppy Joe's manifest): CAMERA (+ camera and
     autofocus features, not required), ACCESS_FINE/COARSE_LOCATION,
@@ -342,7 +358,15 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    Moto has no fingerprint enrolled. Approval now takes the screen lock
    (fingerprint, face, PIN, pattern or password: the app's own
    `OperatorApproval.kt` prompt, chat card and rescue revert; mob_biometric
-   dropped); verified on the Android 15 emulator with a PIN. The theme artifact is done (`Operator.Dyn.Theme`
+   dropped); verified on the Android 15 emulator with a PIN. iOS:
+   `ios/OperatorApproval.swift` (LAContext `.deviceOwnerAuthentication`:
+   Face ID / Touch ID, falling back to the passcode), verified on the iOS
+   26.5 simulator (Face ID match approves; non-match then Cancel → "not
+   activated"; passcode fallback approves; rescue revert approves; a
+   superseding proposal closes the open prompt and its pass approves
+   nothing). Each prompt is bound to its proposal: the chip carries
+   `request`, the native views tag every answer with it, and
+   `Operator.Core.ApproveButton` drops answers for any other request. The theme artifact is done (`Operator.Dyn.Theme`
    with `overrides/0`, applied by `Operator.Core.DynTheme`; a warm theme
    proposed, fingerprint-approved and drawn on the emulator), and automatic
    revert was seen on the emulator (a Dyn tool crashing 3 times through

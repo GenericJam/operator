@@ -20,11 +20,12 @@ defmodule Operator.Core.Term do
 
   Two renderers for an assistant reply's Markdown, picked by the theme's
   `:renderer` (`renderer/1`): `:term` lays it out with our own parser, row
-  per line; `:native` (the default on Android) gives each prose stretch one
+  per line; `:native` (the default on the phone) gives each prose stretch one
   `Operator.Core.MarkdownView` row, a native Markdown view (Markwon on
-  Android) that wraps inline styles and selects text natively. Fenced code
-  blocks (and `$$` math) stay `:term` rows either way, so each code block
-  keeps its Copy button. Every other entry renders the same in both.
+  Android, Foundation's parser in a `UITextView` on iOS) that wraps inline
+  styles and selects text natively. Fenced code blocks (and `$$` math) stay
+  `:term` rows either way, so each code block keeps its Copy button. Every
+  other entry renders the same in both.
   """
 
   alias Operator.Core.MarkdownView
@@ -110,7 +111,7 @@ defmodule Operator.Core.Term do
       tool_result_lines: 3,
       thinking_lines: 3,
       max_line_chars: 160,
-      # :native | :term | :auto (native on Android, term elsewhere)
+      # :native | :term | :auto (native on the phone, term off it)
       renderer: :auto
     }
   end
@@ -128,13 +129,13 @@ defmodule Operator.Core.Term do
 
   @doc """
   The renderer for assistant Markdown: the theme's `:renderer`, or for
-  `:auto` the native view on Android and our own parser elsewhere (iOS has
-  no native view yet; host tests).
+  `:auto` the native view on the phone (Android and iOS) and our own parser
+  off it (host tests).
   """
-  @spec renderer(map()) :: :native | :term
-  def renderer(theme \\ theme())
-  def renderer(%{renderer: r}) when r in [:native, :term], do: r
-  def renderer(_theme), do: if(platform() == :android, do: :native, else: :term)
+  @spec renderer(map(), :android | :ios | :host) :: :native | :term
+  def renderer(theme \\ theme(), platform \\ platform())
+  def renderer(%{renderer: r}, _platform) when r in [:native, :term], do: r
+  def renderer(_theme, platform), do: if(platform in [:android, :ios], do: :native, else: :term)
 
   @doc "Switches the renderer in the active theme (the rest of it is kept)."
   @spec put_renderer(:native | :term | :auto) :: :ok
@@ -558,11 +559,12 @@ defmodule Operator.Core.Term do
 
   @doc """
   The theme as `Operator.Core.MarkdownView` props (everything but `:id` and
-  `:text`): colours as ARGB integers, sizes in sp, Android font resource
-  names for the four faces.
+  `:text`): colours as ARGB integers, sizes in sp, and the four faces by the
+  names the platform loads them by (iOS: PostScript names; Android, and off
+  the phone: font resource names).
   """
-  @spec markdown_props(map()) :: map()
-  def markdown_props(theme \\ theme()) do
+  @spec markdown_props(map(), :android | :ios | :host) :: map()
+  def markdown_props(theme \\ theme(), platform \\ platform()) do
     m = theme.markup
 
     %{
@@ -576,15 +578,16 @@ defmodule Operator.Core.Term do
       quote_color: color(theme, m.quote.color),
       rule_color: color(theme, m.hr.color),
       selection_color: color(theme, m.copy.color),
-      font_regular: font_name(theme.fonts.term),
-      font_bold: font_name(theme.fonts.term_bold),
-      font_italic: font_name(theme.fonts.term_italic),
-      font_bold_italic: font_name(theme.fonts.term_bold_italic)
+      font_regular: font_name(theme.fonts.term, platform),
+      font_bold: font_name(theme.fonts.term_bold, platform),
+      font_italic: font_name(theme.fonts.term_italic, platform),
+      font_bold_italic: font_name(theme.fonts.term_bold_italic, platform)
     }
   end
 
-  defp font_name(%{android: name}), do: name
-  defp font_name(name) when is_binary(name), do: name
+  defp font_name(%{ios: name}, :ios), do: name
+  defp font_name(%{android: name}, _platform), do: name
+  defp font_name(name, _platform) when is_binary(name), do: name
 
   defp row(segs, id, owner, key, theme, row_style \\ %{}) do
     props = %{id: id, fill_width: true}

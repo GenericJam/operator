@@ -341,6 +341,9 @@ defmodule Operator.Core.TermTest do
       assert Map.drop(native.props, [:module, :id, :text]) == Term.markdown_props(t)
       refute Map.has_key?(native.props, :on_long_press)
       assert Term.markdown_props(t).font_bold_italic == "jetbrainsmono_bolditalic"
+      # iOS loads the bundled faces by their PostScript names
+      assert Term.markdown_props(t, :ios).font_bold_italic == "JetBrainsMono-BoldItalic"
+      assert Term.markdown_props(t, :android).font_regular == "jetbrainsmono_regular"
       assert Term.markdown_props(t).heading_color == Term.color(t, "heading")
     end
 
@@ -363,7 +366,7 @@ defmodule Operator.Core.TermTest do
       assert ids == ["m2.k.0", :"m2.0", "m2.1", "m2.2", "m2.3", "m2.c.0"]
     end
 
-    test "the term renderer is one flag away and the default off Android", %{theme: t} do
+    test "the term renderer is one flag away and the default off the phone", %{theme: t} do
       text = "Intro **x**\n```sh\nmix test\n```"
       term = %{t | renderer: :term}
       rows = Term.entry_rows(reply(text), "m3", self(), term)
@@ -372,8 +375,12 @@ defmodule Operator.Core.TermTest do
 
       assert Term.renderer(t) == :native
       assert Term.renderer(term) == :term
-      # host tests: no NIF, so :auto picks the parser
+      # host tests: no NIF, so :auto picks the parser; on either phone the native view
       assert Term.renderer(Term.default_theme()) == :term
+      assert Term.renderer(Term.default_theme(), :android) == :native
+      assert Term.renderer(Term.default_theme(), :ios) == :native
+      # an explicit choice wins on the phone too
+      assert Term.renderer(term, :ios) == :term
     end
   end
 

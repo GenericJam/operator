@@ -29,9 +29,10 @@ defmodule Operator.ChatScreen do
   notification permission (the background-run notification needs it on
   Android 13+).
 
-  A proposed self-change shows with its diff; on Android its approve chip
-  is `Operator.Core.ApproveButton` (the system prompt: fingerprint, face,
-  PIN, pattern or password), whose pass activates it.
+  A proposed self-change shows with its diff; on the phone its approve chip
+  is `Operator.Core.ApproveButton` (the system prompt: fingerprint or face,
+  or the screen lock's PIN, pattern, password or passcode), whose pass
+  activates it.
 
   `/login anthropic`, `/login openai`, `/login anthropic <code#state>` and
   `/logout <provider>` are the app's own commands (`Operator.Auth.Login`,
@@ -1024,7 +1025,8 @@ defmodule Operator.ChatScreen do
           "**Proposal: generation #{n}**: #{gen.rationale}\n\n" <>
             "#{passed}/#{length(tests)} selftests passed · compiled in #{gen.compile_ms || "?"} ms\n\n" <>
             "```diff\n#{diff}\n```\n\n" <>
-            "Approve below (fingerprint, face, PIN, pattern or password), or deny it."
+            "Approve below (fingerprint, face, or the screen lock's PIN, pattern, password " <>
+            "or passcode), or deny it."
 
         entry = %{
           "type" => "message",
@@ -1353,9 +1355,9 @@ defmodule Operator.ChatScreen do
 
   defp approval_bar(_a, _t), do: []
 
-  # The system screen-lock prompt; only Android has the native view so far.
+  # The system screen-lock prompt (a native view on the phone).
   defp approve_chip(n, t) do
-    if Term.platform() == :android do
+    if Term.platform() in [:android, :ios] do
       Mob.UI.native_view(ApproveButton,
         id: :approve_proposal,
         notify: self(),

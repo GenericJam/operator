@@ -11,6 +11,7 @@ defmodule Operator.ChatScreenTest do
   alias Operator.Auth.Transfer
   alias Operator.ChatScreen
   alias Operator.ChatScreen.Follow
+  alias Operator.Core.ApproveButton
   alias Operator.Core.Loop
   alias Operator.Core.Models
   alias Operator.Core.Phone
@@ -623,7 +624,7 @@ defmodule Operator.ChatScreenTest do
       assert text(view) =~ "Generation #{n} not activated: the prompt was cancelled"
 
       view = render_info(view, {:approval, "unavailable", %{"subject" => subject}})
-      assert text(view) =~ "Approve needs a screen lock (PIN, pattern or password) on this phone"
+      assert text(view) =~ ApproveButton.why("unavailable", %{})
 
       refute_received {:confirmed, _}
       assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()

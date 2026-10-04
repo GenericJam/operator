@@ -3,9 +3,11 @@ defmodule Operator.Core.MarkdownView do
   A native Markdown view for one stretch of an assistant reply (a
   `Mob.UI.native_view` component, built by `Operator.Core.Term` for the
   `:native` renderer). Android draws it with Markwon in a selectable
-  `TextView` (`OperatorMarkdown.kt`, registered as
-  `"Operator_Core_MarkdownView"` in `MainActivity`); iOS has no view yet, so
-  the theme defaults to the `:term` renderer there.
+  `TextView` (`OperatorMarkdown.kt`), iOS with Foundation's Markdown parser
+  in a read-only selectable `UITextView` (`ios/OperatorMarkdown.swift`;
+  tables drawn as box-drawing text in the monospace face, cells wrapped to
+  the view's width); both register it as `"Operator_Core_MarkdownView"`
+  (`MainActivity`, `ios/OperatorViews.swift`).
 
   Props (all forwarded to the native view as they are):
 
@@ -16,7 +18,9 @@ defmodule Operator.Core.MarkdownView do
       `:code_background`, `:quote_color`, `:rule_color`, `:selection_color`:
       ARGB integers
     * `:font_regular`, `:font_bold`, `:font_italic`, `:font_bold_italic`:
-      Android font resource names (`res/font`, copied from `priv/fonts`)
+      the faces by the names the platform loads them by: Android font
+      resource names (`res/font`, copied from `priv/fonts`), iOS PostScript
+      names (bundled from `priv/fonts`)
 
   Events: a tapped link sends `"open_link"` with `%{"url" => url}`; web and
   mail links open in the system (`Mob.Device.open_url/1`), anything else

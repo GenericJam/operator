@@ -42,7 +42,9 @@ import androidx.core.content.res.ResourcesCompat
  * screen, launched through the Compose activity-result registry.
  *
  * Events: `approved` {}, `failed` {"reason": "canceled" | "lockout" |
- * "timeout" | "error_<code>"}, `unavailable` {} (no screen lock set at all).
+ * "timeout" | "error_<code>"}, `unavailable` {} (no screen lock set at all),
+ * each tagged with the `request` prop the prompt was opened for; a prompt
+ * whose chip moves on to another `request` is dropped and reports nothing.
  */
 object OperatorApproval {
     const val NAME = "Operator_Core_ApproveButton"
@@ -61,10 +63,16 @@ object OperatorApproval {
     }
 }
 
-/** The prompt on screen for this chip, if any; `active` lets one result through. */
+/**
+ * The prompt on screen for this chip, if any; `active` lets one result
+ * through, and only from the current `attempt` (a cancelled prompt's late
+ * callback must not answer for the next one).
+ */
 private class Approval {
     var signal: CancellationSignal? = null
     var active = false
+    var request = ""
+    var attempt = 0
 
     fun cancel() {
         active = false
@@ -80,21 +88,29 @@ fun OperatorApproveButton(props: Map<String, Any?>, send: MobNativeSend) {
     val approval = remember { Approval() }
     var busy by remember { mutableStateOf(false) }
 
-    // Left the screen with the prompt up: drop it and report nothing.
-    DisposableEffect(Unit) { onDispose { approval.cancel() } }
+    val request = props["request"] as? String ?: ""
 
-    fun finish(event: String, payload: Map<String, Any> = emptyMap()) {
-        if (!approval.active) return
+    // Left the screen, or the chip now stands for another request (a newer
+    // proposal), with the prompt up: drop it and report nothing.
+    DisposableEffect(request) {
+        onDispose {
+            approval.cancel()
+            busy = false
+        }
+    }
+
+    fun finish(attempt: Int, event: String, payload: Map<String, Any> = emptyMap()) {
+        if (!approval.active || attempt != approval.attempt) return
         approval.active = false
         approval.signal = null
         busy = false
-        currentSend(event, payload)
+        currentSend(event, payload + ("request" to approval.request))
     }
 
     // API 28 only: the keyguard's credential screen answers through an activity result.
     val keyguardLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (it.resultCode == Activity.RESULT_OK) finish("approved")
-        else finish("failed", mapOf("reason" to "canceled"))
+        if (it.resultCode == Activity.RESULT_OK) finish(approval.attempt, "approved")
+        else finish(approval.attempt, "failed", mapOf("reason" to "canceled"))
     }
 
     fun color(key: String, default: Long) = Color(((props[key] as? Number)?.toLong() ?: default).toInt())
@@ -113,18 +129,20 @@ fun OperatorApproveButton(props: Map<String, Any?>, send: MobNativeSend) {
 
     fun prompt() {
         val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val attempt = ++approval.attempt
         approval.active = true
+        approval.request = request
         busy = true
 
         if (!keyguard.isDeviceSecure) {
-            finish("unavailable")
+            finish(attempt, "unavailable")
             return
         }
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             @Suppress("DEPRECATION")
             val intent = keyguard.createConfirmDeviceCredentialIntent(title, subtitle)
-            if (intent == null) finish("unavailable") else keyguardLauncher.launch(intent)
+            if (intent == null) finish(attempt, "unavailable") else keyguardLauncher.launch(intent)
             return
         }
 
@@ -144,15 +162,15 @@ fun OperatorApproveButton(props: Map<String, Any?>, send: MobNativeSend) {
 
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                finish("approved")
+                finish(attempt, "approved")
             }
 
             // onAuthenticationFailed is not terminal: a fingerprint that didn't
             // match, and the prompt stays up for another try.
 
             override fun onAuthenticationError(code: Int, message: CharSequence) {
-                if (code == BiometricPrompt.BIOMETRIC_ERROR_NO_DEVICE_CREDENTIAL) finish("unavailable")
-                else finish("failed", mapOf("reason" to OperatorApproval.reason(code)))
+                if (code == BiometricPrompt.BIOMETRIC_ERROR_NO_DEVICE_CREDENTIAL) finish(attempt, "unavailable")
+                else finish(attempt, "failed", mapOf("reason" to OperatorApproval.reason(code)))
             }
         }
 
@@ -164,7 +182,7 @@ fun OperatorApproveButton(props: Map<String, Any?>, send: MobNativeSend) {
             builder.build().authenticate(signal, context.mainExecutor, callback)
         } catch (e: RuntimeException) {
             approval.signal = null
-            finish("failed", mapOf("reason" to "error_${e.javaClass.simpleName}"))
+            finish(attempt, "failed", mapOf("reason" to "error_${e.javaClass.simpleName}"))
         }
     }
 

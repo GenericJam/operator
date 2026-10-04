@@ -36,7 +36,7 @@ end
 defmodule Operator.Core.Dyn.Approval.Biometric do
   @moduledoc """
   The production approval: the system screen-lock prompt (fingerprint,
-  face, or the phone's PIN, pattern or password) behind the approve chip,
+  face, or the phone's PIN, pattern, password or passcode) behind the approve chip,
   `Operator.Core.ApproveButton`, in the screen that shows the change. This
   small Core process under `Operator.Core` holds what the human confirmed.
 

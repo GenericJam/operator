@@ -20,7 +20,7 @@ defmodule Operator.Core.Tools.DynPropose do
     "Propose the staged Dyn sources as a new generation: they are checked, compiled and " <>
       "selftested, and the result (diff, tests, or every error with file:line) comes back. " <>
       "It does NOT activate anything: the human must approve it on the phone with the screen " <>
-      "lock (fingerprint, face, PIN, pattern or password)."
+      "lock (fingerprint, face, PIN, pattern, password or passcode)."
   end
 
   @impl true

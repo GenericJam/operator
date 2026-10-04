@@ -4,6 +4,7 @@ defmodule Operator.RescueScreenTest do
 
   import Operator.Test.Dyn
 
+  alias Operator.Core.ApproveButton
   alias Operator.Core.Dyn
   alias Operator.RescueScreen
 
@@ -61,7 +62,7 @@ defmodule Operator.RescueScreenTest do
     assert text(view) =~ "Not reverted: too many wrong tries"
 
     view = render_info(view, {:approval, "unavailable", %{"subject" => subject}})
-    assert text(view) =~ "Approve needs a screen lock (PIN, pattern or password) on this phone"
+    assert text(view) =~ ApproveButton.why("unavailable", %{})
     assert Dyn.status().generation == n
 
     view = render_info(view, {:tap, :cancel_revert})
