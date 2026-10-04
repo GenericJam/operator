@@ -32,8 +32,12 @@ defmodule Operator.Core.Dyn.Check do
       `:persistent_term` only to read (`put` / `erase` change VM-wide state
       and trigger a global GC);
     * Operator's own modules are off limits except `Operator.Core.Tool`
-      (the behaviour a Dyn tool implements); of Mob only the UI modules in
-      `@mob_allowed`;
+      (the behaviour a Dyn tool implements), and so is the sign-in store's
+      NIF (`:operator_secure_store`); of Mob only the app-facing modules in
+      `@mob_allowed` (screens, UI, theming, device features), and of
+      `Mob.Screen` not the functions that start or drive screens outside the
+      front (`start_root/3`, ...); the capability plugins (`MobCamera`,
+      `MobLocation`, `MobMishka`, `MobThemes`, ...) are allowed;
     * `Process.exit/2` only on `self()`; `apply/3`, `spawn/3` and friends
       only with a module written out literally; no calls on a module held in
       a variable (`mod.fun()`); no `:"Elixir.Foo"` atoms; modules with
@@ -52,9 +56,18 @@ defmodule Operator.Core.Dyn.Check do
   # Core code the compiler injects into Dyn modules (see Compiler).
   @injected ["Operator.Core.Dyn.Keeper"]
 
-  @mob_allowed ~w(Mob.Screen Mob.Socket Mob.Sigil Mob.UI Mob.Component Mob.Style Mob.Theme
-                  Mob.SizeClass Mob.List Mob.Font Mob.Motion Mob.Haptic Mob.Clipboard Mob.Alert
-                  Mob.Share Mob.Event Mob.Canvas Mob.Speech)
+  # Mob's app-facing modules. Not the router, renderer, listener, composite
+  # or component registries (they'd let a screen replace the root view the
+  # toggle sits in, or run its code in the shell), nor `Mob.Storage`, nor
+  # `Mob.Link` (registering would take every operator:// link from the
+  # terminal: sign-ins, handoffs, the update server).
+  @mob_allowed ~w(Mob.Screen Mob.Socket Mob.Sigil Mob.UI Mob.Style Mob.Theme Mob.SizeClass
+                  Mob.List Mob.Font Mob.Motion Mob.Haptic Mob.Clipboard Mob.Alert Mob.Share
+                  Mob.Event Mob.Canvas Mob.Speech Mob.State Mob.Permissions Mob.Device
+                  Mob.Audio Mob.Files Mob.Notification Mob.WebView Mob.Wake)
+
+  # The built-in themes a screen may hand `Mob.Theme.set/1`.
+  @mob_themes ~w(Mob.Theme.Dark Mob.Theme.Light Mob.Theme.Adaptive)
 
   # Banned outright (the module and everything below it).
   @banned_elixir %{
@@ -68,11 +81,13 @@ defmodule Operator.Core.Dyn.Check do
     "Mix" => "is the build tool",
     "Mob.Dist" => "controls distribution",
     "Mob.Test" => "drives the app remotely",
+    "Mob.Storage" => "reads and writes the app's files (the Dyn store, the settings)",
     "MobDeliver" => "installs and proves the Core's own updates (only the Mac releases the Core)"
   }
 
   @banned_erlang %{
     code: "loads and purges code",
+    operator_secure_store: "holds the sign-ins",
     init: "stops or restarts the node",
     file: "touches the file system",
     prim_file: "touches the file system",
@@ -110,6 +125,9 @@ defmodule Operator.Core.Dyn.Check do
     {:elixir, "Function"} => ~w(capture)a,
     {:elixir, "Process"} => [:list],
     {:elixir, "Kernel"} => [],
+    {:elixir, "Mob.Screen"} =>
+      ~w(start_root start_link dispatch get_socket get_current_module get_nav_history
+         get_screen_pid)a,
     {:erlang, :erlang} =>
       ~w(halt open_port load_module purge_module delete_module check_old_code load_nif
          set_cookie system_flag make_fun binary_to_atom list_to_atom binary_to_existing_atom
@@ -325,7 +343,7 @@ defmodule Operator.Core.Dyn.Check do
         case classify(t) do
           :ok -> acc
           {:banned, why} -> add(acc, ctx, meta, "#{form}s #{name(t)}, which #{why}")
-          {:partial, _} when t == {:elixir, "Kernel"} -> acc
+          {:partial, _} when form == :use or t == {:elixir, "Kernel"} -> acc
           {:partial, _} -> add(acc, ctx, meta, "#{form}s #{name(t)}: call its functions directly")
         end
       end)
@@ -426,13 +444,38 @@ defmodule Operator.Core.Dyn.Check do
     end
   end
 
+  # `Mob.Wake.register(id, trigger, {Mod, :fun})` / `{Mod, :fun, args}`
+  # calls the handler later, outside any check: checked as if called now.
+  @wake_register {{:elixir, "Mob.Wake"}, :register, 3}
+
   defp special(target, fun, args, meta, ctx, acc) do
     key = {target, fun, if(is_list(args), do: length(args), else: args)}
 
     cond do
+      key == @wake_register and is_list(args) -> wake_handler(Enum.at(args, 2), meta, ctx, acc)
       key in @mfa and is_list(args) -> mfa(target, fun, args, meta, ctx, acc)
       message = special_message(key, args) -> add(acc, ctx, meta, message)
       true -> acc
+    end
+  end
+
+  defp wake_handler({mod, f}, meta, ctx, acc),
+    do: mfa({:elixir, "Mob.Wake"}, :register, [mod, f], meta, ctx, acc)
+
+  defp wake_handler({:{}, _, [mod, f, extra]}, meta, ctx, acc),
+    do: mfa({:elixir, "Mob.Wake"}, :register, [mod, f, extra], meta, ctx, acc)
+
+  defp wake_handler(_handler, meta, ctx, acc),
+    do: add(acc, ctx, meta, "Mob.Wake.register/3 takes a literal {Module, :function} handler")
+
+  # `args` is an arity when the function is captured or applied, else the call's args.
+  defp special_message({target, fun, arity} = key, args) when is_integer(args) do
+    cond do
+      key == @wake_register -> "Mob.Wake.register/3 may only be called directly"
+      key in @remote_spawns -> "#{name(target)}.#{fun}/#{arity} spawns on another node"
+      key in @mfa -> "#{name(target)}.#{fun}/#{arity} may only be called directly"
+      key in @exits -> "#{name(target)}.exit/2 may only be called directly"
+      true -> nil
     end
   end
 
@@ -440,12 +483,6 @@ defmodule Operator.Core.Dyn.Check do
     cond do
       key in @remote_spawns ->
         "#{name(target)}.#{fun}/#{arity} spawns on another node"
-
-      key in @mfa and is_integer(args) ->
-        "#{name(target)}.#{fun}/#{arity} may only be called directly"
-
-      key in @exits and is_integer(args) ->
-        "#{name(target)}.exit/2 may only be called directly"
 
       key in @exits and not match?([{:self, _, []} | _], args) ->
         "#{name(target)}.exit/2 may only exit self()"
@@ -516,8 +553,9 @@ defmodule Operator.Core.Dyn.Check do
   defp classify({:elixir, "Mob." <> _ = name}) do
     cond do
       why = banned_elixir(name) -> {:banned, why}
-      name in @mob_allowed -> :ok
-      true -> {:banned, "is not one of Mob's UI modules"}
+      name in @mob_allowed -> Map.get(@partial, {:elixir, name}) |> mob_partial()
+      name in @mob_themes -> :ok
+      true -> {:banned, "is not one of Mob's app-facing modules"}
     end
   end
 
@@ -536,6 +574,9 @@ defmodule Operator.Core.Dyn.Check do
       true -> :ok
     end
   end
+
+  defp mob_partial(nil), do: :ok
+  defp mob_partial(banned), do: {:partial, banned}
 
   defp banned_elixir(name) do
     Enum.find_value(@banned_elixir, fn {banned, why} ->
@@ -653,7 +694,17 @@ defmodule Operator.Core.Dyn.Check do
   # The template's `{...}` expressions are only code once the sigil expands,
   # so expand it with Mob's own parser and check the result.
   defp expand_mob({_, meta, _} = node, ctx) do
-    env = %{__ENV__ | file: ctx.file, line: meta[:line] || 1, module: nil, function: nil}
+    # `assigns` counts as bound: the sigil wants it for `@field`, and
+    # whether it really is in scope is the compiler's business, not this check's.
+    env = %{
+      __ENV__
+      | file: ctx.file,
+        line: meta[:line] || 1,
+        module: nil,
+        function: nil,
+        versioned_vars: %{{:assigns, nil} => 0}
+    }
+
     {:ok, env} = Macro.Env.define_require(env, meta, Mob.Sigil)
     {:ok, env} = Macro.Env.define_import(env, meta, Mob.Sigil, only: :macros)
     {:ok, Macro.expand_once(node, env)}

@@ -88,12 +88,78 @@ defmodule Operator.Core.Dyn.CheckTest do
       {":persistent_term.put(:k, 1)", ":persistent_term.put"},
       {":persistent_term.erase(:k)", ":persistent_term.erase"},
       {"Process.list()", "Process.list"},
-      {":erlang.processes()", ":erlang.processes"}
+      {":erlang.processes()", ":erlang.processes"},
+      # The front's limits: nothing that drives screens outside it, files, sign-ins.
+      {"Mob.Screen.start_root(Operator.Dyn.Probe)", "Mob.Screen.start_root"},
+      {"Mob.Router.get_nav_history(pid)", "app-facing"},
+      {"Mob.Renderer.render(%{}, :android)", "app-facing"},
+      {"Mob.Composite.register(:column, {Operator.Dyn.Probe, :go})", "app-facing"},
+      {"Mob.Storage.write(:documents, \"x\", \"y\")", "Mob.Storage"},
+      {":operator_secure_store.get(\"anthropic\")", "sign-ins"},
+      {"Operator.Core.Settings.put_daily_cap(100)", "Operator's own code"},
+      {"Operator.Auth.status()", "Operator's own code"},
+      # operator:// links are the terminal's (sign-ins, handoffs, updates).
+      {"Mob.Link.register(self())", "app-facing"},
+      # A wake handler runs later, unchecked: it's checked as a call now.
+      {~s|Mob.Wake.register(:w, :refresh, {:file, :delete, ["/data"]})|, ":file.delete"},
+      {"Mob.Wake.register(:w, :refresh, {System, :halt, []})", "System.halt"},
+      {"Mob.Wake.register(:w, :refresh, handler)", "literal {Module, :function}"},
+      {"apply(Mob.Wake, :register, [:w, :refresh, h])", "may only be called directly"},
+      {"&Mob.Wake.register/3", "may only be called directly"}
     ]
 
     for {body, expected} <- banned do
       assert violation(body) =~ ~r/^4: .*#{Regex.escape(expected)}/, "#{body} was not rejected"
     end
+  end
+
+  test "front screens may use mob's app-facing modules, Mishka, themes and the plugins" do
+    source = """
+    defmodule Operator.Dyn.Probe do
+      use Mob.Screen
+
+      alias MobMishka.Components.MishkaSlider
+
+      def mount(_params, _session, socket), do: {:ok, Mob.Socket.assign(socket, :v, 1)}
+
+      def render(assigns) do
+        ~MOB\"\"\"
+        <Column>
+          <MishkaSlider value={@v} on_change={:v} color={0xFF7C3AED} />
+          <Text text={Mob.State.get(:theme, :dark) |> inspect()} />
+        </Column>
+        \"\"\"
+      end
+
+      def handle_info({:change, :v, v}, socket),
+        do: {:noreply, Mob.Socket.assign(socket, :v, MishkaSlider.snap(v, step: 5))}
+
+      def handle_info({:tap, :theme}, socket) do
+        Mob.Theme.set(Mob.Theme.Light)
+        Mob.Theme.set(MobThemes.Material3)
+        {:noreply, socket}
+      end
+
+      def handle_info({:tap, :where}, socket) do
+        socket = Mob.Permissions.request(socket, :location)
+        {:noreply, MobLocation.get_once(socket)}
+      end
+
+      def handle_info({:tap, :snap}, socket), do: {:noreply, MobCamera.capture_photo(socket)}
+
+      def handle_info({:tap, :wake}, socket) do
+        :ok = Mob.Wake.register(:probe_refresh, :refresh, {Operator.Dyn.Probe, :refresh, [1]})
+        {:noreply, socket}
+      end
+
+      def handle_info({:tap, :next}, socket),
+        do: {:noreply, Mob.Socket.push_screen(socket, Operator.Dyn.Other)}
+
+      def handle_info(_message, socket), do: {:noreply, socket}
+    end
+    """
+
+    assert {:ok, _} = Check.run(%{"probe.ex" => source})
   end
 
   test "sees through aliases, imports, delegation and ~MOB templates" do
