@@ -20,7 +20,7 @@ config :mob_dev,
   # store that holds the provider sign-ins (Operator.SecureStore, Operator.Auth).
   static_nifs: [%{module: :operator_secure_store, archs: [:all]}],
   # operator:// links (Operator.Links: the QR codes mix operator.handoff,
-  # operator.login and mob_deliver make on the Mac, scanned with any app).
+  # operator.login and operator.deliver.qr make on the Mac, scanned with any app).
   # The native build adds the Android intent filter (MainActivity must stay
   # singleTask) and the iOS URL type; each link arrives as {:link, ...}.
   url_schemes: ["operator"]

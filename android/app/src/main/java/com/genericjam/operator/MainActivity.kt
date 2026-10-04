@@ -429,8 +429,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Hands an operator:// link (a QR from mix operator.handoff,
-    // operator.login or mob_deliver, scanned with any app; Operator.Links) to
+    // Hands an operator:// link (a QR from mix operator.handoff, operator.login
+    // or operator.deliver.qr, scanned with any app; Operator.Links) to
     // mob, which delivers it as {:link, %{url: url, source: ...}} once: on a
     // cold launch it holds the URL until the root screen has mounted. content:
     // and file: URIs are documents shared into the app, not links. Any app can
