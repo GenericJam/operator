@@ -1,6 +1,7 @@
 defmodule Operator.Core.ToolsTest do
   use ExUnit.Case, async: false
 
+  alias Operator.Core.Phone
   alias Operator.Core.ToolRegistry
   alias Operator.Core.Tools.Clipboard
   alias Operator.Core.Tools.HttpGet
@@ -149,7 +150,7 @@ defmodule Operator.Core.ToolsTest do
       spawn(fn ->
         receive do
           {:phone_request, ref, from, :pick_photos, _args} ->
-            Operator.Core.Phone.reply(
+            Phone.reply(
               from,
               ref,
               {:ok,
