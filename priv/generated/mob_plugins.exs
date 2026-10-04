@@ -4,9 +4,13 @@
 # Regenerated whenever `config :mob, :plugins` changes (the deploy/regen hook).
 %{
   nifs: [:mob_background_nif, :mob_location_nif, :mob_notify_nif,
-   :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif, :mob_whisper_nif],
+   :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif, :mob_biometric_nif,
+   :mob_bluetooth_nif, :mob_screencast_nif, :mob_video_nif, :mob_touch_nif,
+   :mob_wake_nif, :mob_whisper_nif],
   plugins: [:mob_background, :mob_location, :mob_notify, :mob_camera,
-   :mob_photos, :mob_scanner, :mob_deliver, :mob_whisper],
+   :mob_photos, :mob_scanner, :mob_biometric, :mob_bluetooth, :mob_screencast,
+   :mob_video, :mob_touch, :mob_wake, :mob_deliver, :mob_whisper, :mob_mishka],
+  styles: [%{name: :mob_themes, theme: MobThemes.Obsidian}],
   settings: [],
   screens: [
     %{
@@ -18,6 +22,21 @@
       module: MobCamera.DemoScreen,
       plugin: :mob_camera,
       default_route: "/mob_camera/demo"
+    },
+    %{
+      module: MobBiometric.DemoScreen,
+      plugin: :mob_biometric,
+      default_route: "/mob_biometric/demo"
+    },
+    %{
+      module: MobVideo.DemoScreen,
+      plugin: :mob_video,
+      default_route: "/mob_video/demo"
+    },
+    %{
+      module: MobTouch.DemoScreen,
+      plugin: :mob_touch,
+      default_route: "/mob_touch/demo"
     }
   ],
   notification_handlers: [],
@@ -27,10 +46,10 @@
       on_start: {MobDeliver, :on_start, []},
       on_resume: {MobDeliver, :on_resume, []},
       on_background: {MobDeliver, :on_background, []}
-    }
+    },
+    %{plugin: :mob_mishka, on_start: {MobMishka, :register_all, []}}
   ],
   default_font: nil,
-  styles: [],
   default_style: nil,
   composites: []
 }

@@ -36,6 +36,13 @@ config :mob, :plugins, [
   :mob_camera,
   :mob_photos,
   :mob_scanner,
+  # For the front (PLAN.md step 9): the rest of Sloppy Joe's toolbox.
+  :mob_biometric,
+  :mob_bluetooth,
+  :mob_screencast,
+  :mob_video,
+  :mob_touch,
+  :mob_wake,
   # OTA updates of Operator's own code: pure Elixir, no NIF (config in
   # config/config.exs, Operator.Deliver).
   :mob_deliver,
@@ -69,6 +76,9 @@ config :mob, :trusted_plugins, %{
   mob_mishka: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_ash: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_deliver: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_video: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_touch: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_wake: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_whisper: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
 }
 

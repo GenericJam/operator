@@ -8,9 +8,14 @@
          Normal (install-time) permission; no runtime request needed. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Microphone (audio recording). CAMERA + the camera uses-features are
-         declared by the mob_camera plugin's manifest and merged at build. -->
+    <!-- Camera + microphone. Every permission here is asked at first use
+         (Mob.Permissions / the plugin's own call), never at launch. The host
+         declarations win over the plugins' plain ones (mob_dev skips its own
+         tag for a permission the host already declares). -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <!-- USB host (Mob.Peripheral.VendorUsb). required=false so the Play Store
          doesn't filter the app off devices without USB host support; apps
@@ -23,10 +28,36 @@
          permission needed — CameraManager.setTorchMode works without one. -->
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
-    <!-- Media-library read permissions moved to the mob_photos plugin manifest
-         (READ_MEDIA_IMAGES / READ_MEDIA_VIDEO / READ_EXTERNAL_STORAGE). NOTE the
-         plugin's plain-string permission list can't express maxSdkVersion="32"
-         on the legacy one — harmless (no-op on API 33+). -->
+    <!-- Location (mob_location; mob_bluetooth discovery on API <= 30) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Media library (mob_photos, mob_video): Android 13+ -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Legacy media read for Android 12 and below -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Bluetooth Classic + BLE (mob_bluetooth). Scanning never derives
+         location on API 31+; the legacy pair covers API <= 30. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        android:minSdkVersion="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
+        android:minSdkVersion="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
+        android:minSdkVersion="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
+    <!-- Screen capture (mob_screencast): MediaProjection runs in a typed
+         foreground service (the ScreencastService below). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <!-- POST_NOTIFICATIONS (API 33+, runtime-granted) makes the mob_background
          keep-alive notification visible in the tray; without the grant the
@@ -67,14 +98,7 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- mob:plugin-permissions BEGIN (managed — regenerated each build; do not edit) -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <!-- mob:plugin-permissions END -->
     <application
         android:label="Operator"
@@ -135,6 +159,12 @@
         <service android:name="io.mob.background.BeamForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- mob_screencast: MediaProjection capture must run in a typed
+             foreground service (mob_screencast host requirement). -->
+        <service android:name="io.mob.screencast.ScreencastService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <!-- mob:plugin-components BEGIN (managed — regenerated each build; do not edit) -->
         <service android:name="io.mob.notify.MobFirebaseService"

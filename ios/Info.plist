@@ -36,7 +36,17 @@
         <string>remote-notification</string>
     </array>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Operator uses the microphone for audio recording.</string>
+    <string>Operator uses the microphone for dictation and for the audio recording your screens do.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Operator uses the camera to take photos and video and to scan QR codes.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Operator reads your photo library when you pick photos or videos.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Operator uses your location when you or a screen you built asks for it.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Operator uses Bluetooth to find and connect to nearby devices.</string>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Operator uses Face ID to approve changes and to unlock screens you built.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSceneManifest</key>

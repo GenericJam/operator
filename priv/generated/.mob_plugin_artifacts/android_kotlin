@@ -4,3 +4,9 @@ android/app/src/main/java/io/mob/notify/MobNotifyBridge.kt
 android/app/src/main/java/io/mob/camera/MobCameraBridge.kt
 android/app/src/main/java/io/mob/photos/MobPhotosBridge.kt
 android/app/src/main/java/io/mob/scanner/MobScannerBridge.kt
+android/app/src/main/java/io/mob/biometric/MobBiometricBridge.kt
+android/app/src/main/java/io/mob/bluetooth/MobBluetoothBridge.kt
+android/app/src/main/java/io/mob/screencast/MobScreencastBridge.kt
+android/app/src/main/java/io/mob/video/MobVideoBridge.kt
+android/app/src/main/java/io/mob/touch/MobTouchBridge.kt
+android/app/src/main/java/io/mob/wake/MobWakeBridge.kt

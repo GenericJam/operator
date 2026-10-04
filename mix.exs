@@ -45,6 +45,16 @@ defmodule Operator.MixProject do
       # Diagnostics → Scan QR: the codes `mix operator.login` and `mix
       # operator.handoff` show on the Mac (Operator.LoginScanScreen).
       {:mob_scanner, "~> 0.1.5"},
+      # The rest of the mob toolbox, as Sloppy Joe carries it, for the front
+      # (the screens the user and the agent build; PLAN.md step 9). Each
+      # permission is asked at first use. Operator's own approval stays on
+      # OperatorApproval.kt; mob_biometric is for front screens.
+      {:mob_biometric, "~> 0.1.5"},
+      {:mob_bluetooth, "~> 0.4.1"},
+      {:mob_screencast, "~> 0.1.2"},
+      {:mob_video, "~> 0.1.1"},
+      {:mob_touch, "~> 0.1.1"},
+      {:mob_wake, "~> 0.1.1"},
       # Dictation: hold the mic, the phone transcribes offline (whisper.cpp,
       # Operator.ChatScreen). mob_speech is the speech API, mob_whisper its
       # on-device engine (a mob plugin, mob.exs).
