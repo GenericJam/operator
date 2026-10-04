@@ -4,6 +4,8 @@ defmodule Operator.App do
   use Mob.App
 
   alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.Seed
+  alias Operator.Core.Front
   alias Operator.Core.Term
 
   @impl Mob.App
@@ -29,9 +31,9 @@ defmodule Operator.App do
     # The terminal theme (dark, monospace `:term` font token) for every screen.
     :ok = Term.install()
 
-    # Safe mode (launches kept failing, no Dyn loaded): the rescue screen.
-    # Otherwise chat once signed in to a provider; until then the
-    # diagnostics screen, which says how to sign in.
+    # The terminal: safe mode's rescue screen (launches kept failing, no Dyn
+    # loaded); otherwise chat once signed in to a provider, and until then
+    # the diagnostics screen, which says how to sign in.
     root =
       cond do
         Dyn.safe_mode?() -> Operator.RescueScreen
@@ -39,7 +41,16 @@ defmodule Operator.App do
         true -> Operator.HomeScreen
       end
 
-    Mob.Screen.start_root(root)
+    {:ok, _} = Mob.Screen.start_root(root)
+
+    # The default front (the seed) is installed in the background on the
+    # first launch (Operator.Core.Dyn.Seed); the front says so meanwhile.
+    _ = Seed.start()
+
+    # The app opens on the front (the shell over the terminal; the toggle
+    # pops it), except in safe mode, where there is no front to show.
+    unless Dyn.safe_mode?(), do: Front.navigate({:push, Operator.ShellScreen, %{}})
+    :ok
   end
 
   # Returns the path to the migrations directory for the current environment.

@@ -29,6 +29,7 @@ defmodule Operator.Test.LoopHelpers do
           Operator.Test.Tools.Echo,
           Operator.Test.Tools.Crash,
           Operator.Test.Tools.Slow,
+          Operator.Test.Tools.Picture,
           Operator.Core.Tools.Notes
         ],
         task_supervisor: sup,

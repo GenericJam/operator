@@ -41,6 +41,8 @@ defmodule Operator.Core.Dyn do
   alias Operator.Core.Dyn.Store
   alias Operator.Core.ToolRegistry
 
+  require Logger
+
   @keeper Keeper
   @log_keys [:type, :at, :gen, :module, :kind, :reason, :status, :from, :to, :crashes]
 
@@ -52,11 +54,12 @@ defmodule Operator.Core.Dyn do
           modules: [Generation.module_entry()],
           selftests: [Generation.selftest()],
           compile_ms: non_neg_integer(),
+          reused: non_neg_integer(),
           warnings: [String.t()]
         }
   @type rejection :: %{
           n: pos_integer() | nil,
-          stage: :check | :compile | :selftest | :names | :superseded,
+          stage: :check | :compile | :selftest | :names | :superseded | :install,
           reason: String.t(),
           violations: [Check.violation()],
           selftests: [Generation.selftest()]
@@ -115,31 +118,91 @@ defmodule Operator.Core.Dyn do
   modules are unloaded and the current one is untouched.
   `{:error, :proposal_limit}`: this launch made too many proposals (see
   `Operator.Core.Dyn.Keeper`); the app has to restart first.
+  `{:error, :rebuilding}`: the current generation is being rebuilt for a
+  new Core in the background; propose once it's loaded.
   """
   @spec propose(String.t(), atom()) ::
           {:ok, proposal()}
           | {:error,
-             rejection() | :no_changes | :rationale_required | :not_running | :proposal_limit}
+             rejection()
+             | :no_changes
+             | :rationale_required
+             | :not_running
+             | :proposal_limit
+             | :rebuilding}
   def propose(rationale, keeper \\ @keeper) do
     with {:ok, config} <- Registry.config(keeper),
-         {:ok, rationale} <- rationale(rationale) do
-      parent = status(keeper).generation
-      base = Store.sources(config.dir, parent)
-      staged = Store.staged(config.dir)
-
-      cond do
-        staged == base -> {:error, :no_changes}
-        Keeper.reserve_proposal(keeper) != :ok -> {:error, :proposal_limit}
-        true -> check(config, keeper, %{parent: parent, rationale: rationale}, base, staged)
-      end
+         {:ok, rationale} <- rationale(rationale),
+         parent = status(keeper).generation,
+         base = Store.sources(config.dir, parent),
+         staged = Store.staged(config.dir),
+         :ok <- if(staged == base, do: {:error, :no_changes}, else: :ok),
+         :ok <- Keeper.reserve_proposal(keeper) do
+      info = %{parent: parent, rationale: rationale, finish: &candidate(keeper, &1, &2)}
+      check(config, info, base, staged)
     end
   end
 
-  defp check(config, keeper, info, base, staged) do
+  defp candidate(keeper, gen, mods) do
+    case Keeper.candidate(keeper, gen, mods) do
+      :ok -> :ok
+      {:error, :superseded} -> {:error, :superseded, "a newer proposal replaced it"}
+    end
+  end
+
+  @doc """
+  Installs the seed (`Operator.Core.Dyn.Seed`, the default front) once per
+  install: `sources` over the current generation's (whose files win on a
+  shared path) are checked, compiled and selftested like a proposal, then
+  made current and proven by `Operator.Core.Dyn.Keeper.install_seed/3`
+  with no approval, because the seed ships with the Core. Waits (an error,
+  retried next launch) in safe mode or while a proposal is pending.
+  """
+  @spec seed(%{String.t() => String.t()}, String.t(), atom()) ::
+          {:ok, pos_integer()}
+          | {:error, :seeded | :safe_mode | :proposal_pending | :not_running | rejection()}
+  def seed(sources, rationale, keeper \\ @keeper) do
+    with {:ok, config} <- Registry.config(keeper),
+         status = status(keeper),
+         :ok <- seedable(config.dir, status) do
+      base = Store.sources(config.dir, status.generation)
+      info = %{parent: status.generation, rationale: rationale, finish: &install(keeper, &1, &2)}
+      # In the background, nobody waiting: as long as a rebuild may take.
+      config = %{
+        config
+        | build: Keyword.put(config.build, :compile_timeout_ms, config.rebuild_timeout_ms)
+      }
+
+      with {:ok, proposal} <- check(config, info, base, Map.merge(sources, base)),
+           do: {:ok, proposal.n}
+    end
+  end
+
+  defp seedable(dir, status) do
+    cond do
+      Store.seed(dir) -> {:error, :seeded}
+      status.mode != :normal -> {:error, :safe_mode}
+      status.pending -> {:error, :proposal_pending}
+      true -> :ok
+    end
+  end
+
+  defp install(keeper, gen, mods) do
+    case Keeper.install_seed(keeper, gen, mods) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Compiler.purge(mods)
+        {:error, :install, "the seed wasn't installed: #{inspect(reason)}"}
+    end
+  end
+
+  defp check(config, info, base, staged) do
     case Check.run(staged) do
       {:ok, parsed} ->
         info = Map.put(info, :n, Store.allocate(config.dir))
-        build(config, keeper, info, base, staged, parsed)
+        build(config, info, base, staged, parsed)
 
       {:error, violations} ->
         {:error, rejection(nil, :check, Check.format(violations), violations: violations)}
@@ -153,7 +216,7 @@ defmodule Operator.Core.Dyn do
     end
   end
 
-  defp build(config, keeper, %{n: n} = info, base, staged, parsed) do
+  defp build(config, %{n: n} = info, base, staged, parsed) do
     dir = config.dir
 
     gen = %Generation{
@@ -168,13 +231,24 @@ defmodule Operator.Core.Dyn do
 
     Store.put_sources(dir, n, staged)
     :ok = Store.put_generation(dir, gen)
-    opts = Keyword.put(config.build, :src_dir, Store.src_dir(dir, n))
+
+    opts =
+      config.build
+      |> Keyword.put(:src_dir, Store.src_dir(dir, n))
+      |> Keyword.put(:reuse, reuse(dir, info.parent, base, staged))
 
     with {:ok, build} <- step(Compiler.compile(parsed, n, opts)),
          :ok <- step(Check.beam(build.modules, n)),
          mods = Enum.map(build.modules, &elem(&1, 0)),
-         {:ok, tests} <- step(Selftest.run(mods, opts)),
+         {test_us, tests} = :timer.tc(fn -> Selftest.run(mods, opts) end),
+         {:ok, tests} <- step(tests),
          {:ok, entries} <- names(build.modules, tests) do
+      Logger.info(
+        "[dyn] generation #{n}: #{map_size(staged) - length(build.reused)} files compiled, " <>
+          "#{length(build.reused)} reused, in #{build.compile_ms} ms; " <>
+          "selftests #{div(test_us, 1000)} ms"
+      )
+
       diff = Diff.unified(base, staged)
 
       gen = %{
@@ -187,10 +261,11 @@ defmodule Operator.Core.Dyn do
       }
 
       Store.put_beams(dir, n, build.modules)
+      Store.put_deps(dir, n, build.deps)
       Store.put_diff(dir, n, diff)
       :ok = Store.put_generation(dir, gen)
 
-      case Keeper.candidate(keeper, gen, mods) do
+      case info.finish.(gen, mods) do
         :ok ->
           {:ok,
            %{
@@ -201,11 +276,16 @@ defmodule Operator.Core.Dyn do
              modules: entries,
              selftests: gen.selftests,
              compile_ms: build.compile_ms,
+             reused: length(build.reused),
              warnings: build.warnings
            }}
 
-        {:error, :superseded} ->
-          {:error, rejection(n, :superseded, "a newer proposal replaced it")}
+        {:error, :superseded, reason} ->
+          {:error, rejection(n, :superseded, reason)}
+
+        {:error, stage, reason} ->
+          _ = Store.put_generation(dir, %{gen | status: :rejected, reason: "#{stage}: #{reason}"})
+          {:error, rejection(n, stage, reason)}
       end
     else
       {:error, stage, reason, extra} ->
@@ -223,6 +303,30 @@ defmodule Operator.Core.Dyn do
           })
 
         {:error, rejection(n, stage, reason, extra)}
+    end
+  end
+
+  # The parent's binaries and deps, for an incremental compile
+  # (Operator.Core.Dyn.Reuse): only from a parent built by this runtime,
+  # and only binaries its manifest vouches for.
+  defp reuse(dir, parent, base, staged) do
+    with true <- parent > 0,
+         {:ok, gen} <- Store.generation(dir, parent),
+         false <- Compiler.stale?(gen),
+         %{} = deps <- Store.deps(dir, parent) do
+      hashes = Map.new(gen.modules, &{"Elixir." <> &1.versioned, &1.sha256})
+
+      beams =
+        for {mod, bin} <- Store.beams(dir, parent),
+            name = Atom.to_string(mod),
+            Map.get(hashes, name) == Compiler.sha256(bin),
+            into: %{},
+            do: {name, bin}
+
+      unchanged = for {rel, src} <- staged, Map.get(base, rel) == src, into: MapSet.new(), do: rel
+      %{n: parent, deps: deps, beams: beams, unchanged: unchanged}
+    else
+      _ -> nil
     end
   end
 
@@ -321,6 +425,19 @@ defmodule Operator.Core.Dyn do
   @spec safe_mode?(atom()) :: boolean()
   def safe_mode?(keeper \\ @keeper), do: Registry.mode(keeper) == :safe
 
+  @doc """
+  The generation this launch is rebuilding for a new Core in the
+  background (nothing of it is registered yet), or nil.
+  """
+  @spec rebuilding(atom()) :: pos_integer() | nil
+  def rebuilding(keeper \\ @keeper), do: Registry.rebuilding(keeper)
+
+  @doc "Returns once this launch's background rebuild is over (at once if none runs)."
+  @spec await_rebuild(atom()) :: :ok
+  def await_rebuild(keeper \\ @keeper) do
+    if GenServer.whereis(keeper), do: Keeper.await_rebuild(keeper), else: :ok
+  end
+
   @doc "Every generation, newest first, generation 0 last."
   @spec generations(atom()) :: [Generation.t()]
   def generations(keeper \\ @keeper), do: with_dir(keeper, [], &Store.generations/1)
@@ -402,10 +519,12 @@ defmodule Operator.Core.Dyn do
     Rules (a static check enforces them and reports file:line):
     - Each `.ex` file holds one or more `defmodule Operator.Dyn.<Name>`, nothing else at the \
     top level. Refer to your other modules as `Operator.Dyn.<Name>` (an `alias` is fine).
-    - No file, OS, node or code-loading access: no `File`, `Path`, `System.cmd`, `Port`, \
-    `:os`, `Code`, `Module`, `:code`, `Node`; no tracing, suspending or listing processes; no \
-    `:persistent_term.put`; no macros; no `apply`/`spawn` on a module held in a variable. No \
-    Operator modules except `Operator.Core.Tool`; of Mob only the UI modules.
+    - No file, OS, node or code-loading access: no `File`, `Path`, `Mob.Storage`, `System.cmd`, \
+    `Port`, `:os`, `Code`, `Module`, `:code`, `Node`; no tracing, suspending or listing \
+    processes; no `:persistent_term.put`; no macros; no `apply`/`spawn` on a module held in a \
+    variable; no `String.to_atom`. No Operator modules except `Operator.Core.Tool`. Of Mob, its \
+    app-facing modules (screens, UI, theme, permissions, device features; not the router or \
+    renderer) and the capability plugins (`MobCamera`, `MobLocation`, `MobMishka`, ...).
     - A tool: `@behaviour Operator.Core.Tool` with `name/0` (lowercase, unique, not a core \
     tool's), `description/0`, `parameter_schema/0` (JSON Schema, string keys), \
     `run(args, ctx)` returning `{:ok, result}` or `{:error, reason}`, and a `selftest/0` \

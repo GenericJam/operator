@@ -136,3 +136,17 @@ defmodule Operator.Test.Tools.Slow do
     {:ok, "too late"}
   end
 end
+
+defmodule Operator.Test.Tools.Picture do
+  @moduledoc "Test tool: answers with an image and a caption."
+  @behaviour Operator.Core.Tool
+
+  @impl true
+  def name, do: "picture"
+  @impl true
+  def description, do: "Returns a tiny image."
+  @impl true
+  def parameter_schema, do: %{"type" => "object"}
+  @impl true
+  def run(_args, _ctx), do: {:ok, {:image, "image/png", <<137, 80, 78, 71>>, "a picture"}}
+end

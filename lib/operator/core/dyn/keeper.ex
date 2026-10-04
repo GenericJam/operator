@@ -42,6 +42,18 @@ defmodule Operator.Core.Dyn.Keeper do
   or `:candidate` / `:reverted` caught between the pointer and manifest
   writes); anything else falls back to generation 0.
 
+  **Rebuilds** for a new Core (its binaries were built by another runtime,
+  `Operator.Core.Dyn.Compiler.stale?/1`) don't hold up the launch: the
+  terminal never waits for Dyn code. `boot/2` returns at once with the
+  generation current but nothing of it in the registry (no Dyn tools,
+  screens or theme; `Operator.Core.Dyn.Registry.rebuilding/1` says so), a
+  linked worker rebuilds and selftests it, and the Keeper then stores and
+  registers it and sends `%{type: :loaded}` (or reports `:load_failed`).
+  Proposals wait for it (`{:error, :rebuilding}`, `await_rebuild/1`), and
+  so does the launch's **stable** mark: a rebuild that takes the app down
+  counts as a failed launch, exactly as when it ran before the first frame,
+  so boot probation and safe mode still catch it.
+
   **Core updates** (`Operator.Deliver`) share that launch: the
   `:on_stable` MFA runs when a launch reaches stable (it ends a delivered
   update's probation). `boot/2` records the update a launch runs (`core:`,
@@ -67,7 +79,9 @@ defmodule Operator.Core.Dyn.Keeper do
   (`{module, function, args}` run in its own process when a launch
   reaches stable, or `nil`), and the compile / selftest limits
   (`:compile_timeout_ms`, `:compile_max_heap_mb`, `:selftest_timeout_ms`,
-  `:selftest_max_heap_mb`).
+  `:selftest_max_heap_mb`); a background rebuild's compile gets
+  `:rebuild_timeout_ms` (300 000: it compiles the whole generation, which
+  can take minutes on a slow phone, and nobody waits for it).
   """
   use GenServer
 
@@ -86,6 +100,7 @@ defmodule Operator.Core.Dyn.Keeper do
     stable_delay_ms: 10_000,
     gc_retry_ms: 30_000,
     max_proposals: 50,
+    rebuild_timeout_ms: 300_000,
     on_stable: nil
   ]
   @build_opts [
@@ -103,7 +118,8 @@ defmodule Operator.Core.Dyn.Keeper do
           status: Generation.status(),
           reverted: nil | %{from: pos_integer(), to: non_neg_integer()},
           failed_launches: non_neg_integer(),
-          load_ms: non_neg_integer()
+          load_ms: non_neg_integer(),
+          rebuilding: boolean()
         }
 
   # ── API ──
@@ -131,13 +147,34 @@ defmodule Operator.Core.Dyn.Keeper do
   @spec boot(GenServer.server(), keyword()) :: boot_report()
   def boot(server, opts \\ []), do: GenServer.call(server, {:boot, opts}, :infinity)
 
-  @doc "Counts a proposal against this launch's cap; `{:error, :proposal_limit}` once it's reached."
-  @spec reserve_proposal(GenServer.server()) :: :ok | {:error, :proposal_limit}
+  @doc """
+  Counts a proposal against this launch's cap; `{:error, :proposal_limit}`
+  once it's reached, `{:error, :rebuilding}` during a background rebuild.
+  """
+  @spec reserve_proposal(GenServer.server()) :: :ok | {:error, :proposal_limit | :rebuilding}
   def reserve_proposal(server), do: GenServer.call(server, :reserve_proposal)
+
+  @doc """
+  Returns once this launch's background rebuild (see the moduledoc) is
+  over, at once if none runs.
+  """
+  @spec await_rebuild(GenServer.server()) :: :ok
+  def await_rebuild(server), do: GenServer.call(server, :await_rebuild, :infinity)
 
   @doc "Records a proposal that passed (see `Operator.Core.Dyn.propose/2`); supersedes the previous one."
   @spec candidate(GenServer.server(), Generation.t(), [module()]) :: :ok | {:error, :superseded}
   def candidate(server, gen, mods), do: GenServer.call(server, {:candidate, gen, mods})
+
+  @doc """
+  Makes `gen` (built from the seed, `Operator.Core.Dyn.seed/3`; its modules
+  `mods` loaded) current and proven at once, without approval: the seed
+  ships with the Core. Only on top of the current generation, in normal
+  mode and with no proposal pending; records it as the install's seed.
+  """
+  @spec install_seed(GenServer.server(), Generation.t(), [module()]) ::
+          :ok | {:error, :safe_mode | :proposal_pending | :stale | term()}
+  def install_seed(server, gen, mods),
+    do: GenServer.call(server, {:install_seed, gen, mods}, :infinity)
 
   @doc "Drops the pending candidate `n` (unloads it; no approval needed)."
   @spec discard(GenServer.server(), pos_integer()) :: :ok | {:error, :not_pending}
@@ -173,6 +210,17 @@ defmodule Operator.Core.Dyn.Keeper do
     :exit, _ -> :ok
   end
 
+  @doc "Stops watching `pid`: its exit is no longer a crash (an orderly stop). A no-op without a Keeper."
+  @spec unwatch(GenServer.server(), pid()) :: :ok
+  def unwatch(server, pid) do
+    case GenServer.whereis(server) do
+      nil -> :ok
+      keeper -> GenServer.call(keeper, {:unwatch, pid})
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
   @doc "Sends `pid` `{:operator_dyn, event}` for every crash, revert, activation, ... until it exits."
   @spec subscribe(GenServer.server(), pid()) :: :ok
   def subscribe(server, pid \\ self()), do: GenServer.call(server, {:subscribe, pid})
@@ -199,7 +247,9 @@ defmodule Operator.Core.Dyn.Keeper do
       dir: dir,
       keeper: name,
       approval: Keyword.fetch!(opts, :approval),
-      build: Keyword.take(opts, @build_opts) |> Keyword.put(:keeper, name)
+      build: Keyword.take(opts, @build_opts) |> Keyword.put(:keeper, name),
+      # Background compiles (the seed) get as long as a rebuild.
+      rebuild_timeout_ms: Keyword.fetch!(opts, :rebuild_timeout_ms)
     }
 
     :ets.insert(table, {:config, config})
@@ -221,6 +271,8 @@ defmodule Operator.Core.Dyn.Keeper do
       rendered: false,
       stable: false,
       stable_timer: nil,
+      stable_due: false,
+      rebuilding: nil,
       proposals: 0,
       used: MapSet.new(),
       pending: nil,
@@ -256,12 +308,16 @@ defmodule Operator.Core.Dyn.Keeper do
       status: s.current_status,
       reverted: reverted,
       failed_launches: failed,
-      load_ms: div(us, 1000)
+      load_ms: div(us, 1000),
+      rebuilding: s.rebuilding != nil
     }
 
     Logger.info("[dyn] boot: #{inspect(report)}")
     {:reply, report, s}
   end
+
+  def handle_call(:reserve_proposal, _from, %{rebuilding: %{}} = s),
+    do: {:reply, {:error, :rebuilding}, s}
 
   def handle_call(:reserve_proposal, _from, s) do
     if s.proposals < s.opts.max_proposals and not atoms_near_limit?(),
@@ -278,6 +334,15 @@ defmodule Operator.Core.Dyn.Keeper do
       s = %{s | pending: gen.n, loaded: Map.put(Map.delete(s.loaded, s.pending), gen.n, mods)}
       broadcast(s, %{type: :candidate, gen: gen.n, rationale: gen.rationale})
       {:reply, :ok, s}
+    end
+  end
+
+  def handle_call({:install_seed, gen, mods}, _from, s) do
+    cond do
+      s.mode != :normal -> {:reply, {:error, :safe_mode}, s}
+      s.pending != nil -> {:reply, {:error, :proposal_pending}, s}
+      gen.parent != s.current -> {:reply, {:error, :stale}, s}
+      true -> install_seed(%{s | loaded: Map.put(s.loaded, gen.n, mods)}, gen)
     end
   end
 
@@ -310,9 +375,21 @@ defmodule Operator.Core.Dyn.Keeper do
         {:reply, :ok, s}
 
       n ->
-        ref = Process.monitor(pid)
-        {:reply, :ok, %{s | watched: Map.put(s.watched, ref, {pid, mod, n})}}
+        # One process mounting several screens of a generation is one watch:
+        # its exit is one crash.
+        if Enum.any?(s.watched, &match?({_, {^pid, _, ^n}}, &1)) do
+          {:reply, :ok, s}
+        else
+          ref = Process.monitor(pid)
+          {:reply, :ok, %{s | watched: Map.put(s.watched, ref, {pid, mod, n})}}
+        end
     end
+  end
+
+  def handle_call({:unwatch, pid}, _from, s) do
+    {mine, rest} = Enum.split_with(s.watched, &match?({_, {^pid, _, _}}, &1))
+    Enum.each(mine, fn {ref, _} -> Process.demonitor(ref, [:flush]) end)
+    {:reply, :ok, %{s | watched: Map.new(rest)}}
   end
 
   def handle_call({:subscribe, pid}, _from, s) do
@@ -320,6 +397,11 @@ defmodule Operator.Core.Dyn.Keeper do
       do: {:reply, :ok, s},
       else: {:reply, :ok, %{s | subscribers: Map.put(s.subscribers, pid, Process.monitor(pid))}}
   end
+
+  def handle_call(:await_rebuild, _from, %{rebuilding: nil} = s), do: {:reply, :ok, s}
+
+  def handle_call(:await_rebuild, from, %{rebuilding: r} = s),
+    do: {:noreply, %{s | rebuilding: %{r | waiters: [from | r.waiters]}}}
 
   def handle_call(:status, _from, s) do
     {:reply,
@@ -369,6 +451,14 @@ defmodule Operator.Core.Dyn.Keeper do
     end
   end
 
+  def handle_info({:rebuilt, ref, result}, %{rebuilding: %{ref: ref} = r} = s) do
+    :ets.delete(s.table, :rebuilding)
+    s = rebuilt(%{s | rebuilding: nil}, r.n, result)
+    Enum.each(r.waiters, &GenServer.reply(&1, :ok))
+    s = if s.stable_due, do: stable(%{s | stable_due: false}), else: s
+    {:noreply, remember_launch(s)}
+  end
+
   def handle_info(:gc, s), do: {:noreply, gc(%{s | gc_timer: nil})}
 
   def handle_info(_message, s), do: {:noreply, s}
@@ -398,6 +488,54 @@ defmodule Operator.Core.Dyn.Keeper do
     else
       {:error, _} = error -> {:reply, error, s}
     end
+  end
+
+  defp install_seed(s, gen) do
+    case flip(s, gen.n) do
+      :ok ->
+        now = Generation.now()
+
+        # The merged generation carries the current one's code: code still on
+        # probation stays on probation, the seed doesn't prove it.
+        gen =
+          if s.current_status == :probation,
+            do: %{gen | status: :probation, activated_at: now, quiet: false, restarted: false},
+            else: %{
+              gen
+              | status: :proven,
+                activated_at: now,
+                proven_at: now,
+                quiet: true,
+                restarted: true
+            }
+
+        persist(s, gen)
+
+        case Store.put_seed(s.dir, gen.n) do
+          :ok -> :ok
+          {:error, e} -> Logger.error("[dyn] can't record the seed generation: #{inspect(e)}")
+        end
+
+        # Staging follows what runs, with the agent's unproposed edits kept.
+        Store.reset_staging(s.dir, replay_staging(s.dir, gen))
+        s = s |> switch(gen) |> start_quiet()
+        broadcast(s, %{type: :activated, gen: gen.n, parent: gen.parent, seed: true})
+        {:reply, :ok, gc_soon(s)}
+
+      {:error, _} = error ->
+        {:reply, error, %{s | loaded: Map.delete(s.loaded, gen.n)}}
+    end
+  end
+
+  # The seed generation's sources plus what staging changed against its parent
+  # (writes and deletions).
+  defp replay_staging(dir, gen) do
+    base = Store.sources(dir, gen.parent)
+    staged = if Store.staging?(dir), do: Store.staged(dir), else: base
+    deleted = Map.keys(base) -- Map.keys(staged)
+    changed = Map.filter(staged, fn {path, src} -> Map.get(base, path) != src end)
+
+    dir |> Store.sources(gen.n) |> Map.drop(deleted) |> Map.merge(changed)
   end
 
   defp revert_to(s, n) do
@@ -553,23 +691,107 @@ defmodule Operator.Core.Dyn.Keeper do
   defp load_current(s, gen) do
     :ets.insert(s.table, {:mode, :normal})
 
-    case ensure_loaded(s, gen) do
-      {:ok, s, gen} ->
-        %{s | booted: gen.n, booted_on_probation: gen.status == :probation} |> switch(gen)
+    if Compiler.stale?(gen) and not Map.has_key?(s.loaded, gen.n) do
+      start_rebuild(s, gen)
+    else
+      case ensure_loaded(s, gen) do
+        {:ok, s, gen} ->
+          %{s | booted: gen.n, booted_on_probation: gen.status == :probation} |> switch(gen)
 
-      {:error, {:load_failed, reason}} ->
-        report(s, %{type: :load_failed, gen: gen.n, reason: reason})
-        :ets.insert(s.table, {:generation, gen.n, %{}})
+        {:error, {:load_failed, reason}} ->
+          load_failed(s, gen, reason)
+      end
+    end
+  end
 
-        if gen.status == :proven,
-          do: persist(s, %{gen | status: :probation, quiet: false, restarted: false}),
-          else: :ok
+  defp load_failed(s, gen, reason) do
+    report(s, %{type: :load_failed, gen: gen.n, reason: reason})
+    :ets.insert(s.table, {:generation, gen.n, %{}})
 
-        %{s | current_status: :probation}
+    if gen.status == :proven,
+      do: persist(s, %{gen | status: :probation, quiet: false, restarted: false}),
+      else: :ok
+
+    %{s | current_status: :probation}
+  end
+
+  # In a linked worker (the rebuild only touches the code server and reads
+  # the store); it never exits abnormally, so the link only takes it down
+  # with the Keeper. Nothing of the generation is registered meanwhile.
+  defp start_rebuild(s, gen) do
+    :ets.insert(s.table, [{:generation, gen.n, %{}}, {:rebuilding, gen.n}])
+    keeper = self()
+    ref = make_ref()
+    {root, opts} = {s.dir, Keyword.put(s.build, :compile_timeout_ms, s.opts.rebuild_timeout_ms)}
+
+    _ =
+      spawn_link(fn ->
+        result =
+          try do
+            Compiler.rebuild(root, gen, opts)
+          catch
+            kind, reason -> {:error, Exception.format(kind, reason, __STACKTRACE__)}
+          end
+
+        send(keeper, {:rebuilt, ref, result})
+      end)
+
+    %{s | rebuilding: %{n: gen.n, ref: ref, waiters: []}}
+  end
+
+  # The worker's result. Stored and registered only if generation `n` is
+  # still the one to run (a revert by hand may have moved on meanwhile).
+  defp rebuilt(%{mode: :normal, current: n} = s, n, {:ok, build, tests}) do
+    mods = Enum.map(build.modules, &elem(&1, 0))
+
+    with {:ok, gen} <- fetch(s, n),
+         {:ok, gen} <- Compiler.store_rebuild(s.dir, gen, build, tests) do
+      s =
+        %{
+          s
+          | loaded: Map.put(s.loaded, n, mods),
+            booted: n,
+            booted_on_probation: gen.status == :probation
+        }
+        |> switch(gen)
+        |> start_quiet()
+
+      broadcast(s, %{type: :loaded, gen: n})
+      s
+    else
+      {:error, reason} ->
+        Compiler.purge(mods)
+        rebuild_failed(s, n, if(is_binary(reason), do: reason, else: inspect(reason)))
+    end
+  end
+
+  defp rebuilt(%{mode: :normal, current: n} = s, n, {:error, reason}),
+    do: rebuild_failed(s, n, reason)
+
+  defp rebuilt(s, n, result) do
+    with {:ok, build, _tests} <- result, do: Compiler.purge(Enum.map(build.modules, &elem(&1, 0)))
+    Logger.info("[dyn] generation #{n}'s rebuild ended after it stopped being current")
+    s
+  end
+
+  defp rebuild_failed(s, n, reason) do
+    case fetch(s, n) do
+      {:ok, gen} ->
+        load_failed(s, gen, reason)
+
+      {:error, _} ->
+        _ = report(s, %{type: :load_failed, gen: n, reason: reason})
+        s
     end
   end
 
   defp stable(%{stable: true} = s), do: s
+
+  # Not before the rebuild is over (see the moduledoc).
+  defp stable(%{rebuilding: %{}} = s) do
+    if s.stable_timer, do: Process.cancel_timer(s.stable_timer)
+    %{s | stable_due: true, stable_timer: nil}
+  end
 
   defp stable(s) do
     if s.stable_timer, do: Process.cancel_timer(s.stable_timer)
@@ -736,6 +958,8 @@ defmodule Operator.Core.Dyn.Keeper do
   defp expect(false, error), do: {:error, error}
 
   # ── probation ──
+
+  defp start_quiet(%{rebuilding: %{n: n}, current: n} = s), do: s
 
   defp start_quiet(%{mode: :normal, current_status: :probation} = s) do
     ref = make_ref()

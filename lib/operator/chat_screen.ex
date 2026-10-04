@@ -61,6 +61,7 @@ defmodule Operator.ChatScreen do
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
   alias Operator.Links
+  alias Operator.Toggle
 
   @flush_ms 100
   @stick_ms 60
@@ -542,6 +543,9 @@ defmodule Operator.ChatScreen do
         {:noreply, lasting_toast(socket, text)}
     end
   end
+
+  # The toggle in the header's corner: to the front.
+  def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
 
   def handle_info({:tap, :diagnostics}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.HomeScreen)}
@@ -1129,6 +1133,7 @@ defmodule Operator.ChatScreen do
     line = "#{a.status}#{queued} · $#{cost} · #{tokens} tok · #{model}"
 
     bar_row(t, [
+      Toggle.button(),
       text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2),
       header_chip("new", :new_session, t),
       header_chip("model", :edit_model, t),

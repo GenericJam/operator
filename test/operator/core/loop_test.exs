@@ -85,8 +85,42 @@ defmodule Operator.Core.LoopTest do
            ] = second.messages
 
     assert text_of(tool) == "pong"
-    assert Enum.map(second.tools, & &1.name) |> Enum.sort() == ["crash", "echo", "notes", "slow"]
+
+    assert Enum.map(second.tools, & &1.name) |> Enum.sort() ==
+             ["crash", "echo", "notes", "picture", "slow"]
+
     assert second.max_tokens == 4096
+  end
+
+  test "a tool's image goes to the model and into the session, after its text",
+       %{tmp_dir: dir} do
+    script = [[{:tool_call, "c1", "picture", %{}}], [{:text, "I see it"}]]
+    %{loop: loop, llm: llm, session: session} = start_loop(dir, script)
+    :ok = Loop.prompt(loop, "look")
+    events = collect()
+
+    assert result_texts(events) == [{"picture", "a picture", false}]
+
+    [_, second] = FakeLLM.requests(llm)
+    %{role: :tool, content: [text, image]} = List.last(second.messages)
+    assert {text.type, text.text} == {:text, "a picture"}
+
+    assert {image.type, image.data, image.media_type} ==
+             {:image, <<137, 80, 78, 71>>, "image/png"}
+
+    # Persisted pi-style, and read back the same way (a resumed session).
+    {:ok, _session, entries} = Session.open(session.path, model())
+
+    assert [%{"message" => %{"content" => [_, part]}}] =
+             for(%{"message" => %{"role" => "toolResult"}} = e <- entries, do: e)
+
+    assert part == %{
+             "type" => "image",
+             "data" => Base.encode64(<<137, 80, 78, 71>>),
+             "mimeType" => "image/png"
+           }
+
+    assert [_, _, %{role: :tool, content: [_, %{type: :image}]}, _] = Session.messages(entries)
   end
 
   test "parallel tool calls: run together, results kept in call order", %{tmp_dir: dir} do

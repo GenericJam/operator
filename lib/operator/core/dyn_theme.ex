@@ -135,7 +135,7 @@ defmodule Operator.Core.DynTheme do
 
   @impl true
   def handle_info({:operator_dyn, %{type: type}}, s)
-      when type in [:activated, :reverted, :safe_mode],
+      when type in [:activated, :reverted, :safe_mode, :loaded],
       do: {:noreply, apply_theme(s)}
 
   def handle_info({:DOWN, ref, :process, pid, _}, s) do

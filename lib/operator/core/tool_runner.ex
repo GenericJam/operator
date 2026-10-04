@@ -10,6 +10,9 @@ defmodule Operator.Core.ToolRunner do
   kill of the task is turned into an error result by the loop. A Dyn
   tool's task is watched by `Operator.Core.Dyn.Keeper` before it runs, so
   its crash or timeout (the loop kills it) counts against its generation.
+
+  A tool may answer with an image for the model as well as text:
+  `{:ok, {:image, mime_type, bytes, text}}` (the front's screenshot).
   """
 
   alias Operator.Core.Dyn
@@ -36,7 +39,12 @@ defmodule Operator.Core.ToolRunner do
     end)
   end
 
-  @spec to_result(term()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec to_result(term()) ::
+          {:ok, String.t() | {:image, String.t(), binary(), String.t()}} | {:error, String.t()}
+  def to_result({:ok, {:image, mime, data, text} = image})
+      when is_binary(mime) and is_binary(data) and is_binary(text),
+      do: {:ok, image}
+
   def to_result({:ok, value}), do: {:ok, to_text(value)}
   def to_result({:error, value}), do: {:error, to_text(value)}
 

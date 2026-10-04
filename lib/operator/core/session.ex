@@ -32,6 +32,7 @@ defmodule Operator.Core.Session do
   """
 
   alias ReqLLM.Context
+  alias ReqLLM.Message.ContentPart
   alias ReqLLM.ToolCall
 
   require Logger
@@ -217,15 +218,26 @@ defmodule Operator.Core.Session do
     %{"type" => "message", "message" => message}
   end
 
-  @spec tool_result(String.t(), String.t(), String.t(), boolean()) :: entry()
-  def tool_result(call_id, name, text, is_error) do
+  @doc """
+  A tool's result. `image` (`{mime_type, bytes}`, a screenshot say) goes in
+  as pi's image content part, after the text, and on to the model.
+  """
+  @spec tool_result(String.t(), String.t(), String.t(), boolean(), {String.t(), binary()} | nil) ::
+          entry()
+  def tool_result(call_id, name, text, is_error, image \\ nil) do
+    images =
+      case image do
+        {mime, data} -> [%{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}]
+        nil -> []
+      end
+
     %{
       "type" => "message",
       "message" => %{
         "role" => "toolResult",
         "toolCallId" => call_id,
         "toolName" => name,
-        "content" => [text_part(text)],
+        "content" => [text_part(text) | images],
         "isError" => is_error,
         "timestamp" => now_ms()
       }
@@ -391,8 +403,19 @@ defmodule Operator.Core.Session do
       else: [Context.assistant(text, tool_calls: calls)]
   end
 
-  defp to_messages(%{"type" => "message", "message" => %{"role" => "toolResult"} = m}),
-    do: [Context.tool_result(m["toolCallId"], m["toolName"], text(m["content"]))]
+  defp to_messages(%{"type" => "message", "message" => %{"role" => "toolResult"} = m}) do
+    images =
+      for %{"type" => "image", "data" => data, "mimeType" => mime} <- List.wrap(m["content"]),
+          {:ok, bytes} <- [Base.decode64(data)],
+          do: ContentPart.image(bytes, mime)
+
+    content =
+      if images == [],
+        do: text(m["content"]),
+        else: [ContentPart.text(text(m["content"])) | images]
+
+    [Context.tool_result(m["toolCallId"], m["toolName"], content)]
+  end
 
   defp to_messages(%{"type" => "custom_message", "content" => content}) do
     case text(content) do

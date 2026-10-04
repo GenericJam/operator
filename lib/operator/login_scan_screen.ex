@@ -24,6 +24,7 @@ defmodule Operator.LoginScanScreen do
   alias Operator.Deliver
   alias Operator.Links
   alias Operator.LoginScanScreen.Native
+  alias Operator.Toggle
 
   def mount(params, _session, socket) do
     socket =
@@ -50,7 +51,7 @@ defmodule Operator.LoginScanScreen do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        <Text text="Scan a code from your Mac" text_size={:xl} text_color={:on_surface} />
+        {Toggle.title("Scan a code from your Mac")}
         <Spacer size={8} />
         <Text text={assigns.line} text_color={:primary} />
         <Spacer size={16} />
@@ -134,6 +135,7 @@ defmodule Operator.LoginScanScreen do
     do: handle_info({:tap, :scan}, Mob.Socket.assign(socket, phase: :scan, qr: nil, words: ""))
 
   def handle_info({:tap, :back}, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
+  def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 

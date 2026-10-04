@@ -31,7 +31,11 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.DynDelete,
     Operator.Core.Tools.DynReset,
     Operator.Core.Tools.DynPropose,
-    Operator.Core.Tools.DynStatus
+    Operator.Core.Tools.DynStatus,
+    # The front: its screens, which one shows, what it looks like.
+    Operator.Core.Tools.FrontScreens,
+    Operator.Core.Tools.FrontOpen,
+    Operator.Core.Tools.FrontScreenshot
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

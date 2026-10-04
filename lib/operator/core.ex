@@ -3,7 +3,8 @@ defmodule Operator.Core do
   The fixed core (docs/DESIGN.md §1): the agent loop, sessions, core tools.
   Started by `Operator.Boot`; supervises the approval store and
   `Operator.Core.Dyn.Keeper` (which Dyn generation runs; `Operator.Boot`
-  then loads it), the tool registry,
+  then loads it), `Operator.Core.Front` (the front: which Dyn screen shows
+  and the process it runs in), the tool registry,
   the task supervisor tools run under, the loops, `Operator.Core.Current`
   (which session the app is showing; the latest one is resumed at boot),
   `Operator.Handoff.Inbox` (the parts of a handoff scanned so far), and
@@ -19,6 +20,7 @@ defmodule Operator.Core do
   alias Operator.Core.Current
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
+  alias Operator.Core.Front
 
   @default_model "anthropic:claude-haiku-4-5"
 
@@ -32,6 +34,7 @@ defmodule Operator.Core do
       Operator.Core.Dyn.Keeper,
       # After the Keeper, whose events it follows.
       DynTheme,
+      Operator.Core.Front,
       Operator.Core.ToolRegistry,
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
@@ -82,7 +85,9 @@ defmodule Operator.Core do
     monospace terminal, so keep lines and tables short. Put anything the user is likely to copy \
     (commands, values, URLs, IDs, snippets) in a fenced code block: each block gets a Copy button.
 
-    """ <> Dyn.agent_guide() <> "\n" <> DynTheme.agent_guide()
+    """ <>
+      Dyn.agent_guide() <>
+      "\n" <> DynTheme.agent_guide() <> "\n" <> Front.agent_guide()
   end
 end
 

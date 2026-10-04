@@ -29,15 +29,24 @@ defmodule Operator.Core.Dyn.Compiler do
   alias Operator.Core.Dyn.Check
   alias Operator.Core.Dyn.Generation
   alias Operator.Core.Dyn.Keeper
+  alias Operator.Core.Dyn.Reuse
   alias Operator.Core.Dyn.Selftest
   alias Operator.Core.Dyn.Store
+  alias Operator.Core.Dyn.Trace
 
   require Logger
 
+  @typedoc """
+  A compiled generation: its binaries, how long the compile took, its
+  warnings, its compile dependencies (`Operator.Core.Dyn.Reuse`) and the
+  files reused from the parent rather than compiled.
+  """
   @type build :: %{
           modules: [{module(), binary()}],
           compile_ms: non_neg_integer(),
-          warnings: [String.t()]
+          warnings: [String.t()],
+          deps: Reuse.deps(),
+          reused: [String.t()]
         }
   @type failure :: {:check, [Check.violation()]} | {:compile, String.t()}
 
@@ -50,7 +59,10 @@ defmodule Operator.Core.Dyn.Compiler do
   Checks `sources` and compiles them into generation `n`. Options:
   `:keeper` (the Keeper screens report to), `:src_dir` (absolute dir the
   sources live in, for file names and diagnostics), `:compile_timeout_ms`,
-  `:compile_max_heap_mb`.
+  `:compile_max_heap_mb`, `:reuse` (`%{n: parent, deps: parent's deps,
+  beams: %{"Elixir.Operator.Dyn.G<parent>.X" => binary}, unchanged:
+  MapSet of files whose source is the parent's}`: compile incrementally,
+  `Operator.Core.Dyn.Reuse`).
   """
   @spec build(%{String.t() => String.t()}, pos_integer(), keyword()) ::
           {:ok, build()} | {:error, failure()}
@@ -115,20 +127,40 @@ defmodule Operator.Core.Dyn.Compiler do
   @doc """
   Loads generation `gen` from its stored binaries (checked against the
   manifest's hashes). Binaries built by another runtime (an app update
-  since) are rebuilt from the sources and selftested again before they
-  load; the manifest records the new hashes and test results, and a
-  proven generation goes back on probation (its code is new). Modules
-  already loaded with the same code are left alone.
+  since, `stale?/1`) are rebuilt from the sources and selftested again
+  before they load (`rebuild/3`, then `store_rebuild/4`). Modules already
+  loaded with the same code are left alone.
   """
   @spec load_generation(Path.t(), Generation.t(), keyword()) ::
           {:ok, [module()], Generation.t()} | {:error, String.t()}
   def load_generation(_root, %Generation{n: 0} = gen, _opts), do: {:ok, [], gen}
 
   def load_generation(root, %Generation{} = gen, opts) do
-    if gen.runtime == runtime(),
-      do: load_stored(root, gen),
-      else: rebuild(root, gen, opts)
+    if stale?(gen) do
+      with {:ok, build, tests} <- rebuild(root, gen, opts),
+           do: store_or_purge(root, gen, build, tests)
+    else
+      load_stored(root, gen)
+    end
   end
+
+  defp store_or_purge(root, gen, build, tests) do
+    mods = Enum.map(build.modules, &elem(&1, 0))
+
+    case store_rebuild(root, gen, build, tests) do
+      {:ok, gen} ->
+        {:ok, mods, gen}
+
+      {:error, _} = error ->
+        purge(mods)
+        error
+    end
+  end
+
+  @doc "Were `gen`'s stored binaries built by another runtime (`runtime/0`)?"
+  @spec stale?(Generation.t()) :: boolean()
+  def stale?(%Generation{n: 0}), do: false
+  def stale?(%Generation{runtime: runtime}), do: runtime != runtime()
 
   defp load_stored(root, gen) do
     beams = Store.beams(root, gen.n)
@@ -144,7 +176,16 @@ defmodule Operator.Core.Dyn.Compiler do
          do: {:ok, Enum.map(beams, &elem(&1, 0)), gen}
   end
 
-  defp rebuild(root, gen, opts) do
+  @doc """
+  Rebuilds generation `gen` from its stored sources for this runtime and
+  selftests it: its modules are loaded, nothing is stored (that's
+  `store_rebuild/4`), and a failure leaves none of them loaded. Touches
+  only the code server, so it can run outside the Keeper (it does at
+  launch: `Operator.Core.Dyn.Keeper`).
+  """
+  @spec rebuild(Path.t(), Generation.t(), keyword()) ::
+          {:ok, build(), [Generation.selftest()]} | {:error, String.t()}
+  def rebuild(root, gen, opts) do
     Logger.info(
       "[dyn] rebuilding generation #{gen.n} for #{runtime()} (built for #{gen.runtime})"
     )
@@ -152,28 +193,45 @@ defmodule Operator.Core.Dyn.Compiler do
     src_dir = Store.src_dir(root, gen.n)
 
     case build(Store.sources(root, gen.n), gen.n, Keyword.put(opts, :src_dir, src_dir)) do
-      {:ok, %{modules: beams}} ->
-        mods = Enum.map(beams, &elem(&1, 0))
-
-        case rebuilt(root, gen, beams, Selftest.run(mods, opts)) do
-          {:ok, gen} ->
-            {:ok, mods, gen}
-
-          {:error, _} = error ->
-            purge(mods)
-            error
-        end
+      {:ok, build} ->
+        selftested(gen, build, opts)
 
       {:error, {_stage, detail}} ->
         {:error, "rebuilding generation #{gen.n} failed: #{failure_text(detail)}"}
     end
   end
 
-  defp rebuilt(root, gen, beams, {:ok, tests}) do
+  defp selftested(gen, build, opts) do
+    mods = Enum.map(build.modules, &elem(&1, 0))
+
+    case Selftest.run(mods, opts) do
+      {:ok, tests} ->
+        {:ok, build, tests}
+
+      {:error, tests} ->
+        purge(mods)
+        failed = for %{ok: false} = t <- tests, do: "#{t.module}: #{t.detail}"
+
+        {:error,
+         "generation #{gen.n} failed its selftests after a rebuild for #{runtime()}: " <>
+           Enum.join(failed, "; ")}
+    end
+  end
+
+  @doc """
+  Stores `rebuild/3`'s binaries and selftest results for `gen`: the
+  manifest gets the new hashes and this runtime, and a proven generation
+  goes back on probation (its code is new). The caller unloads the modules
+  on an error.
+  """
+  @spec store_rebuild(Path.t(), Generation.t(), build(), [Generation.selftest()]) ::
+          {:ok, Generation.t()} | {:error, String.t()}
+  def store_rebuild(root, gen, %{modules: beams} = build, tests) do
     hashes = Map.new(beams, fn {mod, bin} -> {inspect(mod), sha256(bin)} end)
 
     if Enum.sort(Map.keys(hashes)) == Enum.sort(Enum.map(gen.modules, & &1.versioned)) do
       Store.put_beams(root, gen.n, beams)
+      Store.put_deps(root, gen.n, build.deps)
 
       gen = %{
         unprove(gen)
@@ -187,14 +245,6 @@ defmodule Operator.Core.Dyn.Compiler do
     else
       {:error, "rebuilding generation #{gen.n} produced different modules"}
     end
-  end
-
-  defp rebuilt(_root, gen, _beams, {:error, tests}) do
-    failed = for %{ok: false} = t <- tests, do: "#{t.module}: #{t.detail}"
-
-    {:error,
-     "generation #{gen.n} failed its selftests after a rebuild for #{runtime()}: " <>
-       Enum.join(failed, "; ")}
   end
 
   defp unprove(%Generation{status: :proven} = gen),
@@ -424,7 +474,7 @@ defmodule Operator.Core.Dyn.Compiler do
           include_shared_binaries: true
         })
 
-        send(parent, {ref, compile_files(files, n)})
+        send(parent, {ref, compile_files(files, n, Keyword.get(opts, :reuse))})
       end)
 
     receive do
@@ -448,39 +498,108 @@ defmodule Operator.Core.Dyn.Compiler do
     end
   end
 
-  defp compile_files(files, n) do
+  defp compile_files(files, n, reuse) do
+    :ok = Trace.install()
+    # Debug info is what a later generation reuses (Reuse.recompile/4); it's
+    # on by default, but a host's `mix test` turns it off.
+    :ok = Code.put_compiler_option(:debug_info, true)
+
     {us, {result, diagnostics}} =
-      :timer.tc(fn -> Code.with_diagnostics(fn -> rounds(files, [], n) end) end)
+      :timer.tc(fn -> Code.with_diagnostics(fn -> compile_all(files, n, reuse) end) end)
 
     {result, div(us, 1000), diagnostics}
   end
 
+  defp compile_all(files, n, nil) do
+    with {:ok, modules, deps} <- rounds(files, [], %{}, n), do: {:ok, modules, deps, []}
+  end
+
+  # Unchanged files the parent's deps allow (Reuse.plan/2) come from its
+  # binaries; the rest compile from source on top of them. A module both
+  # reused and compiled (one moved between files) means the plan was wrong:
+  # everything compiles from source.
+  defp compile_all(files, n, reuse) do
+    plan = Reuse.plan(reuse.deps, reuse.unchanged)
+    {reused, deps, rest} = Enum.reduce(files, {[], %{}, []}, &reuse_file(&1, &2, plan, reuse, n))
+
+    with {:ok, modules, deps} <- rounds(Enum.reverse(rest), reused, deps, n) do
+      if length(Enum.uniq_by(modules, &elem(&1, 0))) == length(modules) do
+        {:ok, modules, deps, Map.keys(deps) -- Enum.map(rest, &elem(&1, 0))}
+      else
+        purge(loaded(n))
+        compile_all(files, n, nil)
+      end
+    end
+  end
+
+  defp reuse_file({rel, file, _ast} = f, {reused, deps, rest}, plan, reuse, n) do
+    with true <- MapSet.member?(plan, rel),
+         %{"modules" => mods} = entry <- reuse.deps["files"][rel],
+         {:ok, beams} <- recompile_all(mods, reuse, n, file),
+         :ok <- load(beams) do
+      {reused ++ beams, Map.put(deps, rel, entry), rest}
+    else
+      _ -> {reused, deps, [f | rest]}
+    end
+  end
+
+  defp recompile_all(mods, reuse, n, file) do
+    Enum.reduce_while(mods, {:ok, []}, fn "Operator.Dyn." <> name, {:ok, acc} ->
+      with {:ok, bin} <- Map.fetch(reuse.beams, "Elixir.Operator.Dyn.G#{reuse.n}.#{name}"),
+           {:ok, mod, out} <- Reuse.recompile(bin, reuse.n, n, file) do
+        {:cont, {:ok, acc ++ [{mod, out}]}}
+      else
+        _ -> {:halt, :error}
+      end
+    end)
+  end
+
   # Files compile one by one; one that fails (say, it uses a struct another
   # file defines) is retried once the others are in, until a round makes no
-  # progress.
-  defp rounds(pending, done, n) do
+  # progress. Each file's compile-time needs are traced (Reuse).
+  defp rounds(pending, done, deps, n) do
+    prefix = "Elixir.Operator.Dyn.G#{n}."
+
     {ok, failed} =
-      Enum.reduce(pending, {[], []}, fn {_rel, file, ast} = f, {ok, failed} ->
+      Enum.reduce(pending, {[], []}, fn {rel, file, ast} = f, {ok, failed} ->
         try do
-          {[Code.compile_quoted(ast, file) | ok], failed}
+          {mods, trace} = Trace.collect(prefix, fn -> Code.compile_quoted(ast, file) end)
+          {[{rel, mods, trace} | ok], failed}
         catch
           kind, reason ->
-            keep = MapSet.new(done ++ List.flatten(ok), &elem(&1, 0))
+            keep = MapSet.new(done ++ Enum.flat_map(ok, &elem(&1, 1)), &elem(&1, 0))
             purge(Enum.reject(loaded(n), &MapSet.member?(keep, &1)))
             {ok, [{f, Exception.format_banner(kind, reason, __STACKTRACE__)} | failed]}
         end
       end)
 
-    done = done ++ (ok |> Enum.reverse() |> List.flatten())
+    ok = Enum.reverse(ok)
+    done = done ++ Enum.flat_map(ok, &elem(&1, 1))
+
+    deps =
+      Enum.reduce(ok, deps, fn {rel, mods, trace}, acc ->
+        Map.put(acc, rel, needs(mods, trace))
+      end)
 
     cond do
-      failed == [] -> {:ok, done}
+      failed == [] -> {:ok, done, deps}
       ok == [] -> {:error, Enum.reverse(failed)}
-      true -> rounds(failed |> Enum.reverse() |> Enum.map(&elem(&1, 0)), done, n)
+      true -> rounds(failed |> Enum.reverse() |> Enum.map(&elem(&1, 0)), done, deps, n)
     end
   end
 
-  defp finish({{:ok, modules}, ms, diagnostics}, _n, files) do
+  # Unknown (nil) unless the tracer saw every module the file compiled to.
+  defp needs(mods, trace) do
+    defined = MapSet.new(mods, &elem(&1, 0))
+
+    needs =
+      if MapSet.equal?(defined, trace.defined),
+        do: trace.needs |> Enum.map(&logical/1) |> Enum.sort()
+
+    %{"modules" => defined |> Enum.map(&logical/1) |> Enum.sort(), "needs" => needs}
+  end
+
+  defp finish({{:ok, modules, files_deps, reused}, ms, diagnostics}, n, files) do
     exported = Map.new(modules, fn {mod, _} -> {inspect(mod), mod} end)
 
     warnings =
@@ -489,7 +608,16 @@ defmodule Operator.Core.Dyn.Compiler do
           uniq: true,
           do: diagnostic(d, files)
 
-    {:ok, %{modules: modules, compile_ms: ms, warnings: warnings}}
+    refs = Map.new(modules, fn {mod, bin} -> {logical(mod), Reuse.refs(mod, bin, n)} end)
+
+    {:ok,
+     %{
+       modules: modules,
+       compile_ms: ms,
+       warnings: warnings,
+       deps: %{"files" => files_deps, "refs" => refs},
+       reused: Enum.sort(reused)
+     }}
   end
 
   defp finish({{:error, failed}, _ms, diagnostics}, n, files) do

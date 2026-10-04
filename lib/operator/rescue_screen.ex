@@ -17,6 +17,7 @@ defmodule Operator.RescueScreen do
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Generation
   alias Operator.Core.Term
+  alias Operator.Toggle
 
   @log_limit 30
 
@@ -33,7 +34,7 @@ defmodule Operator.RescueScreen do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        <Text text="Rescue" text_size={:xl} text_color={:on_surface} />
+        {Toggle.title("Rescue")}
         <Text text={status_line(assigns.status)} text_color={:primary} />
         {message(assigns.message)}
         <Spacer size={8} />
@@ -52,6 +53,7 @@ defmodule Operator.RescueScreen do
   end
 
   def handle_info({:tap, :back}, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
+  def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
 
   def handle_info({:tap, :chat}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.ChatScreen)}

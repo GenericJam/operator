@@ -14,6 +14,8 @@ defmodule Operator.Core.Dyn.Store do
       boot.json                launch markers: `boot_attempts` (launches since
                                the last one that reached stable) and `stable`
       log.jsonl                crash, revert and safe-mode reports
+      seed                     the generation the seed (the default front,
+                               `Operator.Core.Dyn.Seed`) was installed as
 
   Everything that decides what runs (`current`, manifests, `boot.json`) is
   written to a temp file and renamed over the old one, so a crash mid-write
@@ -44,6 +46,23 @@ defmodule Operator.Core.Dyn.Store do
   @spec put_current(Path.t(), non_neg_integer()) :: :ok | {:error, term()}
   def put_current(root, n) when is_integer(n) and n >= 0,
     do: write_atomic(Path.join(root, "current"), Integer.to_string(n))
+
+  # ── the seed ──
+
+  @doc "The generation the seed was installed as, or nil before it was."
+  @spec seed(Path.t()) :: pos_integer() | nil
+  def seed(root) do
+    with {:ok, text} <- File.read(Path.join(root, "seed")),
+         {n, ""} when n > 0 <- Integer.parse(String.trim(text)) do
+      n
+    else
+      _ -> nil
+    end
+  end
+
+  @spec put_seed(Path.t(), pos_integer()) :: :ok | {:error, term()}
+  def put_seed(root, n) when is_integer(n) and n > 0,
+    do: write_atomic(Path.join(root, "seed"), Integer.to_string(n))
 
   # ── generations ──
 
@@ -125,6 +144,27 @@ defmodule Operator.Core.Dyn.Store do
         {:ok, {mod, _}} <- [:beam_lib.chunks(bin, [])],
         do: {mod, bin}
   end
+
+  @doc """
+  Generation `n`'s compile dependencies (`Operator.Core.Dyn.Reuse`), or nil
+  if it has none recorded (built before they were, or unreadable): then
+  nothing of it is reused.
+  """
+  @spec deps(Path.t(), non_neg_integer()) :: map() | nil
+  def deps(_root, 0), do: nil
+
+  def deps(root, n) do
+    with {:ok, json} <- File.read(Path.join(gen_dir(root, n), "deps.json")),
+         {:ok, %{"files" => %{}, "refs" => %{}} = deps} <- Jason.decode(json) do
+      deps
+    else
+      _ -> nil
+    end
+  end
+
+  @spec put_deps(Path.t(), pos_integer(), map()) :: :ok
+  def put_deps(root, n, deps),
+    do: File.write!(Path.join(gen_dir(root, n), "deps.json"), Jason.encode!(deps))
 
   @spec put_diff(Path.t(), pos_integer(), String.t()) :: :ok
   def put_diff(root, n, text), do: File.write!(Path.join(gen_dir(root, n), "diff.patch"), text)

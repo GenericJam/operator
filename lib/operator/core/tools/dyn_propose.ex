@@ -97,6 +97,11 @@ defmodule Operator.Core.Tools.DynPropose do
       "Too many proposals in this app launch (each one uses memory only a restart frees). " <>
         "Ask the human to restart the app, then propose again."
 
+  defp refused(:rebuilding, _keeper),
+    do:
+      "Operator's Core was updated, so the current generation is being rebuilt for it " <>
+        "on the phone (about half a minute). Propose again once that's done."
+
   defp refused(:not_running, _keeper), do: "The Dyn layer isn't running."
 
   defp refused(%{stage: :check, violations: violations}, _keeper),

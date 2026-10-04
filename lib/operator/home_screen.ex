@@ -18,8 +18,10 @@ defmodule Operator.HomeScreen do
   alias Operator.Core.Budget
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Samples
+  alias Operator.Core.Front
   alias Operator.Core.Settings
   alias Operator.Deliver
+  alias Operator.Toggle
 
   def mount(params, _session, socket) do
     # The theme (terminal font token included) is installed once at boot by
@@ -41,7 +43,7 @@ defmodule Operator.HomeScreen do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        <Text text="Operator" text_size={:xl} text_color={:on_surface} />
+        {Toggle.title("Operator")}
         <Text text={stack_line()} text_size={:sm} text_color={:muted} />
         <Spacer size={16} />
         <Text text="Model sign-in" text_size={:sm} text_color={:muted} />
@@ -203,8 +205,13 @@ defmodule Operator.HomeScreen do
   def handle_info({:tap, :rescue}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.RescueScreen)}
 
-  def handle_info({:tap, {:open, mod}}, socket),
-    do: {:noreply, Mob.Socket.push_screen(socket, mod)}
+  # In the front, under the toggle, like every front screen.
+  def handle_info({:tap, {:open, name}}, socket) do
+    _ = Front.open(name)
+    {:noreply, Toggle.to_front(socket)}
+  end
+
+  def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
 
   def handle_info({:operator_dyn, _event}, socket), do: {:noreply, dyn(socket)}
 
@@ -265,11 +272,27 @@ defmodule Operator.HomeScreen do
     Mob.Socket.assign(socket, :spend_line, "Today $#{spent} of the $#{cap} daily cap")
   end
 
-  defp dyn_section([]), do: ~MOB(<Text text="No Dyn screens" text_color={:muted} />)
+  defp dyn_section([]), do: ~MOB(<Text text="No front screens" text_color={:muted} />)
 
+  # One tappable line per front screen (the default front alone has 67).
   defp dyn_section(screens) do
-    buttons = Enum.map(screens, fn {name, mod} -> button("Open " <> name, {:open, mod}) end)
-    %{type: :column, props: %{fill_width: true}, children: buttons}
+    rows =
+      for {name, _mod} <- screens do
+        %{
+          type: :text,
+          props: %{
+            text: "▸ " <> name,
+            text_size: :sm,
+            text_color: :primary,
+            padding: 6,
+            fill_width: true,
+            on_tap: {self(), {:open, name}}
+          },
+          children: []
+        }
+      end
+
+    %{type: :column, props: %{fill_width: true}, children: rows}
   end
 
   defp dyn(socket),

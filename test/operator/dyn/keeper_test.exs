@@ -425,39 +425,83 @@ defmodule Operator.Core.Dyn.KeeperTest do
     assert [%{type: "load_failed", gen: ^bad}] = Dyn.log()
   end
 
-  test "binaries rebuilt for a new app version are selftested before they load",
-       %{tmp_dir: dir} do
-    start_keeper(dir, probation_ms: 20)
-    # Dyn code may only name Dyn modules, so the flag is a plain atom.
-    flag = :operator_dyn_keeper_test_fail_selftest
-    on_exit(fn -> :persistent_term.erase(flag) end)
+  # A proven tool generation whose selftest reads two flags: sleep that
+  # long, and fail. Dyn code may only name Dyn modules, so they're atoms.
+  @slow :operator_dyn_keeper_test_slow_selftest
+  @fail :operator_dyn_keeper_test_fail_selftest
+
+  defp proven_for_rebuild!(dir, opts) do
+    on_exit(fn -> Enum.each([@slow, @fail], &:persistent_term.erase/1) end)
 
     selftest =
-      "if :persistent_term.get(#{inspect(flag)}, false), do: {:error, :broken}, else: :ok"
+      "(Process.sleep(:persistent_term.get(#{inspect(@slow)}, 0)); " <>
+        "if :persistent_term.get(#{inspect(@fail)}, false), do: {:error, :broken}, else: :ok)"
 
-    n =
-      prove!(dir, %{"weather.ex" => tool("Weather", "weather", selftest: selftest)},
-        probation_ms: 20
-      )
+    start_keeper(dir, opts)
+    prove!(dir, %{"weather.ex" => tool("Weather", "weather", selftest: selftest)}, opts)
+  end
 
-    built_for = fn runtime ->
-      {:ok, _} = Store.update_generation(dir, n, &%{&1 | runtime: runtime})
-    end
+  defp built_by_an_older_app(dir, n),
+    do: {:ok, _} = Store.update_generation(dir, n, &%{&1 | runtime: "an older app"})
 
-    # Rebuilt and passing: it loads, back on probation (its code is new).
-    built_for.("an older app")
-    assert %{generation: ^n, status: :probation} = relaunch(dir, stable: true, probation_ms: 20)
+  test "a generation built for an older Core is rebuilt and selftested in the background",
+       %{tmp_dir: dir} do
+    n = proven_for_rebuild!(dir, probation_ms: 20)
+    built_by_an_older_app(dir, n)
+    :persistent_term.put(@slow, 300)
+
+    # The launch doesn't wait: nothing of the generation runs yet, and
+    # proposals are refused until it does.
+    assert %{generation: ^n, rebuilding: true} = relaunch(dir, stable: true, probation_ms: 20)
+    :ok = Dyn.subscribe()
+    assert Dyn.rebuilding() == n
+    assert Dyn.tools() == []
+    :ok = Dyn.stage_put("other.ex", tool("Other", "other"))
+    assert {:error, :rebuilding} = Dyn.propose("while it rebuilds")
+
+    # Then it loads, back on probation (its code is new), for this runtime.
+    assert %{gen: ^n} = await_dyn(:loaded)
+    assert Dyn.rebuilding() == nil
     assert [{"weather", _}] = Dyn.tools()
     assert {:ok, %{status: :probation, runtime: runtime}} = Dyn.generation(n)
     assert runtime == Compiler.runtime()
+    assert {:ok, %{n: _}} = Dyn.propose("after it rebuilt")
+  end
 
-    # Rebuilt and failing: reported, not loaded, still on probation.
-    built_for.("an older app")
-    :persistent_term.put(flag, true)
-    assert %{generation: ^n, status: :probation} = relaunch(dir, stable: true, probation_ms: 20)
+  test "a rebuild that fails its selftests is reported and leaves the generation unloaded",
+       %{tmp_dir: dir} do
+    n = proven_for_rebuild!(dir, probation_ms: 20)
+    built_by_an_older_app(dir, n)
+    :persistent_term.put(@fail, true)
+
+    assert %{generation: ^n, rebuilding: true} = relaunch(dir, stable: true, probation_ms: 20)
+    :ok = Dyn.await_rebuild()
+    assert %{generation: ^n, status: :probation} = Dyn.status()
     assert Dyn.tools() == []
     assert Compiler.loaded(n) == []
     assert %{type: "load_failed", gen: ^n, reason: reason} = List.last(Dyn.log())
     assert reason =~ "failed its selftests after a rebuild"
+  end
+
+  test "a launch isn't stable before its rebuild is over, so one that dies during it counts",
+       %{tmp_dir: dir} do
+    n = proven_for_rebuild!(dir, probation_ms: 20)
+    built_by_an_older_app(dir, n)
+    :persistent_term.put(@slow, 1_000)
+
+    assert %{rebuilding: true} = relaunch(dir, stable: true, probation_ms: 20)
+    Keeper.first_render(Keeper, nil)
+    :ok = Keeper.mark_stable(Keeper)
+    assert %{boot_attempts: 1, stable: false} = Store.boot_markers(dir)
+
+    # It died mid-rebuild: the next launch counts it, and rebuilds again;
+    # stable comes once that rebuild is over.
+    :persistent_term.put(@slow, 0)
+    assert %{failed_launches: 1, rebuilding: true} = relaunch(dir, probation_ms: 20)
+    Keeper.first_render(Keeper, nil)
+    :ok = Dyn.await_rebuild()
+    _ = Dyn.status()
+    assert %{boot_attempts: 0, stable: true} = Store.boot_markers(dir)
+    assert [{"weather", _}] = Dyn.tools()
   end
 end

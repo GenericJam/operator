@@ -9,6 +9,122 @@ config :operator, ecto_repos: [Operator.Repo]
 # state persistence. Remove this line to disable screen state persistence.
 config :mob, :repo, Operator.Repo
 
+# The Mishka tags front screens write in `~MOB` (mob_mishka's composites and
+# their slot tags, as `mix mob.new` lists them). Front screens compile on the
+# phone (Operator.Core.Dyn), where the sigil can't read the plugin's manifest,
+# and the manifest has no slot tags: without this list every one warns.
+config :mob, :extra_tags, ~w(
+  MishkaAccordion
+  MishkaAccordionItem
+  MishkaActionIcon
+  MishkaAlertDialog
+  MishkaAlertDialogAction
+  MishkaAlphaSlider
+  MishkaAnchor
+  MishkaAngleSlider
+  MishkaAutocomplete
+  MishkaAvatar
+  MishkaBurger
+  MishkaCheckbox
+  MishkaCheckboxGroup
+  MishkaCheckboxGroupItem
+  MishkaChip
+  MishkaCloseButton
+  MishkaCode
+  MishkaCollapsible
+  MishkaColorInput
+  MishkaColorPicker
+  MishkaColorSwatch
+  MishkaCombobox
+  MishkaContextMenu
+  MishkaDialog
+  MishkaDialogDescription
+  MishkaDialogFooter
+  MishkaDialogTitle
+  MishkaDialogTrigger
+  MishkaDrawer
+  MishkaDrawerFooter
+  MishkaDrawerTrigger
+  MishkaEmptyState
+  MishkaEmptyStateActions
+  MishkaEmptyStateIndicator
+  MishkaField
+  MishkaFieldset
+  MishkaFloatingIndicator
+  MishkaFloatingWindow
+  MishkaFloatingWindowHandle
+  MishkaHighlight
+  MishkaHueSlider
+  MishkaJsonInput
+  MishkaLoadingOverlay
+  MishkaMark
+  MishkaMarquee
+  MishkaMaskInput
+  MishkaMenu
+  MishkaMenuCheckbox
+  MishkaMenuItem
+  MishkaMenuLabel
+  MishkaMenuRadio
+  MishkaMenuSeparator
+  MishkaMenuSubmenu
+  MishkaMenubar
+  MishkaMeter
+  MishkaNavLink
+  MishkaNavigationMenu
+  MishkaNumberField
+  MishkaNumberFormatter
+  MishkaOtpField
+  MishkaOverflowList
+  MishkaPill
+  MishkaPillsInput
+  MishkaPopover
+  MishkaPopoverArrow
+  MishkaPopoverClose
+  MishkaPopoverDescription
+  MishkaPopoverTitle
+  MishkaPopoverTrigger
+  MishkaPreviewCard
+  MishkaPreviewCardTrigger
+  MishkaProgress
+  MishkaRadio
+  MishkaRadioGroup
+  MishkaRadioGroupOption
+  MishkaRollingNumber
+  MishkaScrollArea
+  MishkaScroller
+  MishkaSegmentedControl
+  MishkaSegmentedControlOption
+  MishkaSelect
+  MishkaSelectOption
+  MishkaSemiCircleProgress
+  MishkaSeparator
+  MishkaSkeleton
+  MishkaSlider
+  MishkaSplitter
+  MishkaSpoiler
+  MishkaSwitch
+  MishkaTab
+  MishkaTabs
+  MishkaTagsInput
+  MishkaThemeIcon
+  MishkaToast
+  MishkaToastClose
+  MishkaToastItem
+  MishkaToggle
+  MishkaToggleGroup
+  MishkaToggleGroupItem
+  MishkaToolbar
+  MishkaToolbarButton
+  MishkaToolbarInput
+  MishkaToolbarLink
+  MishkaToolbarSeparator
+  MishkaTooltip
+  MishkaTree
+  MishkaTreeNode
+  MishkaTreeSelect
+  MishkaVisuallyHidden
+)
+
 # llm_db reads priv/llm_db/snapshot.json at runtime by default, but mob_dev
 # ships deps' ebins without their priv/, and Application.app_dir/2 does not
 # resolve on device. Operator.LLMCatalog embeds an Anthropic + OpenAI trim of

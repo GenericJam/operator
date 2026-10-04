@@ -10,7 +10,9 @@ defmodule Operator.Core.Dyn.Registry do
 
   The whole mapping is one row, `{:generation, n, entries}`, so a switch
   of generations is a single insert: a reader sees the old set or the new
-  one, never a mix. Other rows: `{:mode, :booting | :normal | :safe}` and
+  one, never a mix. Other rows: `{:mode, :booting | :normal | :safe}`,
+  `{:rebuilding, n}` while the launch rebuilds generation `n` for a new
+  Core in the background (its entries are empty until it loads), and
   `{:config, map}` (the Keeper's data dir and options, for
   `Operator.Core.Dyn`).
 
@@ -49,6 +51,15 @@ defmodule Operator.Core.Dyn.Registry do
     case read(table, :mode) do
       [{:mode, mode}] -> mode
       [] -> :off
+    end
+  end
+
+  @doc "The generation this launch is rebuilding for a new Core, or nil."
+  @spec rebuilding(atom()) :: pos_integer() | nil
+  def rebuilding(table) do
+    case read(table, :rebuilding) do
+      [{:rebuilding, n}] -> n
+      [] -> nil
     end
   end
 

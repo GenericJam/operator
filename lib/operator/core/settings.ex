@@ -12,6 +12,9 @@ defmodule Operator.Core.Settings do
     * `deliver_endpoint`: the Mac's update server, where mob_deliver
       fetches Operator's code updates (`Operator.Deliver`); none by
       default. Set by scanning `mix operator.deliver.qr`.
+    * `front_stack`: the front screens open when the app last ran
+      (`Operator.Core.Front`), the top one first, by their Dyn names
+      (`"Showcase.GalleryScreen"`); none by default.
   """
 
   @file_name "settings.json"
@@ -58,6 +61,18 @@ defmodule Operator.Core.Settings do
   @spec put_deliver_endpoint(String.t(), String.t()) :: :ok
   def put_deliver_endpoint(endpoint, dir \\ Operator.Paths.data_dir()) when is_binary(endpoint),
     do: write(dir, Map.put(read(dir), "deliver_endpoint", endpoint))
+
+  @spec front_stack(String.t()) :: [String.t()]
+  def front_stack(dir \\ Operator.Paths.data_dir()) do
+    case read(dir) do
+      %{"front_stack" => names} when is_list(names) -> Enum.filter(names, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  @spec put_front_stack([String.t()], String.t()) :: :ok
+  def put_front_stack(names, dir \\ Operator.Paths.data_dir()) when is_list(names),
+    do: write(dir, Map.put(read(dir), "front_stack", names))
 
   defp read(dir) do
     with {:ok, json} <- File.read(Path.join(dir, @file_name)),
