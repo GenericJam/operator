@@ -427,6 +427,8 @@ defmodule Operator.ChatScreenTest do
   describe "dictation" do
     # The screen hands MobSpeech the engine from config; MobSpeech's scripted
     # Fake engine stands in for Whisper, through MobSpeech's real session.
+    # The mic is a plain box: its on_press_in / on_press_out arrive as
+    # {:press_in, :mic} / {:press_out, :mic}.
     defp dictate(view, script, on_stop) do
       Application.put_env(
         :operator,
@@ -435,7 +437,13 @@ defmodule Operator.ChatScreenTest do
       )
 
       on_exit(fn -> Application.delete_env(:operator, :dictation_engine) end)
-      view |> render_info({:dictation, "press", %{}}) |> speech(:listening)
+      view |> render_info({:press_in, :mic}) |> speech(:listening)
+    end
+
+    # Lift the finger after a real hold (the screen cancels anything under 300 ms).
+    defp release(view) do
+      Process.sleep(310)
+      render_info(view, {:press_out, :mic})
     end
 
     # Feed the session's {:speech, ...} events to the screen until `until`
@@ -463,7 +471,7 @@ defmodule Operator.ChatScreenTest do
 
       assert assigns(view).dictation == :listening
 
-      view = view |> render_info({:dictation, "release", %{}}) |> speech(:processing)
+      view = view |> release() |> speech(:processing)
       assert assigns(view).dictation == :processing
 
       view = speech(view, :idle)
@@ -477,7 +485,7 @@ defmodule Operator.ChatScreenTest do
         view
         |> render_info({:change, :draft, "fix the flaky test please, then"})
         |> dictate([:listening], [{:final, "commit"}])
-        |> render_info({:dictation, "release", %{}})
+        |> release()
         |> speech(:idle)
 
       assert assigns(view).draft == "fix the flaky test please, then commit"
@@ -492,7 +500,7 @@ defmodule Operator.ChatScreenTest do
         view
         |> render_info({:change, :draft, "keep me"})
         |> dictate([:listening], [{:final, "never"}])
-        |> render_info({:dictation, "cancel", %{}})
+        |> render_info({:press_out, :mic})
         |> speech(:idle)
 
       assert text(view) =~ "Hold mic while you talk"
@@ -501,16 +509,23 @@ defmodule Operator.ChatScreenTest do
       view =
         view
         |> dictate([:listening], [{:error, :no_speech}])
-        |> render_info({:dictation, "release", %{}})
+        |> release()
         |> speech(:idle)
 
       assert text(view) =~ "Didn't catch that"
       assert assigns(view).draft == "keep me"
     end
 
+    test "a press_out without its press_in is ignored", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      view = render_info(view, {:press_out, :mic})
+      assert assigns(view).dictation == :idle
+      refute text(view) =~ "Hold mic while you talk"
+    end
+
     test "no microphone permission: asks the OS, then says what to do", %{tmp_dir: dir} do
       %{view: view} = mount_chat(dir, [])
-      view = render_info(view, {:dictation, "needs_permission", %{}})
+      view = render_info(view, {:speech, :error, :permission})
       assert_received {:requested_permission, :microphone}
       assert text(view) =~ "hold mic and talk"
     end

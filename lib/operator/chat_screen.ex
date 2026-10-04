@@ -20,10 +20,11 @@ defmodule Operator.ChatScreen do
   fence copies that block; "copy last reply" copies the last assistant
   message. The `md:` chip switches the renderer (`Term.put_renderer/1`).
 
-  On Android the composer has a mic (`Operator.Core.DictationButton`):
-  hold it and talk; on release the phone transcribes it offline (`MobSpeech`
-  with the `MobWhisper` engine; the chip shows "…" meanwhile) and the text
-  lands in the draft (after what was already typed) to edit and send. `[voice:…]` cycles what the agent says
+  On Android the composer has a mic: hold it and talk (`on_press_in` /
+  `on_press_out` on a plain box); on release the phone transcribes it offline
+  (`MobSpeech` with the `MobWhisper` engine; the mic shows "…" meanwhile) and
+  the text lands in the draft (after what was already typed) to edit and send.
+  Let go within 300 ms and it cancels with a hint. `[voice:…]` cycles what the agent says
   aloud (`Operator.Core.Settings.voice/0`). The first send asks for the
   notification permission (the background-run notification needs it on
   Android 13+).
@@ -49,7 +50,6 @@ defmodule Operator.ChatScreen do
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
-  alias Operator.Core.DictationButton
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
   alias Operator.Core.Loop
@@ -73,6 +73,8 @@ defmodule Operator.ChatScreen do
   @max_native 200
   @proposal_diff_lines 200
   @list_id "transcript"
+  # A shorter hold of the mic is a tap: too short to have said anything.
+  @min_hold_ms 300
 
   def mount(params, _session, socket) do
     loop = Map.get(params, :loop) || Operator.Core.current()
@@ -95,6 +97,7 @@ defmodule Operator.ChatScreen do
        voice: Settings.voice(settings_dir),
        dictation_base: nil,
        dictation: :idle,
+       mic_down_at: nil,
        notifications_asked: false,
        proposal: pending_proposal(),
        activated: nil,
@@ -191,28 +194,33 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
-  # ── dictation (Operator.Core.DictationButton → MobSpeech, whisper engine) ──
+  # ── dictation (the mic's press in/out → MobSpeech, whisper engine) ──
 
-  def handle_info({:dictation, "press", _}, socket) do
+  def handle_info({:press_in, :mic}, socket) do
     {engine, opts} = dictation_engine()
     socket = MobSpeech.listen(socket, [engine: engine] ++ opts)
-    {:noreply, Mob.Socket.assign(socket, :dictation, :listening)}
+
+    {:noreply,
+     Mob.Socket.assign(socket,
+       dictation: :listening,
+       mic_down_at: System.monotonic_time(:millisecond)
+     )}
   end
 
-  def handle_info({:dictation, "release", _}, socket),
-    do: {:noreply, MobSpeech.stop(socket)}
+  # Let go too soon to have said anything: cancel, and say how it works.
+  def handle_info({:press_out, :mic}, %{assigns: %{mic_down_at: down_at}} = socket)
+      when is_integer(down_at) do
+    socket = Mob.Socket.assign(socket, :mic_down_at, nil)
 
-  def handle_info({:dictation, "cancel", _}, socket) do
-    socket = socket |> MobSpeech.cancel() |> toast("Hold mic while you talk; let go to stop")
-    {:noreply, socket}
+    if System.monotonic_time(:millisecond) - down_at < @min_hold_ms do
+      socket = socket |> MobSpeech.cancel() |> toast("Hold mic while you talk; let go to stop")
+      {:noreply, socket}
+    else
+      {:noreply, MobSpeech.stop(socket)}
+    end
   end
 
-  def handle_info({:dictation, "needs_permission", _}, socket) do
-    Native.impl().request_permission(:microphone)
-    {:noreply, toast(socket, "Allow the microphone, then hold mic and talk")}
-  end
-
-  def handle_info({:dictation, _event, _payload}, socket), do: {:noreply, socket}
+  def handle_info({:press_out, :mic}, socket), do: {:noreply, socket}
 
   def handle_info({:speech, :state, :listening}, socket) do
     {:noreply,
@@ -233,6 +241,12 @@ defmodule Operator.ChatScreen do
   # Dictation never sends: the text waits in the draft to be edited.
   def handle_info({:speech, :final, text}, socket),
     do: {:noreply, Mob.Socket.assign(socket, :draft, append(dictation_base(socket), text))}
+
+  # No RECORD_AUDIO: ask the OS, then say what to do once it's allowed.
+  def handle_info({:speech, :error, :permission}, socket) do
+    Native.impl().request_permission(:microphone)
+    {:noreply, toast(socket, "Allow the microphone, then hold mic and talk")}
+  end
 
   def handle_info({:speech, :error, reason}, socket),
     do: {:noreply, toast(socket, dictation_error(reason))}
@@ -932,9 +946,6 @@ defmodule Operator.ChatScreen do
   defp dictation_error(:language), do: "The speech model only understands English"
   defp dictation_error(:busy), do: "Still transcribing the last one: try again"
 
-  defp dictation_error(:permission),
-    do: "No microphone access: allow it in Settings to dictate"
-
   defp dictation_error(:audio), do: "The microphone stopped (headset change?): try again"
   defp dictation_error(reason), do: "Dictation failed (#{inspect(reason)})"
 
@@ -1254,25 +1265,43 @@ defmodule Operator.ChatScreen do
           weight: 1,
           on_submit: {self(), :draft}
         )
-      ] ++ mic(a.dictation, t) ++ [chip(send_label, :send, t, "user")] ++ stop
+      ] ++ mic(a, t) ++ [chip(send_label, :send, t, "user")] ++ stop
     )
   end
 
-  # Speech to text; only Android has the native view so far. `phase` shows
-  # "…" on the chip while Whisper transcribes (it has no partial results).
-  defp mic(phase, t) do
+  # Hold to talk: a plain box observing the finger (on_press_in / on_press_out,
+  # always paired). "● rec" from the touch, "…" while Whisper transcribes (it
+  # has no partial results). Android only: the whisper engine is Android-only
+  # so far.
+  defp mic(a, t) do
     if Term.platform() == :android do
+      label =
+        cond do
+          a.mic_down_at != nil or a.dictation == :listening -> "● rec"
+          a.dictation == :processing -> "…"
+          true -> "mic"
+        end
+
       [
-        Mob.UI.native_view(DictationButton,
-          id: :dictation,
-          notify: self(),
-          phase: Atom.to_string(phase),
-          text_color: Term.color(t, "fg"),
-          active_color: Term.color(t, "error"),
-          background: Term.color(t, "code_bg"),
-          text_size: t.text_size - 1,
-          font: Term.markdown_props(t).font_regular
-        )
+        %{
+          type: :box,
+          props: %{
+            id: "mic",
+            on_press_in: {self(), :mic},
+            on_press_out: {self(), :mic},
+            accessibility_label: "Hold to dictate",
+            accessibility_role: "button",
+            background: Term.color(t, "code_bg"),
+            padding: 10,
+            # A box fills the row by default; the mic is as wide as its label.
+            fill_width: false
+          },
+          children: [
+            text(label, t, if(label == "mic", do: "fg", else: "error"),
+              text_size: t.text_size - 1
+            )
+          ]
+        }
       ]
     else
       []

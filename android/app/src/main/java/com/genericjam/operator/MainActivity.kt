@@ -220,7 +220,6 @@ class MainActivity : ComponentActivity() {
 
         // Operator's native views (Mob.UI.native_view components).
         OperatorMarkdown.register()
-        OperatorDictation.register()
         OperatorApproval.register()
 
         // Forward launcher-supplied env vars into the BEAM process. Set BEFORE

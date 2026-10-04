@@ -77,6 +77,14 @@ Java_com_genericjam_operator_MobBridge_nativeSendTap(JNIEnv* env, jclass cls, ji
     mob_send_tap((int)handle);
 }
 
+// Called from MobBridge.nativeSendPressTap(handle): the tap of a node that also
+// declares on_press_in / on_press_out (MOB-380). Identity-tolerant, because the
+// press re-renders the node before the finger lifts; plain taps stay strict.
+JNIEXPORT void JNICALL
+Java_com_genericjam_operator_MobBridge_nativeSendPressTap(JNIEnv* env, jclass cls, jint handle) {
+    mob_send_press_tap((int)handle);
+}
+
 // Called from MobBridge.nativeSendLongPress(handle) / nativeSendDoubleTap.
 // The senders have existed on this platform all along; what was missing was any
 // Kotlin path to them, so `on_long_press` and `on_double_tap` were registered by
@@ -89,6 +97,20 @@ Java_com_genericjam_operator_MobBridge_nativeSendLongPress(JNIEnv* env, jclass c
 JNIEXPORT void JNICALL
 Java_com_genericjam_operator_MobBridge_nativeSendDoubleTap(JNIEnv* env, jclass cls, jint handle) {
     mob_send_double_tap((int)handle);
+}
+
+// on_press_in / on_press_out (MOB-380). Begin snapshots press_out's routing at
+// touch-down and sends {:press_in, tag}; it returns the token End delivers
+// {:press_out, tag} from, or -1 when there is no press_out to deliver.
+JNIEXPORT jint JNICALL
+Java_com_genericjam_operator_MobBridge_nativePressBegin(JNIEnv* env, jclass cls, jint in_handle,
+                                                   jint out_handle) {
+    return (jint)mob_press_begin((int)in_handle, (int)out_handle);
+}
+
+JNIEXPORT void JNICALL
+Java_com_genericjam_operator_MobBridge_nativePressEnd(JNIEnv* env, jclass cls, jint token) {
+    mob_press_end((int)token);
 }
 
 // Swipe. nativeSendSwipe carries the direction string through to
