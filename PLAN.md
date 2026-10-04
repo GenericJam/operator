@@ -269,8 +269,9 @@ message.
    operator.handoff` shows it as `operator://` QR codes; scanned with the
    camera, any QR app or Diagnostics → Scan QR, in any order, they open
    Operator, and the last one starts a new session that opens with the
-   handoff (`Operator.Handoff`, `Operator.Links`; on Android the link rides
-   mob's notification channel, mob having no deep-link API). Built and
+   handoff (`Operator.Handoff`, `Operator.Links`; links arrive as mob's
+   `{:link, ...}` since mob 0.9.11, MOB-379; `url_schemes` in mob.exs declares
+   the scheme). Built and
    host-tested; not yet tried on a device. Files over adb
    (`scripts/session.sh pull|push`, verified both ways) stay for debugging
    only; the Muster relay is dropped.

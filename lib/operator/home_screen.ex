@@ -94,7 +94,7 @@ defmodule Operator.HomeScreen do
   def handle_info({:tap, :scan_qr}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen)}
 
-  def handle_info({:notification, %{data: %{operator_link: link}}}, socket) when is_binary(link),
+  def handle_info({:link, %{url: link}}, socket) when is_binary(link),
     do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen, %{link: link})}
 
   # The first sign-in (a scanned QR, say) goes on to the chat.

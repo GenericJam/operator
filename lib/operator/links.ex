@@ -11,10 +11,12 @@ defmodule Operator.Links do
     * `operator://deliver?endpoint=…&key=…`: the Mac's update server, from
       `mix operator.deliver.qr` (`Operator.Deliver`).
 
-  On Android, `MainActivity` hands a link it is opened with to mob as a
-  notification tap (mob has no deep-link API), so it reaches the screen
-  showing as `{:notification, %{data: %{operator_link: link}}}`; that
-  screen passes it to `handle/1`.
+  A link the app is opened with (Android `MainActivity`, iOS `SceneDelegate`;
+  the `operator` scheme is declared by `url_schemes` in `mob.exs`) reaches
+  the screen showing as mob's `{:link, %{url: link}}` (`Mob.Link`), held
+  until the root screen has mounted on a cold launch; that screen passes it
+  to `handle/1`. Any app can open one, so `handle/1` checks it like any other
+  input.
   """
 
   alias Operator.Auth.Transfer

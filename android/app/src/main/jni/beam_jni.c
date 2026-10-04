@@ -330,6 +330,13 @@ Java_com_genericjam_operator_MobBridge_nativeDeliverNotification(JNIEnv* env, jc
 }
 
 JNIEXPORT void JNICALL
+Java_com_genericjam_operator_MobBridge_nativeDeliverLink(JNIEnv* env, jclass cls, jstring url) {
+    const char* cu = (*env)->GetStringUTFChars(env, url, NULL);
+    mob_deliver_link(cu);
+    (*env)->ReleaseStringUTFChars(env, url, cu);
+}
+
+JNIEXPORT void JNICALL
 Java_com_genericjam_operator_MobBridge_nativeDeliverWebViewMessage(JNIEnv* env, jclass cls,
     jlong pid, jstring json) {
     const char* cj = (*env)->GetStringUTFChars(env, json, NULL);

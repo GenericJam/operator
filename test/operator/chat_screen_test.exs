@@ -793,21 +793,8 @@ defmodule Operator.ChatScreenTest do
   end
 
   describe "operator:// links" do
-    # The envelope MainActivity hands mob for a link it was opened with,
-    # as mob delivers it.
-    defp link_tap(link) do
-      {:ok, notification} =
-        Mob.Notification.decode(
-          Jason.encode!(%{
-            "presentation" => "tap",
-            "source" => "local",
-            "id" => "operator-link",
-            "data" => %{"operator_link" => link}
-          })
-        )
-
-      {:notification, notification}
-    end
+    # What mob delivers for a link the app was opened with (Mob.Link).
+    defp opened(link), do: {:link, %{url: link, source: :running}}
 
     test "a handoff's last part opens a new session with it as the first message; " <>
            "the model sees it with the next prompt, not before",
@@ -822,11 +809,11 @@ defmodule Operator.ChatScreenTest do
       view = mount_screen(ChatScreen, %{settings_dir: dir})
       shown = assigns(view).sid
 
-      view = render_info(view, link_tap(first))
+      view = render_info(view, opened(first))
       assert text(view) =~ "Handoff 1 of #{length(links)} received: scan the rest"
       assert assigns(view).sid == shown
 
-      view = Enum.reduce(rest, view, &render_info(&2, link_tap(&1)))
+      view = Enum.reduce(rest, view, &render_info(&2, opened(&1)))
       loop = assigns(view).loop
       assert assigns(view).sid != shown
       assert Operator.Core.current() == loop
@@ -846,7 +833,7 @@ defmodule Operator.ChatScreenTest do
       {link, _words} = Transfer.seal(:anthropic, %{"type" => "oauth", "refresh" => "r"})
 
       %{view: view} = mount_chat(dir, [])
-      view = render_info(view, link_tap(link))
+      view = render_info(view, opened(link))
       assert {:push, Operator.LoginScanScreen, %{link: ^link}} = view.socket.__mob__.nav_action
 
       %{loop: loop} = start_loop(dir, [])
@@ -858,7 +845,7 @@ defmodule Operator.ChatScreenTest do
 
     test "a QR that isn't Operator's is said plainly", %{tmp_dir: dir} do
       %{view: view} = mount_chat(dir, [])
-      view = render_info(view, link_tap("operator://elsewhere?x=1"))
+      view = render_info(view, opened("operator://elsewhere?x=1"))
       assert text(view) =~ "That QR isn't an Operator code."
     end
   end

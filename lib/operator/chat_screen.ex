@@ -479,11 +479,10 @@ defmodule Operator.ChatScreen do
 
   # ── operator:// links (Operator.Links) ──
 
-  # Scanned with another app, a link arrives as a notification tap
-  # (MainActivity; mob has no deep-link API); Diagnostics forwards its own
-  # through `mount/3`. The scan happens with that app in front, so the
-  # toasts last.
-  def handle_info({:notification, %{data: %{operator_link: link}}}, socket) when is_binary(link),
+  # Scanned with another app, a link arrives as mob's {:link, ...}
+  # (Mob.Link); Diagnostics forwards its own through `mount/3`. The scan
+  # happens with that app in front, so the toasts last.
+  def handle_info({:link, %{url: link}}, socket) when is_binary(link),
     do: handle_info({:operator_link, link}, socket)
 
   def handle_info({:operator_link, link}, socket) do

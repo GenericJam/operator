@@ -242,11 +242,11 @@ class MainActivity : ComponentActivity() {
             Log.i(TAG, "onCreate: MOB_DIST_PORT=$port")
         }
 
-        // A notification tap or an operator:// link that launched this
-        // activity. Not when it is re-created from saved state or relaunched
-        // from Recents: both replay the original intent, which would deliver
-        // the same tap again now that mob delivers to a running BEAM instead
-        // of holding it for the next boot.
+        // A notification tap or operator:// link that launched this activity.
+        // Not when it is re-created from saved state or relaunched from
+        // Recents: both replay the original intent, which would deliver the
+        // same tap or link again now that mob delivers to a running BEAM
+        // instead of holding it for the next boot.
         if (savedInstanceState == null &&
             (intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
         ) {
@@ -429,23 +429,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // An operator:// link (a QR from mix operator.handoff or operator.login,
-    // scanned with any app; Operator.Links). mob has no deep-link API, so the
-    // link rides the notification channel: a tap envelope with the link in
-    // its data, delivered as {:notification, %{data: %{operator_link: uri}}}
-    // to the screen showing (pid 0: never to a mob_notify registration), and
-    // held until the root screen has mounted on a cold launch.
+    // Hands an operator:// link (a QR from mix operator.handoff,
+    // operator.login or mob_deliver, scanned with any app; Operator.Links) to
+    // mob, which delivers it as {:link, %{url: url, source: ...}} once: on a
+    // cold launch it holds the URL until the root screen has mounted. content:
+    // and file: URIs are documents shared into the app, not links. Any app can
+    // send a VIEW intent, so the URL is untrusted input for Operator.Links.
+    // Ported from mob_new 0.6.4's MainActivity (MOB-379).
     private fun deliverLink(intent: android.content.Intent?) {
         if (intent?.action != android.content.Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
-        if (uri.scheme != "operator") return
-        val json = org.json.JSONObject()
-            .put("presentation", "tap")
-            .put("source", "local")
-            .put("id", "operator-link")
-            .put("data", org.json.JSONObject().put("operator_link", uri.toString()))
-            .toString()
-        MobBridge.nativeDeliverNotification(0L, json)
+        // Schemes are case-insensitive, and an intent addressed straight to this
+        // exported activity skips the intent-filter's matching.
+        val scheme = uri.scheme
+        if ("content".equals(scheme, ignoreCase = true) ||
+            "file".equals(scheme, ignoreCase = true)
+        ) {
+            return
+        }
+        MobBridge.nativeDeliverLink(uri.toString())
     }
 
     // Manifest declares `android:configChanges` including `uiMode`, so a

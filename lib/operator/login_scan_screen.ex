@@ -83,7 +83,7 @@ defmodule Operator.LoginScanScreen do
     do: {:noreply, scanned(socket, text)}
 
   # Scanned with another app while this screen shows.
-  def handle_info({:notification, %{data: %{operator_link: link}}}, socket) when is_binary(link),
+  def handle_info({:link, %{url: link}}, socket) when is_binary(link),
     do: {:noreply, scanned(socket, link)}
 
   def handle_info({:scan, :cancelled}, socket),

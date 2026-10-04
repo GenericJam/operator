@@ -18,7 +18,12 @@ config :mob_dev,
     System.get_env("MOB_ELIXIR_LIB", :code.lib_dir(:elixir) |> to_string() |> Path.dirname()),
   # App-owned C NIF (c_src/<module>.c): the Keychain / EncryptedSharedPrefs
   # store that holds the provider sign-ins (Operator.SecureStore, Operator.Auth).
-  static_nifs: [%{module: :operator_secure_store, archs: [:all]}]
+  static_nifs: [%{module: :operator_secure_store, archs: [:all]}],
+  # operator:// links (Operator.Links: the QR codes mix operator.handoff,
+  # operator.login and mob_deliver make on the Mac, scanned with any app).
+  # The native build adds the Android intent filter (MainActivity must stay
+  # singleTask) and the iOS URL type; each link arrives as {:link, ...}.
+  url_schemes: ["operator"]
 
 # Activated capability plugins (the packages added in mix.exs). Each contributes
 # its native code, permissions, and any demo screens at build time. Drop a name
