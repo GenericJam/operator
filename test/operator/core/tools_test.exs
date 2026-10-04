@@ -5,6 +5,7 @@ defmodule Operator.Core.ToolsTest do
   alias Operator.Core.Tools.Clipboard
   alias Operator.Core.Tools.HttpGet
   alias Operator.Core.Tools.Notes
+  alias Operator.Core.Tools.PickPhotos
 
   @moduletag :tmp_dir
 
@@ -137,5 +138,30 @@ defmodule Operator.Core.ToolsTest do
     assert {:error, _} = Clipboard.run(%{"action" => "write", "text" => ""}, ctx)
     assert {:error, _} = Clipboard.run(%{"action" => "paste"}, ctx)
     assert Clipboard.selftest() == :ok
+  end
+
+  test "pick_photos: a picked item with only a path and type is described from its file",
+       %{tmp_dir: dir} do
+    path = Path.join(dir, "mob_pick_1.jpg")
+    File.write!(path, "12345")
+
+    host =
+      spawn(fn ->
+        receive do
+          {:phone_request, ref, from, :pick_photos, _args} ->
+            Operator.Core.Phone.reply(
+              from,
+              ref,
+              {:ok,
+               [%{path: path, type: :image}, %{path: Path.join(dir, "gone.mov"), type: :video}]}
+            )
+        end
+      end)
+
+    assert {:ok, text} = PickPhotos.run(%{"max" => 2}, %{phone_host: host})
+
+    assert text ==
+             "mob_pick_1.jpg · image · 5 bytes · #{path}\n" <>
+               "gone.mov · video · ? bytes · #{Path.join(dir, "gone.mov")}"
   end
 end

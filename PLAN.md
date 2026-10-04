@@ -516,3 +516,35 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    the guides and docs and proposed a location screen with Mishka tabs from
    the gallery (G11 pending: Kevin approves). Haiku often hits the 12-call
    limit on a new screen.
+
+## iOS parity (2026-10-04)
+
+Builds: `mix mob.deploy --native --ios --device <udid>` for the iOS 27
+simulator (57 s) and Kevin's iPhone SE 3rd gen, iOS 26.5.2 (77 s, signed
+with the team's wildcard profile). Dist to the iPhone: its node is named
+after its WiFi IP (`operator_ios@10.0.0.121`); `mix mob.connect` can't find
+it on this Mac (MOB-384: the BEAM's `arp` output is empty), so connect by
+hand with a driver node on the Mac's LAN IP. "Kevin" = waiting for his
+finger on the iPhone (list sent 2026-10-04).
+
+| Feature | Android | iOS simulator | iPhone SE | Notes / issue |
+|---|---|---|---|---|
+| Boot to the shell: front gallery + dial toggle, terminal | Moto, verified | verified (27.0) | verified: seed generation compiled and proven on device, toggle both ways | Dyn compiles and loads on the iPhone's no-JIT BEAM (`emu` flavor) |
+| Secure store (Keychain) | verified | verified: put/get/delete, survives relaunch | verified: put/get/delete | sim needed simulated entitlements (`ios/simulator_entitlements.plist` linked into `__TEXT,__entitlements`); upstream MOB-314 (commented) |
+| operator:// links | verified | warm: verified (deliver link → confirm screen); cold start: link not shown after launch | warm: verified (`devicectl … --payload-url`) | cold start is PLAN's deferred "cold link races the front push" |
+| Provider logins (/login, QR transfer) | verified | not run (needs a sign-in) | Kevin | on iOS the localhost listener runs while Safari is in front only if the app isn't suspended (see Background); paste `code#state` is the fallback |
+| Model calls streaming | verified | not run (needs a login) | Kevin (after login) | |
+| Markdown rendering | see 2a | IosViews: verified (26.5 sim) | IosViews: rendered (proposal text) | `ios/OperatorMarkdown.swift` |
+| Screen-lock approval, rescue revert | verified (emu) | IosViews: verified (Face ID, passcode) | Kevin (Touch ID on the G2 card) | `ios/OperatorApproval.swift`; native + Elixir must ship together (request binding) |
+| Hold-to-talk dictation (Whisper) | verified | verified: "Please check the weather in Calgary tomorrow morning." exact, 0.5 s after release (Mac `say`) | Kevin (microphone permission), then the `say` check | mic enabled on iOS (f6147ff); `Mob.Test.press_down_xy` is unsupported on iOS, driven with `press_in/press_out` |
+| Voice output (Mob.Speech) | verified | `tts_speak` :ok (not listened to) | not checked by ear | |
+| location | verified | verified (simctl location) | Kevin (permission prompt pending; the call timed out at 40 s without it) | |
+| notify | verified | verified: permission asked at first send, banner shown | scheduled :ok; Kevin (permission) | |
+| clipboard, http_get | verified | verified | verified | |
+| camera_photo, scanner | verified | n/a (no camera) | Kevin | |
+| pick_photos | verified | verified (PHPicker, one photo) | Kevin | iOS items are path + type only: name and size now come from the file |
+| front tools (screens, open, screenshot), read_guide, read_doc | verified | verified | verified | |
+| Self-modification (Dyn compile + load) | verified | seed + proposals compile (IosViews: probation, rescue) | seed generation proven; G2 proposal compiled | auto-revert after crashes not rerun on iOS |
+| Sloppy Joe plugins started | verified | all 17 apps started, NIFs answer | all 17 apps started, NIFs answer (wake, video, touch, screencast, camera, location, notify, whisper, background) | Bluetooth Classic is Android-only by design (BLE is cross-platform); push needs an explicit App ID with Push |
+| OTA updates (mob_deliver) | verified 1-3 | verified: deliver link → server set → publish → installed → runs after relaunch | link + server set; install not run | |
+| Background (mob_background) | verified | n/a | verified: without the keep-alive the BEAM froze while Safari was in front (no tick for 100 s); with `MobBackground.keep_alive/0` it ticked every 5 s and HTTPS returned 200 at 30/60/90 s, dist stayed up | screen-locked case not tested; the run-start hook (`Operator.Core.KeepAlive`) needs a login to exercise |

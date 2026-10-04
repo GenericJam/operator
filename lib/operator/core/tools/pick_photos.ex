@@ -44,11 +44,26 @@ defmodule Operator.Core.Tools.PickPhotos do
     end
   end
 
+  # The picker gives only the copied file's path and its type (mob_photos:
+  # `%{path, type}` on iOS; Android adds width/height, both 0), so the name
+  # and size come from that file.
   defp describe(item) do
-    name = item[:display_name] || item[:name] || "?"
+    path = item[:path] || item[:uri]
+    name = item[:display_name] || item[:name] || if(path, do: Path.basename(path), else: "?")
 
-    "#{name} · #{item[:mime_type] || item[:type] || "?"} · #{item[:size] || "?"} bytes · #{item[:path] || item[:uri] || "?"}"
+    "#{name} · #{item[:mime_type] || item[:type] || "?"} · #{size(item, path)} bytes · #{path || "?"}"
   end
+
+  defp size(%{size: size}, _path) when is_integer(size), do: size
+
+  defp size(_item, path) when is_binary(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} -> size
+      {:error, _} -> "?"
+    end
+  end
+
+  defp size(_item, _path), do: "?"
 
   @impl true
   def selftest,
