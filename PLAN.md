@@ -236,18 +236,25 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
   outside any user screen, so a broken front screen can never hide it.
   Sloppy Joe's equivalent is the gear in `ShellScreen` (`view: :app |
   :control`).
-- **A shell hosts the front.** Like Sloppy Joe's `ShellScreen`, a Core
-  screen owns the toggle and mounts the current front screen full-bleed
-  under try/rescue: a screen that raises shows an error box with its
-  stacktrace (and an "ask the agent to fix it" action), and the shell and
-  terminal stay up. The last open front screen is remembered across
-  launches. Repeated crashes revert, as Sloppy Joe's `CanvasKeeper` does; in
-  Operator that's the Dyn Keeper's probation and automatic revert, which
-  already exist.
+- **A shell hosts the front, and draws nothing else.** A Core screen owns
+  the toggle and mounts the current front screen full-bleed under
+  try/rescue: a screen that raises shows its error and stacktrace, and the
+  shell and terminal stay up. The last open front screen is remembered
+  across launches. Repeated crashes revert through the Dyn Keeper's
+  probation and automatic revert, which already exist (Sloppy Joe's
+  `CanvasKeeper` plays that part there).
+- **Nothing in the front is hardcoded** (Kevin, 2026-10-03). The logo
+  toggle is the only thing Operator draws over it: no home button, menu,
+  tab bar, consent card or blank-state card like Sloppy Joe's. Navigation
+  between front screens is whatever the user builds; if they build
+  something with no way out, the agent can open any front screen for them
+  from the terminal (a tool), or rebuild the navigation.
 - **Front screens are Dyn artifacts.** The agent writes them with its
   `dyn_*` tools as modules of a generation; they go through the static
   check, selftests, approval and probation like everything else in Dyn, and
-  any generation can be reverted. Sloppy Joe keeps screen sources in SQLite
+  any generation can be reverted. **Every front change needs the screen
+  lock**, one approval per proposal, the same as any other self-change
+  (Kevin, 2026-10-03). Sloppy Joe keeps screen sources in SQLite
   (`SloppyJoe.Store`) and compiles them on the phone (`SloppyJoe.Screens`);
   Operator's generations already do both. The Rescue screen still works
   when the front is broken.
@@ -288,15 +295,8 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
   a front screen is written, mob's components, the Mishka widgets, the
   capability plugins and their permissions), like Sloppy Joe's
   `priv/screen_guide.md`, and tools to list, open and screenshot front
-  screens so it can see what it built.
-
-Open questions:
-- Approval: every front change behind the screen lock (as all Dyn changes
-  are today), or a lighter rule for front-only changes (a front screen
-  can't touch the Core or the terminal)? Default until Kevin decides: the
-  screen lock, one approval per proposal.
-- Navigation between front screens: the gallery's own navigation, or a
-  front-wide menu the shell draws?
+  screens so it can see what it built, and to switch the front to any
+  screen when the user asks.
 
 ## Build order
 
@@ -407,13 +407,14 @@ Open questions:
       (Android manifest, iOS Info.plist); native deploy; check the built
       manifest and that each plugin starts.
    2. Shell screen with the logo toggle (upper left) between the front and
-      the terminal; front screens mounted under try/rescue with an error
-      box; last open front screen remembered.
+      the terminal, and nothing else drawn over the front; front screens
+      mounted under try/rescue showing the error; last open front screen
+      remembered.
    3. Default front: the generated Mishka gallery and component screens as
       the seed generation's front, so they're editable and revertable.
    4. Agent side: front guide in the system prompt; tools to list, open
-      and screenshot front screens; a front change goes through the usual
-      Dyn proposal and approval.
+      (switch the front to) and screenshot front screens; a front change is
+      a Dyn proposal approved with the screen lock.
    5. Device check on the Moto: toggle both ways, a front screen that
       raises shows the error box and the logo still works, the agent
       changes a Mishka screen ("make the slider purple") and it's approved,
