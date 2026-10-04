@@ -47,10 +47,9 @@ defmodule Operator.MixProject do
       {:mob_scanner, "~> 0.1.5"},
       # Dictation: hold the mic, the phone transcribes offline (whisper.cpp,
       # Operator.ChatScreen). mob_speech is the speech API, mob_whisper its
-      # on-device engine (a mob plugin, mob.exs). Git tags until Hex has them
-      # (their HEX_API_KEY is pending); then "~> 0.1" and drop the override.
-      {:mob_speech, github: "GenericJam/mob_speech", tag: "0.1.0", override: true},
-      {:mob_whisper, github: "GenericJam/mob_whisper", tag: "0.1.0"},
+      # on-device engine (a mob plugin, mob.exs).
+      {:mob_speech, "~> 0.1"},
+      {:mob_whisper, "~> 0.1"},
       # Over-the-air updates of Operator's own code (docs/DESIGN.md §1, the
       # Core's release path; Operator.Deliver). mob_deliver is the phone side,
       # a mob plugin (mob.exs). mob_deliver_server and Bandit are the Mac side
