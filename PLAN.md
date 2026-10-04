@@ -380,8 +380,9 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    (camera, any QR app, or Diagnostics -> Scan QR) opens the phone at the
    words. Built and reviewed (reviewer subagent: SHIP after fixes);
    `/login anthropic` verified on the Moto (Kevin signed in; replies stream
-   from claude-haiku-4-5 on his subscription). Not yet tried: `/login
-   openai`, the QR transfer.
+   from claude-haiku-4-5 on his subscription); `/login openai` and the
+   Mac QR transfer (`mix operator.login`, scanned on the phone) verified on
+   the Moto too.
 8. **OTA updates of the Core** (Kevin, 2026-10-03: from the Mac, home
    network only, nothing through Muster). mob_deliver 0.3.1 on the phone,
    mob_deliver_server 0.2.0 + Bandit on the Mac (dev-only): `mix
@@ -397,8 +398,9 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    selftests the Dyn generation, and a launch that failed on a rolled-back
    Core update isn't counted against Dyn. Built, host-tested (publish ->
    serve -> mob_deliver's client; on the host also install -> next launch
-   loads it -> no stable launch -> rolled back). Device checks (Moto G
-   2021), not done yet:
+   loads it -> no stable launch -> rolled back). Device checks 1-3 done on
+   the Moto G 2021 (041305b, f627e2a, 98b5894; the confirm-tap change in
+   them was host-tested only); 4 not done:
    1. Key, native deploy, serve, scan the QR with the camera: the scanner
       asks "Get Operator's code updates from …?"; "Use this server", then
       "Update server set …: close Operator and open it again"; after relaunching,
@@ -436,3 +438,44 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
       raises shows the error box and the logo still works, the agent
       changes a Mishka screen ("make the slider purple") and it's approved,
       shown, survives a relaunch, and reverts.
+
+   **Status (2026-10-03).** 9.1 done (9597a8e, fc857d6; Codex SHIP): every
+   Sloppy Joe plugin from Hex and activated (mishka, themes as style,
+   biometric, bluetooth, screencast, video, touch, wake), built-APK manifest
+   = Sloppy Joe's permissions/features/services (only SJ's legacy in-app
+   scanner/FCM class names differ), iOS usage strings added; permissions
+   asked at first use only. Proven on the Moto G 2021: boots to chat, all
+   plugin apps started and NIFs load, no crash; dictation, location, notify
+   and camera tools still work. Open: FCM push (mob_notify/mob_wake) needs a
+   Firebase app for com.genericjam.operator (Kevin, console); iOS not built.
+
+   9.2-9.4 done (8f2c930 check, bdc9761 front; FrontReview subagent SHIP).
+   A Core update rebuilds the current generation in the background after
+   boot ("Preparing the front…" meanwhile); unchanged files are rebuilt from
+   the parent's BEAM with renamed atoms instead of recompiled.
+
+   9.5 on the Moto, up to the approval: the seed installed as generation 3
+   (67 files, 39 s under launch load); after a BEAM deploy the front showed
+   "Preparing…" and was back within about 45 s; gallery shown; toggle
+   front → terminal → front from the gallery and from Hue Slider; Android
+   back on the front goes to the terminal; a raising front screen (an
+   injected render raise, removed by relaunching) shows its error and
+   stacktrace and the toggle still works both ways; `front_screenshot` from
+   the chat returned the gallery and the model described it; Light,
+   Material and Dark front themes switch. "make the slider purple on the
+   Slider screen" in a new session: proposal (generation 4, a
+   `color={0xFF7C3AED}` on the Volume slider) 42 s after Send, of which the
+   compile was 22.4 s (1 file compiled, 67 reused; selftests 58 ms). The
+   reuse path is slower than the 7 s the RPC measurement suggested. Still
+   to do: Kevin approves it with the screen lock, then check it's shown,
+   survives a relaunch, and reverts.
+
+   Deferred (personal-use scope, Kevin 2026-10-03): no max_heap_size on the
+   front Host (an out-of-memory front takes the app down; safe mode is the
+   backstop); a cold-start `operator://` link can race the front push;
+   `Mob.Wake`/Erlang atoms as values aren't checked (same gap as
+   `:timer.apply_after`); a Keeper restart during a background rebuild
+   loses it; front_screenshot's cleanup can pop a shell the user pushed.
+   Not tried on the device: the gallery replacing the old stack when the
+   seed installs (host-tested; this phone was seeded before that change).
+   The Light theme draws the gallery's cards white on white.
