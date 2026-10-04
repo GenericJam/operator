@@ -222,6 +222,82 @@ sits by the input; with the native renderer any text is drag-selectable
 (long-press, handles, Copy), and on Term rows long-press copies a whole
 message.
 
+## Front and back: the app you modify (Kevin, 2026-10-03)
+
+A terminal alone has few uses on a phone; what's fun is **changing the app
+itself**. So Operator becomes what Sloppy Joe is (`~/code/sloppy_joe`): a
+**front** (the UI side, whatever the user builds) and a **back** (Operator's
+terminal, the agent that builds it). The agent runs on the phone, so unlike
+Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
+
+- **The toggle.** Operator's logo (the rotary dial, `assets/icon/`) is a
+  button in the upper-left corner of every screen, front and back; tapping
+  it switches between the front and the terminal. It's drawn by the shell,
+  outside any user screen, so a broken front screen can never hide it.
+  Sloppy Joe's equivalent is the gear in `ShellScreen` (`view: :app |
+  :control`).
+- **A shell hosts the front.** Like Sloppy Joe's `ShellScreen`, a Core
+  screen owns the toggle and mounts the current front screen full-bleed
+  under try/rescue: a screen that raises shows an error box with its
+  stacktrace (and an "ask the agent to fix it" action), and the shell and
+  terminal stay up. The last open front screen is remembered across
+  launches. Repeated crashes revert, as Sloppy Joe's `CanvasKeeper` does; in
+  Operator that's the Dyn Keeper's probation and automatic revert, which
+  already exist.
+- **Front screens are Dyn artifacts.** The agent writes them with its
+  `dyn_*` tools as modules of a generation; they go through the static
+  check, selftests, approval and probation like everything else in Dyn, and
+  any generation can be reverted. Sloppy Joe keeps screen sources in SQLite
+  (`SloppyJoe.Store`) and compiles them on the phone (`SloppyJoe.Screens`);
+  Operator's generations already do both. The Rescue screen still works
+  when the front is broken.
+- **Default front: every Mishka Chelekom widget.** A fresh install opens on
+  the widget gallery that `mix mob.new` generates (not `--blank`):
+  `Showcase.GalleryScreen` plus one screen per component (60 component
+  screens over `mob_mishka`'s composites; template in
+  `mob_new/priv/templates/mob.new/lib/app_name/showcase/`). They're shipped
+  as the seed generation's front screens, so they are themselves editable
+  ("make the slider purple", "add a page that uses the chip"), the way
+  Sloppy Joe seeds `priv/default_screens` into its store so the bundled
+  demos stay modifiable. Restoring the defaults = reverting to the seed.
+- **Every capability Sloppy Joe has.** Operator carries all of Sloppy Joe's
+  plugins and permissions, so whatever a user asks for can be built without
+  a native rebuild:
+  - Plugins to add: `mob_mishka`, `mob_themes`, `mob_bluetooth`,
+    `mob_screencast`, `mob_video`, `mob_touch`, `mob_wake`, and
+    `mob_biometric` for front screens (approval of self-changes stays on
+    `OperatorApproval.kt`). Already in: camera, location, notify, photos,
+    scanner, background, deliver, speech/whisper.
+  - Android permissions (Sloppy Joe's manifest): CAMERA (+ camera and
+    autofocus features, not required), ACCESS_FINE/COARSE_LOCATION,
+    READ_MEDIA_IMAGES / READ_MEDIA_VIDEO (+ READ_EXTERNAL_STORAGE up to
+    API 32), BLUETOOTH_SCAN / CONNECT / ADVERTISE (+ BLUETOOTH and
+    BLUETOOTH_ADMIN up to API 30, bluetooth feature not required), plus
+    what Operator already has (RECORD_AUDIO, POST_NOTIFICATIONS, VIBRATE,
+    USB host, boot, exact alarms, biometric) and whatever the screencast,
+    video, touch and wake plugins declare. Check the **built** manifest
+    (plugins inject entries at build time), not only the source file.
+  - iOS Info.plist: camera, microphone, photo library, location when in
+    use, Bluetooth and Face ID usage strings, plus the plugins' own.
+  - Each permission is still requested at first use, by the screen that
+    needs it (`Mob.Permissions.request/2`), never all at launch.
+  - Store distribution: not now. Play would want declarations for
+    Bluetooth, background location, media projection and the foreground
+    service type; that's for when we bundle it for a store.
+- **The agent knows the front.** The system prompt gets a front guide (how
+  a front screen is written, mob's components, the Mishka widgets, the
+  capability plugins and their permissions), like Sloppy Joe's
+  `priv/screen_guide.md`, and tools to list, open and screenshot front
+  screens so it can see what it built.
+
+Open questions:
+- Approval: every front change behind the screen lock (as all Dyn changes
+  are today), or a lighter rule for front-only changes (a front screen
+  can't touch the Core or the terminal)? Default until Kevin decides: the
+  screen lock, one approval per proposal.
+- Navigation between front screens: the gallery's own navigation, or a
+  front-wide menu the shell draws?
+
 ## Build order
 
 1. **Core loop** (done, device-verified): pi's turn loop on req_llm (first OpenRouter, now the Anthropic/OpenAI subscription logins, step 7),
@@ -326,3 +402,19 @@ message.
       before. Publishing the fix installs again.
    4. A QR from another key (or a build without one) is refused and
       nothing changes.
+9. **Front and back** (section above). In order:
+   1. Capabilities: add the missing plugins and Sloppy Joe's permissions
+      (Android manifest, iOS Info.plist); native deploy; check the built
+      manifest and that each plugin starts.
+   2. Shell screen with the logo toggle (upper left) between the front and
+      the terminal; front screens mounted under try/rescue with an error
+      box; last open front screen remembered.
+   3. Default front: the generated Mishka gallery and component screens as
+      the seed generation's front, so they're editable and revertable.
+   4. Agent side: front guide in the system prompt; tools to list, open
+      and screenshot front screens; a front change goes through the usual
+      Dyn proposal and approval.
+   5. Device check on the Moto: toggle both ways, a front screen that
+      raises shows the error box and the logo still works, the agent
+      changes a Mishka screen ("make the slider purple") and it's approved,
+      shown, survives a relaunch, and reverts.
