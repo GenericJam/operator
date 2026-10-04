@@ -236,6 +236,13 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
   outside any user screen, so a broken front screen can never hide it.
   Sloppy Joe's equivalent is the gear in `ShellScreen` (`view: :app |
   :control`).
+  **It can't be removed** (Kevin, 2026-10-03): no change can hide it, cover
+  it, move it off screen or make it untappable, so the way back to the
+  terminal always exists. What a user *can* change is its **symbol**: a
+  different glyph or image instead of the dial. That's a Dyn setting the
+  shell validates (it must render at the toggle's fixed size and be
+  visible against its background; anything that fails falls back to the
+  dial), not front code drawing its own button.
 - **A shell hosts the front, and draws nothing else.** A Core screen owns
   the toggle and mounts the current front screen full-bleed under
   try/rescue: a screen that raises shows its error and stacktrace, and the
