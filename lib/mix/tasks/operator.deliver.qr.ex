@@ -10,9 +10,10 @@ defmodule Mix.Tasks.Operator.Deliver.Qr do
   Prints `operator://deliver?endpoint=http://<LAN address>:<port>/deliver&key=…`
   as a QR (`Operator.Deliver.link/2`; `key` is the fingerprint of the
   signing key's public half, `mix operator.deliver.key`). Scan it with the
-  phone's camera, any QR app or Diagnostics → Scan QR: Operator saves the
-  address if its build trusts that key, and checks for updates there from
-  then on. Run it again when the Mac's address changes.
+  phone's camera, any QR app or Diagnostics → Scan QR: if the code is for
+  the key the phone's build was made with, Operator shows the address and
+  saves it when you tap "Use this server", then checks for updates there.
+  Run it again when the Mac's address changes.
 
   Doesn't start the Operator application.
   """

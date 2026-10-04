@@ -115,7 +115,9 @@ defmodule Operator.LoginScanScreen do
     end
   end
 
-  def handle_info({:tap, :use_server}, %{assigns: %{deliver: endpoint}} = socket)
+  # The tap carries the address its button showed: a link that replaced it
+  # meanwhile is never the one saved.
+  def handle_info({:tap, {:use_server, endpoint}}, %{assigns: %{deliver: endpoint}} = socket)
       when is_binary(endpoint) do
     text = Deliver.save(endpoint, socket.assigns.data_dir)
     {:noreply, socket |> Mob.Socket.assign(phase: :done, deliver: nil) |> line(text)}
@@ -193,12 +195,12 @@ defmodule Operator.LoginScanScreen do
     }
   end
 
-  defp body(%{phase: :confirm_deliver}) do
+  defp body(%{phase: :confirm_deliver, deliver: endpoint}) do
     %{
       type: :column,
       props: %{fill_width: true},
       children: [
-        button("Use this server", :use_server),
+        button("Use this server", {:use_server, endpoint}),
         spacer(8),
         button("Cancel", :keep_server)
       ]

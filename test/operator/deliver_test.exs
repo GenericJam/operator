@@ -82,14 +82,23 @@ defmodule Operator.DeliverTest do
     assert Settings.deliver_endpoint(dir) == @endpoint
     assert Deliver.endpoint() == @endpoint
 
+    # Another link lands while the question shows: a tap on the button that
+    # showed the first address saves neither.
+    local = "http://127.0.0.1:1/deliver"
+    view = mount_screen(LoginScanScreen, %{data_dir: dir, deliver: local})
+    assert_renderable(view)
+    view = render_info(view, {:scan, :result, %{value: Deliver.link(other, key)}})
+    view = render_info(view, {:tap, {:use_server, local}})
+    assert Settings.deliver_endpoint(dir) == @endpoint
+    assert text(view) =~ "Get Operator's code updates from #{other}?"
+
     # Opened by the chat for a link from another app, then confirmed. Update
     # checks ran at this launch, so it checks at once (here against nothing).
-    view = mount_screen(LoginScanScreen, %{data_dir: dir, deliver: "http://127.0.0.1:1/deliver"})
-    assert_renderable(view)
-    view = render_info(view, {:tap, :use_server})
-    assert text(view) =~ "Update server set to http://127.0.0.1:1/deliver: checking for updates."
-    assert Settings.deliver_endpoint(dir) == "http://127.0.0.1:1/deliver"
-    assert Deliver.endpoint() == "http://127.0.0.1:1/deliver"
+    view = mount_screen(LoginScanScreen, %{data_dir: dir, deliver: local})
+    view = render_info(view, {:tap, {:use_server, local}})
+    assert text(view) =~ "Update server set to #{local}: checking for updates."
+    assert Settings.deliver_endpoint(dir) == local
+    assert Deliver.endpoint() == local
   end
 
   test "the first server saved on a phone without one asks for a restart", %{tmp_dir: dir} do
