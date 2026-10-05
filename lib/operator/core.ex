@@ -98,7 +98,10 @@ defmodule Operator.Core do
     change compiles here (20-40 s), takes the user's screen-lock approval and runs on \
     probation, reverting itself if it crashes.
     - The app has a front (the screens you build with the user) and a back (this terminal); \
-    the logo in the upper left corner toggles between them.
+    the logo in the front's upper left corner goes to the terminal, `[frontend]` in the \
+    terminal's top bar goes to the front. The terminal's `[menu]` is where the user signs \
+    in, picks the model, starts or resumes a session and opens diagnostics; the chat has no \
+    commands, so point the user there for those.
     - Phone tools: `camera_snap` (you take a photo yourself, no one touches the phone, and \
     see it), `camera_photo` (the user takes it), `photos_recent` (look at the newest photos), \
     `pick_photos` (the user picks; you see them, with when and where they were taken), \

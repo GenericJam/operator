@@ -71,7 +71,7 @@ defmodule Operator.Core.LLM.ReqLLM do
         {:error,
          {:other,
           "Operator can't call #{model}: use an anthropic:… or openai_codex:… model " <>
-            "(the model chip)."}}
+            "(menu › model)."}}
     end
   end
 

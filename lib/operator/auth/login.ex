@@ -1,6 +1,6 @@
 defmodule Operator.Auth.Login do
   @moduledoc """
-  `/login <provider>` on the phone: the OAuth flow (`Operator.Auth.OAuthFlow`)
+  Signing in on the phone (menu › accounts, `Operator.MenuScreen`): the OAuth flow (`Operator.Auth.OAuthFlow`)
   with the provider's own localhost redirect, answered by this BEAM.
 
   `begin/1` starts a `:gen_tcp` listener on `127.0.0.1` at the redirect's
@@ -178,9 +178,8 @@ defmodule Operator.Auth.Login do
   def handle_info({:DOWN, ref, :process, _down, reason}, %{worker: {_worker, ref, flow}} = s),
     do: {:noreply, finish(%{s | worker: nil}, flow, {:error, "crashed: #{inspect(reason)}"})}
 
-  def handle_info({:flow_timeout, state}, %{flow: %{state: state} = flow} = s) do
-    message =
-      "no answer from the browser in time; type /login #{Auth.name(flow.provider)} to try again"
+  def handle_info({:flow_timeout, state}, %{flow: %{state: state}} = s) do
+    message = "no answer from the browser in time; sign in again from [menu] › accounts"
 
     {:noreply, fail(s, message)}
   end
@@ -297,7 +296,7 @@ defmodule Operator.Auth.Login do
             conn,
             200,
             "<h2>This sign-in page is out of date.</h2>" <>
-              "<p>Use the newest sign-in tab, or type /login again in Operator.</p>"
+              "<p>Use the newest sign-in tab, or start the sign-in again in Operator.</p>"
           )
 
         :failed ->

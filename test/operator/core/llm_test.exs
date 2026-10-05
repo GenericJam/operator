@@ -77,11 +77,11 @@ defmodule Operator.Core.LLMTest do
       assert opts[:provider_options] == [auth_mode: :oauth, access_token: "at-2"]
     end
 
-    test "a signed-out provider or a dead refresh says to /login; other prefixes are refused" do
+    test "a signed-out provider or a dead refresh says to sign in from the menu; other prefixes are refused" do
       assert {:error, {:signed_out, :openai_codex} = e} =
                Adapter.options(request("openai_codex:gpt-5"), signed_in(:anthropic, "x"))
 
-      assert LLM.describe(e) =~ "type /login openai"
+      assert LLM.describe(e) =~ "sign in from [menu] › accounts"
       refute LLM.retryable?(e)
 
       dead = fn :anthropic -> {:error, {:refresh_failed, "400 invalid_grant"}} end
@@ -90,7 +90,7 @@ defmodule Operator.Core.LLMTest do
                Adapter.options(request("anthropic:claude-haiku-4-5"), dead)
 
       assert LLM.describe(e) =~ "400 invalid_grant"
-      assert LLM.describe(e) =~ "type /login anthropic"
+      assert LLM.describe(e) =~ "sign in again from [menu] › accounts"
 
       assert {:error, {:other, message}} =
                Adapter.options(request("openai:gpt-5"), signed_in(:anthropic, "x"))

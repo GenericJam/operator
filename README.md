@@ -38,7 +38,7 @@ instead. More at [sloppyjoe.ca/operator](https://sloppyjoe.ca/operator).
 | | |
 |---|---|
 | **Agent loop** | pi-agent-core's turn loop on [req_llm](https://hex.pm/packages/req_llm): streaming, parallel tools with ordered results, steering, stop, compaction, a daily cost cap |
-| **Models** | Claude (Pro/Max) and ChatGPT/Codex subscriptions via omp's own PKCE sign-in flows; a model picker like omp's `/models`; credentials in the platform secure store (EncryptedSharedPreferences / Keychain) |
+| **Models** | Claude (Pro/Max) and ChatGPT/Codex subscriptions via omp's own PKCE sign-in flows; a model picker like omp's `/models` in the settings menu; credentials in the platform secure store (EncryptedSharedPreferences / Keychain) |
 | **Sessions** | omp/pi's session format (version 3), so a session reads the same on both sides |
 | **Phone tools** | location, notifications, camera, photo picker, clipboard, HTTP, notes, artifacts for long output |
 | **Self-modification** | the Dyn layer: front screens, extra tools and the terminal theme as generations with versioned module names, a static check, selftests, screen-lock approval, probation, automatic revert, safe mode and a rescue screen |
@@ -78,8 +78,9 @@ mix mob.deploy --android --device <adb serial>            # Elixir-only changes
 mix mob.deploy --native --ios --device <udid>             # simulator or iPhone
 ```
 
-Then sign in on the phone with `/login anthropic` or `/login openai`, or from
-the Mac with `mix operator.login`.
+Then sign in on the phone from the terminal's `[menu]` › accounts (Claude or
+ChatGPT, in the browser), or from the Mac with `mix operator.login` and scan
+its QR.
 
 Drive a running phone over Erlang distribution:
 
@@ -117,7 +118,7 @@ mix credo --strict
 | Path | What's there |
 |---|---|
 | `lib/operator/core/` | the Core: agent loop, session, LLM adapters, tools, Dyn engine (`dyn/`), the front host, theme, voice, keep-alive |
-| `lib/operator/*_screen.ex` | chat (terminal), shell (front), diagnostics, rescue, QR scanner |
+| `lib/operator/*_screen.ex` | chat (terminal), menu (settings), shell (front), diagnostics, rescue, QR scanner |
 | `lib/operator/auth*` | provider sign-in, token refresh, QR login transfer |
 | `lib/operator/handoff*`, `links.ex` | `operator://` links: handoff, login, update server |
 | `lib/mix/tasks/` | the Mac-side tasks (`operator.handoff`, `.login`, `.deliver.*`, `.publish`, `.docs`) |

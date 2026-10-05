@@ -5,8 +5,9 @@ BEAM) that is an omp-style coding agent running entirely on the phone: a
 Jido.AI ReAct loop, the session stored on device, phone tools, and
 self-modification (it compiles new screens/tools for itself, gated by tests
 and a biometric approval). The model is Claude or ChatGPT on the user's
-subscription, signed in as omp does (`/login anthropic`, `/login openai` in
-the chat; `Operator.Auth`). Read `docs/SPIKE.md` first: it records what was
+subscription, signed in with omp's OAuth flows from the terminal's
+`[menu]` › accounts (`Operator.MenuScreen`, `Operator.Auth`); the chat has no
+slash commands. Read `docs/SPIKE.md` first: it records what was
 proven on an emulator, the numbers, and the recommended architecture.
 
 ## Working on it
@@ -36,7 +37,7 @@ mix operator.deliver.qr                      # scan once per phone / Mac address
 mix operator.publish                         # after a green gate; prints the changes
 ```
 
-The phone checks at launch, every 5 minutes in front and from Diagnostics →
+The phone checks at launch, every 5 minutes in front and from menu › diagnostics →
 "Check for updates now", and runs an installed update from the next launch
 (close Operator and open it again). A launch with it that doesn't get stable
 (first frame + 10 s) rolls it back; Diagnostics says so. Publish from the

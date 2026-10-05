@@ -87,8 +87,8 @@ session files over adb (`scripts/session.sh`) stay for debugging only.
    of a reply is one native view; fenced code blocks and `$$` math stay
    Term rows so Copy-per-block survives; the streaming reply's views grow
    in place (stable ids). The theme's `renderer: :native | :term | :auto`
-   picks it (`:auto` = native on the phone); the `md:` chip in the chat
-   header toggles it for the running app (not persisted). At most 200
+   picks it (`:auto` = native on the phone); menu › renderer toggles it
+   for the running app (not persisted). At most 200
    native views are in the window (mob has 256 component slots; a view
    without one renders nothing).
 
@@ -247,9 +247,11 @@ itself**. So Operator becomes what Sloppy Joe is (`~/code/sloppy_joe`): a
 terminal, the agent that builds it). The agent runs on the phone, so unlike
 Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
 
-- **The toggle.** Operator's logo (the rotary dial, `assets/icon/`) is a
-  button in the upper-left corner of every screen, front and back; tapping
-  it switches between the front and the terminal. It's drawn by the shell,
+- **The toggle.** On the front, Operator's logo (the rotary dial,
+  `assets/icon/`) is a button in the upper-left corner; tapping it switches
+  to the terminal. On the terminal it is the `[frontend]` command that starts
+  every top bar (Kevin, 2026-10-05: no logo on the terminal side), next to
+  `[menu]`. It's drawn by the shell,
   outside any user screen, so a broken front screen can never hide it.
   Sloppy Joe's equivalent is the gear in `ShellScreen` (`view: :app |
   :control`).
@@ -399,16 +401,16 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
 6. Secure-store key; iOS build (Textual vs `UITextView`, audio-session
    background). Secure-store key done on Android (EncryptedSharedPreferences,
    migrated and verified on the Moto); iOS not started.
-7. **Provider logins** (Kevin, 2026-10-03: OpenRouter removed). `/login
-   anthropic` (Claude Pro/Max) and `/login openai` (ChatGPT/Codex) run omp's
+7. **Provider logins** (Kevin, 2026-10-03: OpenRouter removed). Signing in
+   to Claude (Pro/Max) or ChatGPT/Codex runs omp's
    PKCE flows on the phone (browser -> localhost listener, or paste
    `code#state`); credentials pi-shaped in the secure store, refreshed by
    `Operator.Auth`. From the Mac: `mix operator.login anthropic|openai`
    prints an encrypted `operator://login` QR plus six words; scanning it
-   (camera, any QR app, or Diagnostics -> Scan QR) opens the phone at the
+   (camera, any QR app, or menu › accounts › scan a login QR) opens the phone at the
    words. Built and reviewed (reviewer subagent: SHIP after fixes);
-   `/login anthropic` verified on the Moto (Kevin signed in; replies stream
-   from claude-haiku-4-5 on his subscription); `/login openai` and the
+   the Claude sign-in verified on the Moto (Kevin signed in; replies stream
+   from claude-haiku-4-5 on his subscription); the ChatGPT one and the
    Mac QR transfer (`mix operator.login`, scanned on the phone) verified on
    the Moto too.
 8. **OTA updates of the Core** (Kevin, 2026-10-03: from the Mac, home
@@ -520,6 +522,18 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    the guides and docs and proposed a location screen with Mishka tabs from
    the gallery (G11 pending: Kevin approves). Haiku often hits the 12-call
    limit on a new screen.
+11. **Settings menu** (Kevin, 2026-10-05, before the first public APK). The
+   terminal's top bar is `[frontend]` (to the front, what the dial does
+   there) and `[menu]`, then the status line; no logo on the terminal side.
+   `[menu]` opens `Operator.MenuScreen`, a full-screen page in the
+   terminal's look (`Operator.TermUI`): accounts (sign in with the browser,
+   paste `code#state`, sign out after a confirm, scan a login QR), model
+   (the picker plus a custom spec), new session, resume a saved session,
+   renderer (`md:native` / `md:term`) and diagnostics
+   (`Operator.DiagnosticsScreen`, the old Home screen). The chat's
+   `/login`, `/logout` and `/models` are gone: the composer only talks to
+   the agent. Signed out, the chat is still the root and says where to
+   sign in.
 
 ## iOS parity (2026-10-04)
 
@@ -536,7 +550,7 @@ finger on the iPhone (list sent 2026-10-04).
 | Boot to the shell: front gallery + dial toggle, terminal | Moto, verified | verified (27.0) | verified: seed generation compiled and proven on device, toggle both ways | Dyn compiles and loads on the iPhone's no-JIT BEAM (`emu` flavor) |
 | Secure store (Keychain) | verified | verified: put/get/delete, survives relaunch | verified: put/get/delete | sim needed simulated entitlements (`ios/simulator_entitlements.plist` linked into `__TEXT,__entitlements`); upstream MOB-314 (commented) |
 | operator:// links | verified | warm: verified (deliver link → confirm screen); cold start: link not shown after launch | warm: verified (`devicectl … --payload-url`) | cold start is PLAN's deferred "cold link races the front push" |
-| Provider logins (/login, QR transfer) | verified | not run (needs a sign-in) | Kevin | on iOS the localhost listener runs while Safari is in front only if the app isn't suspended (see Background); paste `code#state` is the fallback |
+| Provider logins (menu › accounts, QR transfer) | verified | not run (needs a sign-in) | Kevin | on iOS the localhost listener runs while Safari is in front only if the app isn't suspended (see Background); paste `code#state` is the fallback |
 | Model calls streaming | verified | not run (needs a login) | Kevin (after login) | |
 | Markdown rendering | see 2a | IosViews: verified (26.5 sim) | IosViews: rendered (proposal text) | `ios/OperatorMarkdown.swift` |
 | Screen-lock approval, rescue revert | verified (emu) | IosViews: verified (Face ID, passcode) | Kevin (Touch ID on the G2 card) | `ios/OperatorApproval.swift`; native + Elixir must ship together (request binding) |

@@ -51,7 +51,7 @@ defmodule Operator.LoginScanScreen do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        {Toggle.title("Scan a code from your Mac")}
+        {Operator.TermUI.title_bar("Scan a code from your Mac")}
         <Spacer size={8} />
         <Text text={assigns.line} text_color={:primary} />
         <Spacer size={16} />

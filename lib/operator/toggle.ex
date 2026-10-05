@@ -1,11 +1,12 @@
 defmodule Operator.Toggle do
   @moduledoc """
-  The front/terminal toggle (PLAN.md "Front and back"): Operator's logo, the
-  rotary dial, or the symbol the Dyn layer chose (`Operator.Core.Front.toggle/0`),
-  in the upper left corner of every screen. `Operator.ShellScreen` draws it
-  over the front (`overlay/0`); the terminal's screens draw it first in
-  their top row (`button/0`) and, on `{:tap, :operator_toggle}`, open the
-  front with `to_front/1`.
+  The front/terminal toggle (PLAN.md "Front and back"). On the front it is
+  Operator's logo, the rotary dial, or the symbol the Dyn layer chose
+  (`Operator.Core.Front.toggle/0`), in the upper left corner:
+  `Operator.ShellScreen` draws it over the front (`overlay/0`) and goes back
+  to the terminal on its tap. On the terminal it is the `[frontend]` command
+  that starts every top bar (`Operator.TermUI.top_bar/2`), sending the same
+  `{:tap, :operator_toggle}`; the screen opens the front with `to_front/1`.
   """
 
   alias Operator.Core.Front
@@ -17,9 +18,8 @@ defmodule Operator.Toggle do
   @spec tag() :: atom()
   def tag, do: @tag
 
-  @doc "The toggle itself, a #{@size} dp square."
-  @spec button() :: map()
-  def button do
+  # The toggle itself, a #{@size} dp square.
+  defp button do
     %{
       type: :box,
       props: %{width: @size, height: @size, on_tap: {self(), @tag}},
@@ -43,29 +43,6 @@ defmodule Operator.Toggle do
         %{type: :spacer, props: %{weight: 1}, children: []}
       ]
     }
-  end
-
-  @doc "A screen's top row: the toggle, then `children`."
-  @spec row([map()]) :: map()
-  def row(children \\ []) do
-    %{
-      type: :row,
-      props: %{fill_width: true, align: :center},
-      children: [button() | children]
-    }
-  end
-
-  @doc "A terminal screen's title row: the toggle, then `title`."
-  @spec title(String.t()) :: map()
-  def title(title) do
-    row([
-      %{type: :spacer, props: %{size: 8}, children: []},
-      %{
-        type: :text,
-        props: %{text: title, text_size: :xl, text_color: :on_surface},
-        children: []
-      }
-    ])
   end
 
   @doc "From a terminal screen to the front (the shell goes on top; its toggle comes back)."

@@ -32,14 +32,9 @@ defmodule Operator.App do
     :ok = Term.install()
 
     # The terminal: safe mode's rescue screen (launches kept failing, no Dyn
-    # loaded); otherwise chat once signed in to a provider, and until then
-    # the diagnostics screen, which says how to sign in.
-    root =
-      cond do
-        Dyn.safe_mode?() -> Operator.RescueScreen
-        Enum.any?(Operator.Auth.providers(), &Operator.Auth.signed_in?/1) -> Operator.ChatScreen
-        true -> Operator.HomeScreen
-      end
+    # loaded); otherwise the chat (signed out, it says to sign in from the
+    # menu).
+    root = if Dyn.safe_mode?(), do: Operator.RescueScreen, else: Operator.ChatScreen
 
     {:ok, _} = Mob.Screen.start_root(root)
 

@@ -223,7 +223,7 @@ Two renderers for an assistant reply (`Term.renderer/1`, the theme's
 (`Operator.Core.MarkdownView`, a `Mob.UI.native_view` drawn by Markwon in a
 selectable `TextView`, `OperatorMarkdown.kt`); fenced code blocks and `$$`
 math stay Term rows (Copy button per block). Elsewhere, and one flag away
-(`renderer: :term`, the chat header's `md:` chip), our own parser renders
+(`renderer: :term`, menu › renderer), our own parser renders
 the whole reply. Native-view constraints from mob: ids are atoms (one per
 row slot, reused across sessions), each view is a process plus one of 256
 native component slots (the chat window caps native views at 200), and the
@@ -256,12 +256,12 @@ Each with name, description, schema (Jido.Action), streaming progress, and a
 
 ## 5. Model and cost
 Claude (Pro/Max) and ChatGPT (Plus/Pro, Codex) through req_llm, signed in
-on the phone as omp does: `/login anthropic` / `/login openai` in the chat
+on the phone with omp's flows: menu › accounts (`Operator.MenuScreen`)
 runs the provider's OAuth PKCE flow with its own localhost redirect
 (54545 / 1455) answered by the phone's BEAM, and `Operator.Auth` keeps the
 credentials in the platform secure store, refreshing the access token
 before each call when due. Default model: the cheapest current Claude
-(`anthropic:claude-haiku-4-5`), user-selectable; per-day cost cap enforced
+(`anthropic:claude-haiku-4-5`), user-selectable (menu › model); per-day cost cap enforced
 by the loop from req_llm's priced usage (notional on a subscription).
 
 Moving a login from the Mac: `mix operator.login anthropic|openai` runs the
@@ -271,7 +271,7 @@ running), and seals the fresh grant with `Operator.Auth.Transfer` into a QR
 link (`operator://login?c=…`, AES-256-GCM under PBKDF2-SHA256 of six EFF
 short-list words, 10-minute lifetime) plus the six words. Scanning it with
 the camera or any QR app opens Operator at the words (`Operator.Links`), as
-does Diagnostics → Scan QR (`Operator.LoginScanScreen`, mob_scanner); the
+does menu › accounts › scan a login QR (`Operator.LoginScanScreen`, mob_scanner); the
 login is stored with `Operator.Auth.put/2`. Each run is a new grant, so omp
 and the phone never share a rotating refresh token; only the refresh token
 travels (an OpenAI access token alone is ~1.8 kB), and the phone refreshes

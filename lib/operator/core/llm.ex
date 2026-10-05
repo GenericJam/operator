@@ -56,7 +56,7 @@ defmodule Operator.Core.LLM do
   end
 
   def describe({:http, 401, message}),
-    do: "401 (sign-in rejected): #{message}\nSign in again: /login anthropic or /login openai."
+    do: "401 (sign-in rejected): #{message}\nSign in again: [menu] › accounts."
 
   def describe({:http, 429, message}), do: "429 (rate limited): #{message}"
   def describe({:http, status, message}), do: "Model call failed (HTTP #{status}): #{message}"
@@ -66,12 +66,12 @@ defmodule Operator.Core.LLM do
 
   def describe({:signed_out, provider}) do
     "Not signed in to #{Operator.Auth.label(provider)}: " <>
-      "type /login #{Operator.Auth.name(provider)} to sign in."
+      "sign in from [menu] › accounts."
   end
 
   def describe({:auth, provider, message}) do
     "#{Operator.Auth.label(provider)} sign-in expired (#{message}): " <>
-      "type /login #{Operator.Auth.name(provider)} to sign in again."
+      "sign in again from [menu] › accounts."
   end
 
   def describe({:other, message}), do: "Model call failed: #{message}"

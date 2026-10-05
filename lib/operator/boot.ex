@@ -41,7 +41,7 @@ defmodule Operator.Boot do
         {:ok, _} = Operator.Repo.start_link()
       end,
       # The provider sign-ins (Operator.Auth, which model calls take their
-      # tokens from) and `/login`'s browser flow. Earlier builds kept an API
+      # tokens from) and the browser sign-in flow. Earlier builds kept an API
       # key in the secure store (or, before that, a file); nothing uses it.
       auth: fn ->
         _ = Operator.SecureStore.delete("openrouter_api_key")

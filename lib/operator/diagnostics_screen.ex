@@ -1,38 +1,34 @@
-defmodule Operator.HomeScreen do
+defmodule Operator.DiagnosticsScreen do
   @moduledoc """
-  Diagnostics (and the first screen while no model provider is signed in):
-  the provider sign-ins (`Operator.Auth`; signing in is `/login anthropic`
-  or `/login openai` in the chat, or scanning a login QR minted on the Mac),
-  today's model spend against the daily cost cap (editable), code updates
-  from the Mac (`Operator.Deliver`: the update server, the code running,
-  the last check, "Check for updates now"), the agent stack's status, and
-  the Dyn layer: its current generation, sample proposals that run the
-  self-modification pipeline on the phone, its screens, and the way to the
-  rescue screen. The first sign-in hands over to `Operator.ChatScreen`, and
-  so does an `operator://` link scanned with another app while this screen
-  shows (the chat handles it).
+  Menu › diagnostics (`Operator.MenuScreen`), drawn like the terminal
+  (`Operator.TermUI`): the agent stack's status, today's model spend against
+  the daily cost cap (editable), code updates from the Mac
+  (`Operator.Deliver`: the update server, the code running, the last check,
+  "check for updates now"; a QR scan sets the server), and the Dyn layer:
+  its current generation, sample proposals that run the self-modification
+  pipeline on the phone, the way to the rescue screen, and its front
+  screens. An `operator://` link scanned with another app while this
+  screen shows goes to the chat.
   """
   use Mob.Screen
 
-  alias Operator.Auth
   alias Operator.Core.Budget
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Samples
   alias Operator.Core.Front
   alias Operator.Core.Settings
+  alias Operator.Core.Term
   alias Operator.Deliver
+  alias Operator.TermUI, as: UI
   alias Operator.Toggle
 
   def mount(params, _session, socket) do
-    # The theme (terminal font token included) is installed once at boot by
-    # Operator.Core.Term.install/0.
-    :ok = Auth.subscribe()
     Dyn.subscribe()
     data_dir = Map.get(params, :data_dir) || Operator.Paths.data_dir()
 
     {:ok,
      socket
-     |> Mob.Socket.assign(auth: Auth.status(), last: boot_line())
+     |> Mob.Socket.assign(last: boot_line())
      |> Mob.Socket.assign(data_dir: data_dir, cap_draft: "", updates: nil, update_note: nil)
      |> spend()
      |> dyn()
@@ -40,74 +36,48 @@ defmodule Operator.HomeScreen do
   end
 
   def render(assigns) do
-    ~MOB"""
-    <Scroll background={:background}>
-      <Column background={:background} padding={:space_lg}>
-        {Toggle.title("Operator")}
-        <Text text={stack_line()} text_size={:sm} text_color={:muted} />
-        <Spacer size={16} />
-        <Text text="Model sign-in" text_size={:sm} text_color={:muted} />
-        {auth_section(assigns.auth)}
-        <Text
-          text="Sign in from the chat: type /login anthropic (Claude Pro/Max) or /login openai (ChatGPT Plus/Pro)."
-          text_size={:sm}
-          text_color={:muted}
-        />
-        <Spacer size={8} />
-        {button("Open the chat", :open_chat)}
-        <Spacer size={8} />
-        {button("Scan QR", :scan_qr)}
-        <Spacer size={24} />
-        <Text text="Spending" text_size={:sm} text_color={:muted} />
-        <Text text={assigns.spend_line} text_color={:primary} />
-        <Spacer size={8} />
-        {cap_field(assigns.cap_draft)}
-        <Spacer size={8} />
-        {button("Save daily cap", :save_cap)}
-        <Spacer size={24} />
-        <Text text="Code updates from the Mac" text_size={:sm} text_color={:muted} />
-        {updates_section(assigns)}
-        <Spacer size={8} />
-        {button("Check for updates now", :check_updates)}
-        <Spacer size={24} />
-        <Text text="Dyn layer (self-modification)" text_size={:sm} text_color={:muted} />
-        <Text text={assigns.dyn_line} text_color={:primary} />
-        <Text text={assigns.last} text_size={:sm} text_color={:muted} />
-        <Spacer size={8} />
-        {button("Propose sample: Hello", {:propose, "hello"})}
-        <Spacer size={8} />
-        {button("Propose sample: Checklist (~200 lines)", {:propose, "checklist"})}
-        <Spacer size={8} />
-        {button("Activate the proposal", :activate)}
-        <Spacer size={8} />
-        {button("Rescue: generations, diffs, crash log", :rescue)}
-        <Spacer size={16} />
-        {dyn_section(assigns.dyn)}
-      </Column>
-    </Scroll>
-    """
+    t = Term.theme()
+
+    rows =
+      [
+        UI.heading("agent stack", t),
+        UI.line(stack_line(), t),
+        UI.heading("spending", t),
+        UI.line(assigns.spend_line, t),
+        UI.actions(t, [
+          UI.field(assigns.cap_draft, "daily cap in $, e.g. 2.50", :cap, t, weight: 1),
+          UI.chip("save cap", :save_cap, t)
+        ]),
+        UI.heading("code updates from the Mac", t)
+      ] ++
+        updates_section(assigns, t) ++
+        [
+          UI.actions(t, [
+            UI.link("check for updates now", :check_updates, t),
+            UI.link("scan QR", :scan_qr, t)
+          ]),
+          UI.heading("dyn layer (self-modification)", t),
+          UI.line(assigns.dyn_line, t),
+          UI.line(assigns.last, t, "dim"),
+          UI.item("propose sample: hello", "", {:propose, "hello"}, t),
+          UI.item("propose sample: checklist", "~200 lines", {:propose, "checklist"}, t),
+          UI.item("activate the proposal", "", :activate, t),
+          UI.item("rescue", "generations, diffs, crash log", :rescue, t),
+          UI.heading("front screens", t)
+        ] ++ dyn_section(assigns.dyn, t)
+
+    UI.page(t, "menu › diagnostics", rows)
   end
 
-  # ── sign-in ──
+  # ── navigation ──
 
-  def handle_info({:tap, :open_chat}, socket),
-    do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)}
+  def handle_info({:tap, :back}, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
 
   def handle_info({:tap, :scan_qr}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen)}
 
   def handle_info({:link, %{url: link}}, socket) when is_binary(link),
     do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen, %{link: link})}
-
-  # The first sign-in (a scanned QR, say) goes on to the chat.
-  def handle_info({:operator_auth, :changed}, socket) do
-    was = signed_in?(socket.assigns.auth)
-    socket = Mob.Socket.assign(socket, :auth, Auth.status())
-
-    if not was and signed_in?(socket.assigns.auth),
-      do: {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen)},
-      else: {:noreply, socket}
-  end
 
   # ── spending ──
 
@@ -219,50 +189,23 @@ defmodule Operator.HomeScreen do
 
   # ── helpers ──
 
-  defp button(label, tag) do
-    tap = {self(), tag}
-    ~MOB(<Button
-  text={label}
-  background={:primary}
-  text_color={:on_primary}
-  padding={:space_sm}
-  fill_width={true}
-  on_tap={tap}
-/>)
-  end
-
-  defp cap_field(draft) do
-    %{
-      type: :text_field,
-      props: %{
-        value: draft,
-        placeholder: "new daily cap in dollars, e.g. 2.50",
-        fill_width: true,
-        on_change: {self(), :cap}
-      },
-      children: []
-    }
-  end
-
   defp refresh_updates(socket) do
     screen = self()
     {:ok, _} = Task.start(fn -> send(screen, {:operator_deliver, :status, Deliver.status()}) end)
     socket
   end
 
-  defp updates_section(%{updates: nil}), do: ~MOB(<Text text="…" text_color={:muted} />)
+  defp updates_section(%{updates: nil}, t), do: [UI.line("…", t, "dim")]
 
-  defp updates_section(%{updates: status, update_note: note}) do
-    lines =
-      for line <- Deliver.status_lines(status) ++ List.wrap(note),
-          do: ~MOB(<Text text={line} text_color={:primary} />)
+  defp updates_section(%{updates: status, update_note: note}, t) do
+    lines = for line <- Deliver.status_lines(status) ++ List.wrap(note), do: UI.line(line, t)
 
     dismiss =
       if status.rollback,
-        do: [button("Dismiss the rollback notice", :dismiss_rollback)],
+        do: [UI.actions(t, [UI.link("dismiss the rollback notice", :dismiss_rollback, t)])],
         else: []
 
-    %{type: :column, props: %{fill_width: true}, children: lines ++ dismiss}
+    lines ++ dismiss
   end
 
   defp spend(socket) do
@@ -272,28 +215,11 @@ defmodule Operator.HomeScreen do
     Mob.Socket.assign(socket, :spend_line, "Today $#{spent} of the $#{cap} daily cap")
   end
 
-  defp dyn_section([]), do: ~MOB(<Text text="No front screens" text_color={:muted} />)
+  defp dyn_section([], t), do: [UI.line("no front screens", t, "dim")]
 
   # One tappable line per front screen (the default front alone has 67).
-  defp dyn_section(screens) do
-    rows =
-      for {name, _mod} <- screens do
-        %{
-          type: :text,
-          props: %{
-            text: "▸ " <> name,
-            text_size: :sm,
-            text_color: :primary,
-            padding: 6,
-            fill_width: true,
-            on_tap: {self(), {:open, name}}
-          },
-          children: []
-        }
-      end
-
-    %{type: :column, props: %{fill_width: true}, children: rows}
-  end
+  defp dyn_section(screens, t),
+    do: for({name, _mod} <- screens, do: UI.item(name, "", {:open, name}, t))
 
   defp dyn(socket),
     do: Mob.Socket.assign(socket, dyn_line: dyn_line(Dyn.status()), dyn: Dyn.screens())
@@ -310,34 +236,8 @@ defmodule Operator.HomeScreen do
   defp stack_line do
     apps = Operator.Diag.apps()
     down = for {app, false} <- apps, app not in [:mnesia, :compiler], do: app
-    if down == [], do: "agent stack: all apps running", else: "agent stack DOWN: #{inspect(down)}"
+    if down == [], do: "all apps running", else: "DOWN: #{inspect(down)}"
   end
-
-  defp auth_section(status) do
-    lines =
-      for provider <- Auth.providers() do
-        text = "#{Auth.label(provider)}: #{auth_line(status[provider])}"
-        ~MOB(<Text text={text} text_color={:primary} />)
-      end
-
-    %{type: :column, props: %{fill_width: true}, children: lines}
-  end
-
-  defp auth_line(%{signed_in: false}), do: "not signed in"
-
-  defp auth_line(%{email: email, expires: expires}) do
-    who = if email, do: "signed in as #{email}", else: "signed in"
-    minutes = div(expires - System.os_time(:millisecond), 60_000)
-
-    token =
-      if minutes > 0,
-        do: "token good for #{div(minutes, 60)} h #{rem(minutes, 60)} min",
-        else: "token refreshes on the next call"
-
-    "#{who} · #{token}"
-  end
-
-  defp signed_in?(status), do: Enum.any?(status, fn {_provider, st} -> st.signed_in end)
 
   defp boot_line do
     t = Operator.Boot.timings()

@@ -18,7 +18,16 @@ defmodule Operator.ChatScreen do
   Long-press a line to copy its whole message (native Markdown rows select
   text instead: long-press, drag the handles, Copy); `[copy]` on a code
   fence copies that block; "copy last reply" copies the last assistant
-  message. The `md:` chip switches the renderer (`Term.put_renderer/1`).
+  message.
+
+  The top bar is `[frontend]` (to the front, `Operator.Toggle`), `[menu]`
+  (`Operator.MenuScreen`: sign-ins, the model, new and past sessions, the
+  renderer, diagnostics) and the status line. The menu tells this screen
+  about a new or resumed session and a renderer change with
+  `{:operator_menu, action}`; a model change arrives as the loop's own
+  event. While no provider is signed in, the transcript ends with a line
+  saying where to sign in. The composer only talks to the agent: there are
+  no chat commands.
 
   On Android the composer has a mic: hold it and talk (`on_press_in` /
   `on_press_out` on a plain box); on release the phone transcribes it offline
@@ -34,11 +43,6 @@ defmodule Operator.ChatScreen do
   or the screen lock's PIN, pattern, password or passcode), whose pass
   activates it.
 
-  `/login anthropic`, `/login openai`, `/login anthropic <code#state>` and
-  `/logout <provider>` are the app's own commands (`Operator.Auth.Login`,
-  `Operator.Auth`): they never reach the model, and their results show as
-  notices.
-
   `operator://` links scanned on the Mac's QR codes (`Operator.Links`)
   come here: a handoff's parts are collected, and the last one switches to
   a new session that opens with the handoff (the model sees it with the
@@ -47,14 +51,12 @@ defmodule Operator.ChatScreen do
   use Mob.Screen
 
   alias Operator.Auth
-  alias Operator.Auth.Login
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
   alias Operator.Core.Loop
-  alias Operator.Core.Models
   alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
@@ -62,6 +64,7 @@ defmodule Operator.ChatScreen do
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
   alias Operator.Links
+  alias Operator.TermUI, as: UI
   alias Operator.Toggle
 
   @flush_ms 100
@@ -69,7 +72,6 @@ defmodule Operator.ChatScreen do
   @stick_retries 4
   @stick_retry_ms 150
   @attach_stick_ms 300
-  @header_chip_size 12
   @toast_ms 1_500
   @window 300
   @max_native 200
@@ -85,7 +87,8 @@ defmodule Operator.ChatScreen do
     :ok = Phone.register_host(self())
     :ok = DynTheme.subscribe()
     if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
-    # A link Diagnostics received: it forwards them here.
+    if Process.whereis(Auth), do: :ok = Auth.subscribe()
+    # A link the menu or Diagnostics received: they forward it here.
     with %{link: link} <- params, do: send(self(), {:operator_link, link})
     # Dictation's offline speech model: fetched once, then loaded in the
     # background so the first hold doesn't wait for it.
@@ -93,7 +96,7 @@ defmodule Operator.ChatScreen do
 
     {:ok,
      socket
-     |> Mob.Socket.assign(window: @window, draft: "", model_draft: nil, toast: nil)
+     |> Mob.Socket.assign(window: @window, draft: "", toast: nil, signed_in: signed_in?())
      |> Mob.Socket.assign(
        settings_dir: settings_dir,
        voice: Settings.voice(settings_dir),
@@ -104,8 +107,7 @@ defmodule Operator.ChatScreen do
        proposal: pending_proposal(),
        activated: nil,
        phone: %{},
-       foreground: true,
-       model_picker: false
+       foreground: true
      )
      |> attach(loop)}
   end
@@ -119,7 +121,6 @@ defmodule Operator.ChatScreen do
       props: %{fill_width: true, fill_height: true, background: bg},
       children:
         [header(assigns, t)] ++
-          model_editor(assigns, t) ++
           [
             %{
               type: :lazy_list,
@@ -131,7 +132,7 @@ defmodule Operator.ChatScreen do
           approval_bar(assigns, t) ++
           [
             composer(assigns, t)
-          ] ++ model_sheet(assigns, t)
+          ]
     }
   end
 
@@ -441,45 +442,30 @@ defmodule Operator.ChatScreen do
     {:noreply, copy(socket, entry && Term.plain_text(entry))}
   end
 
-  # ── header actions ──
+  # ── top bar and menu (Operator.MenuScreen) ──
 
   def handle_info({:tap, :show_earlier}, socket),
     do:
       {:noreply,
        socket |> Mob.Socket.assign(:window, socket.assigns.window + @window) |> refresh()}
 
-  def handle_info({:tap, :new_session}, socket) do
+  def handle_info({:tap, :menu}, socket) do
+    params = %{chat: self(), loop: socket.assigns.loop}
+    {:noreply, Mob.Socket.push_screen(socket, Operator.MenuScreen, params)}
+  end
+
+  def handle_info({:operator_menu, :new_session}, socket) do
     socket = detach(socket)
     {:noreply, attach(socket, Operator.Core.new_session())}
   end
 
-  # The model chip (and `/models`) opens the list of models you can use;
-  # "Custom…" there opens the text field for anything else.
-  def handle_info({:tap, :edit_model}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, model_picker: true, model_draft: nil)}
+  def handle_info({:operator_menu, {:resume, path}}, socket),
+    do: handle_info({:open_session, path}, socket)
 
-  def handle_info({:tap, :close_models}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :model_picker, false)}
+  def handle_info({:operator_menu, :renderer}, socket), do: {:noreply, rerender(socket)}
 
-  def handle_info({:tap, :custom_model}, socket),
-    do:
-      {:noreply,
-       Mob.Socket.assign(socket, model_picker: false, model_draft: socket.assigns.model)}
-
-  def handle_info({:tap, {:pick_model, spec}}, socket) do
-    socket = Mob.Socket.assign(socket, :model_picker, false)
-
-    case Loop.set_model(socket.assigns.loop, spec) do
-      :ok ->
-        {:noreply, Mob.Socket.assign(socket, :model, spec)}
-
-      {:error, :running} ->
-        {:noreply, toast(socket, "Can't change the model while the agent runs")}
-    end
-  end
-
-  def handle_info({:change, :model_draft, value}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :model_draft, value)}
+  def handle_info({:operator_auth, :changed}, socket),
+    do: {:noreply, socket |> Mob.Socket.assign(:signed_in, signed_in?()) |> refresh()}
 
   # A session file brought over from omp (scripts/session.sh push).
   def handle_info({:open_session, path}, socket) do
@@ -492,39 +478,11 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  def handle_info({:tap, :save_model}, socket) do
-    model = String.trim(socket.assigns.model_draft || "")
-    model = if String.contains?(model, ":"), do: model, else: Session.from_pi_model(model)
-
-    case Loop.set_model(socket.assigns.loop, model) do
-      :ok ->
-        {:noreply, Mob.Socket.assign(socket, model_draft: nil, model: model)}
-
-      {:error, :running} ->
-        {:noreply, toast(socket, "Can't change the model while the agent runs")}
-    end
-  end
-
-  # ── sign-in (`/login`, Operator.Auth.Login) ──
-
-  def handle_info({:operator_login, provider, :ok}, socket) do
-    who =
-      case Auth.get(provider) do
-        {:ok, %{"email" => email}} -> " as #{email}"
-        _ -> ""
-      end
-
-    {:noreply, lasting_toast(socket, "Signed in to #{Auth.label(provider)}#{who}.")}
-  end
-
-  def handle_info({:operator_login, provider, {:error, message}}, socket),
-    do: {:noreply, lasting_toast(socket, "Sign-in to #{Auth.label(provider)} failed: #{message}")}
-
   # ── operator:// links (Operator.Links) ──
 
   # Scanned with another app, a link arrives as mob's {:link, ...}
-  # (Mob.Link); Diagnostics forwards its own through `mount/3`. The scan
-  # happens with that app in front, so the toasts last.
+  # (Mob.Link); the menu and Diagnostics forward theirs through `mount/3`.
+  # The scan happens with that app in front, so the toasts last.
   def handle_info({:link, %{url: link}}, socket) when is_binary(link),
     do: handle_info({:operator_link, link}, socket)
 
@@ -549,16 +507,8 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  # The toggle in the header's corner: to the front.
+  # `[frontend]` in the top bar: to the front.
   def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
-
-  def handle_info({:tap, :diagnostics}, socket),
-    do: {:noreply, Mob.Socket.push_screen(socket, Operator.HomeScreen)}
-
-  def handle_info({:tap, :toggle_renderer}, socket) do
-    Term.put_renderer(if Term.renderer() == :native, do: :term, else: :native)
-    {:noreply, rerender(socket)}
-  end
 
   # A Dyn generation changed the theme (Operator.Core.DynTheme): rows have
   # its colours baked in.
@@ -748,10 +698,17 @@ defmodule Operator.ChatScreen do
     earlier = if hidden > 0, do: [earlier_row(hidden)], else: []
     toast = if a.toast, do: [Term.notice_row(a.toast, "toast")], else: []
 
+    sign_in =
+      if a.signed_in,
+        do: [],
+        else: [
+          Term.notice_row("Not signed in to a model: [menu] › accounts to sign in.", "sign-in")
+        ]
+
     proposal =
       if a.proposal, do: Term.entry_rows(a.proposal.entry, a.proposal.key, owner), else: []
 
-    Mob.Socket.assign(socket, :visible, earlier ++ rows ++ proposal ++ toast)
+    Mob.Socket.assign(socket, :visible, earlier ++ rows ++ proposal ++ sign_in ++ toast)
   end
 
   @doc false
@@ -819,10 +776,6 @@ defmodule Operator.ChatScreen do
       text == "" ->
         {:noreply, socket}
 
-      command?(text) ->
-        {:noreply,
-         socket |> Mob.Socket.assign(:draft, "") |> command(String.split(text, ~r/\s+/, parts: 3))}
-
       socket.assigns.status == :running ->
         :ok = Loop.steer(socket.assigns.loop, text)
         {:noreply, Mob.Socket.assign(socket, draft: "", following: true)}
@@ -837,86 +790,14 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  # `/login`, `/logout` and `/models` are the app's: they never reach the model.
-  defp command?(text), do: Regex.match?(~r{^/(log(in|out)|models)(\s|$)}, text)
-
-  defp command(socket, ["/models" | _]), do: Mob.Socket.assign(socket, :model_picker, true)
-
-  defp command(socket, ["/login", name]) do
-    with {:ok, provider} <- Auth.parse_provider(name),
-         {:ok, url} <- Login.begin(provider) do
-      host = URI.parse(url).host
-      lasting_toast(socket, "Opening #{host}: sign in there, then come back to Operator.")
-    else
-      :error -> toast(socket, login_usage())
-      {:error, reason} -> toast(socket, "Couldn't start the sign-in: #{inspect(reason)}")
-    end
-  end
-
-  # What Anthropic's page shows when it doesn't redirect back (`code#state`).
-  defp command(socket, ["/login", name, pasted]) do
-    with {:ok, provider} <- Auth.parse_provider(name),
-         :ok <- Login.paste(provider, pasted) do
-      lasting_toast(socket, "Code received: finishing the sign-in…")
-    else
-      :error -> toast(socket, login_usage())
-      {:error, reason} -> toast(socket, paste_error(reason, name))
-    end
-  end
-
-  defp command(socket, ["/logout", name]) do
-    case Auth.parse_provider(name) do
-      {:ok, provider} -> logout(socket, provider)
-      :error -> toast(socket, login_usage())
-    end
-  end
-
-  defp command(socket, _usage), do: lasting_toast(socket, login_usage())
-
-  defp logout(socket, provider) do
-    case Auth.delete(provider) do
-      :ok ->
-        toast(socket, "Signed out of #{Auth.label(provider)}.")
-
-      {:error, reason} ->
-        lasting_toast(
-          socket,
-          "Couldn't sign out of #{Auth.label(provider)} (#{Auth.describe_error(reason)}): " <>
-            "it is still signed in."
-        )
-    end
-  end
-
-  defp login_usage do
-    signed_in =
-      for {provider, %{signed_in: true} = st} <- Auth.status() do
-        Auth.name(provider) <> if(st.email, do: " (#{st.email})", else: "")
-      end
-
-    "/login anthropic (Claude Pro/Max) or /login openai (ChatGPT Plus/Pro); " <>
-      "/logout <provider>. Signed in: " <>
-      if(signed_in == [], do: "none", else: Enum.join(signed_in, ", "))
-  end
-
-  defp paste_error(:no_login_started, name),
-    do: "Type /login #{name} first, then paste the code its page shows."
-
-  defp paste_error({:started_for, other}, name),
-    do: "The sign-in in progress is for #{Auth.name(other)}: type /login #{name} again."
-
-  defp paste_error(:state_mismatch, name),
-    do: "That code is from another sign-in: type /login #{name} again."
-
-  defp paste_error(:no_code, _name),
-    do: "No code in that: paste what the page shows (code#state)."
-
-  # News that arrives while another app is in front (the browser during a
-  # sign-in, a QR app during a handoff) stays up long enough to be seen on
-  # return.
+  # News that arrives while another app is in front (a QR app during a
+  # handoff) stays up long enough to be seen on return.
   defp lasting_toast(socket, text) do
     Process.send_after(self(), {:clear_toast, text}, 20_000)
     socket |> Mob.Socket.assign(:toast, text) |> repaint()
   end
+
+  defp signed_in?, do: Enum.any?(Auth.status(), fn {_provider, st} -> st.signed_in end)
 
   # Once per screen: a run may go on in the background, and its notification
   # needs this on Android 13+ (granted without asking before that).
@@ -1230,145 +1111,47 @@ defmodule Operator.ChatScreen do
     cost = :erlang.float_to_binary(a.totals.cost, decimals: 4)
     line = "#{a.status}#{queued} · $#{cost} · #{tokens} tok · #{model}"
 
-    bar_row(t, [
-      Toggle.button(),
-      text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2),
-      header_chip("new", :new_session, t),
-      header_chip("model", :edit_model, t),
-      header_chip("diag", :diagnostics, t),
-      header_chip("md:#{Term.renderer(t)}", :toggle_renderer, t)
+    UI.top_bar(t, [
+      UI.link("menu", :menu, t),
+      UI.text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2)
     ])
-  end
-
-  defp model_sheet(%{model_picker: false}, _t), do: []
-
-  # The models you can use now (Operator.Core.Models), by provider; the
-  # current one marked. Tapping one switches this session to it.
-  defp model_sheet(a, t) do
-    rows =
-      Enum.flat_map(Models.by_provider(), fn {provider, signed_in, models} ->
-        heading = text(Auth.label(provider), t, "dim", text_size: t.text_size - 1)
-
-        body =
-          if signed_in,
-            do: Enum.map(models, &model_row(&1, a.model, t)),
-            else: [
-              text("/login #{Auth.name(provider)} to add these", t, "dim", font: :term_italic)
-            ]
-
-        [heading | body] ++ [%{type: :spacer, props: %{size: 12}, children: []}]
-      end)
-
-    custom = %{
-      type: :text,
-      props: %{
-        text: "Custom model…",
-        on_tap: {self(), :custom_model},
-        font: :term,
-        text_size: t.text_size,
-        text_color: Term.color(t, "accent"),
-        padding: 10
-      },
-      children: []
-    }
-
-    [
-      Mob.UI.sheet(
-        %{
-          type: :scroll,
-          props: %{fill_width: true, background: Term.color(t, "bar")},
-          children: [
-            %{
-              type: :column,
-              props: %{fill_width: true, padding: 12, background: Term.color(t, "bar")},
-              children: rows ++ [custom]
-            }
-          ]
-        },
-        detents: [:medium, :large],
-        on_dismiss: {self(), :close_models},
-        background: Term.color(t, "bar")
-      )
-    ]
-  end
-
-  defp model_row(model, current, t) do
-    chosen = Models.same?(model.spec, current)
-    context = if model.context, do: "  " <> context_label(model.context), else: ""
-
-    %{
-      type: :text,
-      props: %{
-        text: if(chosen, do: "● ", else: "  ") <> model.name <> context,
-        on_tap: {self(), {:pick_model, model.spec}},
-        font: if(chosen, do: :term_bold, else: :term),
-        text_size: t.text_size,
-        text_color: Term.color(t, if(chosen, do: "user", else: "fg")),
-        padding: 6,
-        fill_width: true
-      },
-      children: []
-    }
-  end
-
-  defp context_label(tokens) when tokens >= 1_000_000 and rem(tokens, 1_000_000) == 0,
-    do: "#{div(tokens, 1_000_000)}M"
-
-  defp context_label(tokens), do: "#{div(tokens, 1000)}k"
-
-  defp model_editor(%{model_draft: nil}, _t), do: []
-
-  defp model_editor(a, t) do
-    [
-      bar_row(t, [
-        field(a.model_draft, "anthropic:… or openai_codex:…", :model_draft, t, weight: 1),
-        chip("save", :save_model, t)
-      ])
-    ]
   end
 
   defp footer(a, t) do
     detail = a.detail || if(a.status == :running, do: "working…", else: "")
 
-    bar_row(t, [
-      text(detail, t, "dim",
+    UI.bar_row(t, [
+      UI.text(detail, t, "dim",
         weight: 1,
         max_lines: 1,
         font: :term_italic,
         text_size: t.text_size - 2
       ),
-      footer_link("[voice:#{a.voice}]", :cycle_voice, t),
-      footer_link("[copy last reply]", :copy_last, t)
+      footer_link("voice:#{a.voice}", :cycle_voice, t),
+      footer_link("copy last reply", :copy_last, t)
     ])
   end
 
-  defp footer_link(label, tag, t) do
-    %{
-      type: :text,
-      props: %{
-        text: label,
-        on_tap: {self(), tag},
-        font: :term,
-        text_size: t.text_size - 2,
-        text_color: Term.color(t, "accent")
-      },
-      children: []
-    }
-  end
+  defp footer_link(label, tag, t),
+    do: UI.link(label, tag, t, text_size: t.text_size - 2, padding: 0)
 
   defp composer(a, t) do
     running = a.status == :running
     send_label = if running, do: "Steer", else: "Send"
-    stop = if running, do: [chip("Stop", :stop, t, "error")], else: []
+    stop = if running, do: [UI.chip("Stop", :stop, t, "error")], else: []
 
-    bar_row(
+    UI.bar_row(
       t,
       [
-        field(a.draft, if(running, do: "› steer the agent…", else: "› ask Operator…"), :draft, t,
+        UI.field(
+          a.draft,
+          if(running, do: "› steer the agent…", else: "› ask Operator…"),
+          :draft,
+          t,
           weight: 1,
           on_submit: {self(), :draft}
         )
-      ] ++ mic(a, t) ++ [chip(send_label, :send, t, "user")] ++ stop
+      ] ++ mic(a, t) ++ [UI.chip(send_label, :send, t, "user")] ++ stop
     )
   end
 
@@ -1400,7 +1183,7 @@ defmodule Operator.ChatScreen do
             fill_width: false
           },
           children: [
-            text(label, t, if(label == "mic", do: "fg", else: "error"),
+            UI.text(label, t, if(label == "mic", do: "fg", else: "error"),
               text_size: t.text_size - 1
             )
           ]
@@ -1411,40 +1194,16 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  defp bar_row(t, children) do
-    %{
-      type: :row,
-      props: %{
-        fill_width: true,
-        padding: 6,
-        gap: 6,
-        background: Term.color(t, "bar"),
-        align: :center
-      },
-      children: children
-    }
-  end
-
-  defp text(text, t, color, opts) do
-    props =
-      Map.merge(
-        %{text: text, font: :term, text_size: t.text_size, text_color: Term.color(t, color)},
-        Map.new(opts)
-      )
-
-    %{type: :text, props: props, children: []}
-  end
-
   defp approval_bar(%{proposal: %{gen: n}}, t) do
     [
-      bar_row(t, [
-        text("proposal G#{n}", t, "accent",
+      UI.bar_row(t, [
+        UI.text("proposal G#{n}", t, "accent",
           weight: 1,
           max_lines: 1,
           text_size: t.text_size - 1
         ),
         approve_chip(n, t),
-        chip("deny", :deny_proposal, t, "error")
+        UI.chip("deny", :deny_proposal, t, "error")
       ])
     ]
   end
@@ -1467,49 +1226,7 @@ defmodule Operator.ChatScreen do
         font: Term.markdown_props(t).font_regular
       )
     else
-      chip("approve", :approve_proposal, t, "user")
+      UI.chip("approve", :approve_proposal, t, "user")
     end
-  end
-
-  defp chip(label, tag, t, color \\ "fg") do
-    %{
-      type: :button,
-      props: %{
-        text: label,
-        on_tap: {self(), tag},
-        font: :term,
-        text_size: t.text_size - 1,
-        text_color: Term.color(t, color),
-        background: Term.color(t, "code_bg"),
-        padding: 6,
-        fill_width: false
-      },
-      children: []
-    }
-  end
-
-  # The header has four chips in one row: a theme's bigger text mustn't push
-  # them off the screen (seen at text_size 15).
-  defp header_chip(label, tag, t),
-    do: put_in(chip(label, tag, t), [:props, :text_size], min(t.text_size - 1, @header_chip_size))
-
-  defp field(value, placeholder, tag, t, opts) do
-    props =
-      Map.merge(
-        %{
-          value: value,
-          placeholder: placeholder,
-          on_change: {self(), tag},
-          font: :term,
-          text_size: t.text_size,
-          text_color: Term.color(t, "fg"),
-          placeholder_color: Term.color(t, "dim"),
-          background: Term.color(t, "code_bg"),
-          border_color: Term.color(t, "code_bg")
-        },
-        Map.new(opts)
-      )
-
-    %{type: :text_field, props: props, children: []}
   end
 end

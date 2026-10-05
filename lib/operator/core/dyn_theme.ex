@@ -164,7 +164,7 @@ defmodule Operator.Core.DynTheme do
           {%{}, {:error, reason}}
       end
 
-    # Keep the renderer the user chose (the md: chip); the rest comes from the theme.
+    # Keep the renderer the user chose (menu › renderer); the rest comes from the theme.
     renderer = Term.theme().renderer
     :ok = Term.put_theme(Map.put(overrides, :renderer, renderer))
     for pid <- Map.keys(s.subs), do: send(pid, {:operator_theme, :changed})

@@ -46,29 +46,9 @@ defmodule Operator.Auth do
   @spec providers() :: [provider()]
   def providers, do: @providers
 
-  @doc "What the user calls a provider: the `/login` argument."
-  @spec name(provider()) :: String.t()
-  def name(:anthropic), do: "anthropic"
-  def name(:openai_codex), do: "openai"
-
   @spec label(provider()) :: String.t()
   def label(:anthropic), do: "Claude (Anthropic)"
   def label(:openai_codex), do: "ChatGPT (OpenAI Codex)"
-
-  @doc "The provider a `/login` / `/logout` argument names."
-  @spec parse_provider(String.t()) :: {:ok, provider()} | :error
-  def parse_provider(name) do
-    case String.downcase(name) do
-      n when n in ["anthropic", "claude"] ->
-        {:ok, :anthropic}
-
-      n when n in ["openai", "openai-codex", "openai_codex", "codex", "chatgpt"] ->
-        {:ok, :openai_codex}
-
-      _ ->
-        :error
-    end
-  end
 
   @doc ~S|The provider whose sign-in a req_llm model spec needs (`"anthropic:…"`, `"openai_codex:…"`).|
   @spec provider_for_model(String.t()) :: {:ok, provider()} | :error
@@ -131,7 +111,7 @@ defmodule Operator.Auth do
   A usable access token (and the ChatGPT account id for OpenAI), refreshed
   first when it's within 5 minutes of expiry. `{:error, :signed_out}` when
   there is no sign-in; `{:error, {:refresh_failed, message}}` when the
-  refresh didn't work (a dead grant needs `/login` again);
+  refresh didn't work (a dead grant needs signing in again);
   `{:error, {:store_failed, reason}}` while a refreshed sign-in couldn't be
   saved yet (it is retried; the old refresh token is spent, so it is never
   used again).

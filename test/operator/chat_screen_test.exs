@@ -13,15 +13,14 @@ defmodule Operator.ChatScreenTest do
   alias Operator.ChatScreen.Follow
   alias Operator.Core.ApproveButton
   alias Operator.Core.Loop
-  alias Operator.Core.Models
   alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
+  alias Operator.Core.Term
   alias Operator.Handoff
   alias Operator.Handoff.Inbox
   alias Operator.Test.FakeLLM
   alias Operator.Test.FakeNative
-  alias Operator.Test.FlakySecureStore
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -274,15 +273,16 @@ defmodule Operator.ChatScreenTest do
 
     {:ok, session, entries} = Session.open(session.path, model())
     %{view: view} = mount_chat(dir, [], session: {session, entries})
-    # 801 lines: the model_change line plus two per question
+    # 801 lines: the model_change line plus two per question; then the
+    # signed-out notice (no provider is signed in here)
     visible = assigns(view).visible
-    assert Enum.count(visible) == 301
+    assert Enum.count(visible) == 302
     assert hd(visible).props.text =~ "show 501 earlier lines"
-    assert List.last(visible).props.id == "m400.1"
+    assert [%{props: %{id: "m400.1"}}, %{props: %{id: "sign-in"}}] = Enum.take(visible, -2)
     assert view |> flatten() |> Enum.count() < 700
 
     view = render_info(view, {:tap, :show_earlier})
-    assert Enum.count(assigns(view).visible) == 601
+    assert Enum.count(assigns(view).visible) == 602
   end
 
   test "the window holds at most max_native native views (mob has 256 component slots)" do
@@ -297,15 +297,31 @@ defmodule Operator.ChatScreenTest do
     assert ChatScreen.window([newer, older], [n.(:s)], 2, 3) == {[n.(:a2), n.(:s)], 3}
   end
 
-  test "the md chip switches to native Markdown views; code blocks keep Copy", %{tmp_dir: dir} do
+  test "the top bar is [frontend] and [menu] (no dial); the menu opens on the session's loop",
+       %{tmp_dir: dir} do
+    %{view: view, loop: loop} = mount_chat(dir, [])
+    assert find(view, :text, text: "[frontend]") && find(view, :text, text: "[menu]")
+    assert find_all(view, :image) == []
+    assert view |> render_info({:tap, :operator_toggle}) |> navigated_to() == Operator.ShellScreen
+
+    view = render_info(view, {:tap, :menu})
+    test = self()
+
+    assert {:push, Operator.MenuScreen, %{chat: ^test, loop: ^loop}} =
+             view.socket.__mob__.nav_action
+  end
+
+  test "a renderer change from the menu re-renders the transcript; code blocks keep Copy", %{
+    tmp_dir: dir
+  } do
     on_exit(fn -> :persistent_term.erase({Operator.Core.Term, :theme}) end)
     reply = "Run **this**:\n```sh\nmix test\n```\nthen *done*"
     %{view: view} = mount_chat(dir, [[{:text, reply}]])
-    assert button?(view, "md:term")
+    view = view |> send_text("how?") |> pump(:agent_end)
+    assert find_all(view, :native_view) == []
 
-    view = view |> render_info({:tap, :toggle_renderer}) |> send_text("how?")
-    assert button?(view, "md:native")
-    view = pump(view, :agent_end)
+    Term.put_renderer(:native)
+    view = render_info(view, {:operator_menu, :renderer})
 
     assert ["Run **this**:", "then *done*"] =
              view |> find_all(:native_view) |> Enum.map(& &1.props.text)
@@ -315,113 +331,76 @@ defmodule Operator.ChatScreenTest do
     assert_received {:clipboard, "mix test"}
 
     # back to our own parser: the finished messages re-render
-    view = render_info(view, {:tap, :toggle_renderer})
+    Term.put_renderer(:term)
+    view = render_info(view, {:operator_menu, :renderer})
     assert find_all(view, :native_view) == []
     assert text(view) =~ "Run"
     assert %{props: %{font: :term_italic}} = find(view, :text, text: "done")
   end
 
-  test "the model can be changed while idle", %{tmp_dir: dir} do
+  test "a model set from the menu shows in the top bar", %{tmp_dir: dir} do
     %{view: view, loop: loop} = mount_chat(dir, [])
-
-    # omp's provider/model form works too
-    view =
-      view
-      |> render_info({:tap, :edit_model})
-      |> render_info({:change, :model_draft, "openai-codex/gpt-5-mini"})
-      |> render_info({:tap, :save_model})
+    :ok = Loop.set_model(loop, "openai_codex:gpt-5-mini")
+    view = pump(view, :model_change)
 
     assert assigns(view).model == "openai_codex:gpt-5-mini"
-    assert Loop.snapshot(loop).model == "openai_codex:gpt-5-mini"
     # status and cost first, the model's short name last (the line is cut at the end)
     assert text(view) =~ "idle · $0.0000 · 0 tok · gpt-5-mini"
   end
 
-  describe "sign-in commands" do
+  test "new session and resume, from the menu", %{tmp_dir: dir} do
+    start_current(dir, [[{:text, "One."}]], [], Operator.Core.Current)
+    view = mount_screen(ChatScreen, %{settings_dir: dir})
+    first = assigns(view).sid
+    view = view |> send_text("first") |> pump(:agent_end)
+    path = Loop.snapshot(assigns(view).loop).path
+
+    view = render_info(view, {:operator_menu, :new_session})
+    assert assigns(view).sid != first
+    assert Operator.Core.current() == assigns(view).loop
+    refute text(view) =~ "› first"
+
+    view = render_info(view, {:operator_menu, {:resume, path}})
+    assert assigns(view).sid == first
+    assert text(view) =~ "› first"
+    assert text(view) =~ "One."
+  end
+
+  test "the composer only talks to the agent: the old /login and /models are prompts", %{
+    tmp_dir: dir
+  } do
+    %{view: view, llm: llm} = mount_chat(dir, [[{:text, "ok"}], [{:text, "ok"}]])
+    view = view |> send_text("/login anthropic") |> pump(:agent_end)
+    view = view |> send_text("/models") |> pump(:agent_end)
+
+    sent =
+      for %{messages: messages} <- FakeLLM.requests(llm),
+          do: messages |> List.last() |> Map.fetch!(:content) |> hd() |> Map.fetch!(:text)
+
+    assert sent == ["/login anthropic", "/models"]
+    assert text(view) =~ "› /login anthropic"
+    assert find(view, :sheet) == nil
+  end
+
+  describe "signed out" do
     setup do
-      {:ok, sock} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
-      {:ok, port} = :inet.port(sock)
-      :gen_tcp.close(sock)
-      test = self()
-
-      token_endpoint = fn _req ->
-        body = %{
-          "access_token" => "at",
-          "refresh_token" => "rt",
-          "expires_in" => 28_800,
-          "account" => %{"email_address" => "k@example.com"}
-        }
-
-        Req.Response.new(status: 200, body: Jason.encode!(body))
-      end
-
       start_supervised!(Operator.Auth)
-
-      start_supervised!(
-        {Operator.Auth.Login,
-         open_url: fn url ->
-           send(test, {:opened, url})
-           :ok
-         end,
-         redirect: fn _provider -> "http://localhost:#{port}/callback" end,
-         respond: token_endpoint}
-      )
 
       on_exit(fn ->
         for p <- Operator.Auth.providers(), do: Operator.SecureStore.delete("auth:#{p}")
       end)
     end
 
-    test "/login and /logout never reach the model; their results show as notices", %{
-      tmp_dir: dir
-    } do
-      %{view: view, loop: loop, llm: llm} = mount_chat(dir, [])
+    test "the transcript says where to sign in, until a provider is signed in", %{tmp_dir: dir} do
+      for p <- Operator.Auth.providers(), do: :ok = Operator.Auth.delete(p)
+      %{view: view} = mount_chat(dir, [])
+      assert text(view) =~ "Not signed in to a model: [menu] › accounts to sign in."
 
-      view = send_text(view, "/login anthropic")
-      assert_received {:opened, "https://claude.ai/oauth/authorize?" <> query}
-      assert assigns(view).draft == ""
-      assert text(view) =~ "Opening claude.ai"
-
-      # Anthropic's code page: paste code#state after the command
-      state = URI.decode_query(query)["state"]
-      view = send_text(view, "/login anthropic the-code##{state}")
-      assert text(view) =~ "Code received"
-
-      assert_receive {:operator_login, :anthropic, :ok} = done, 2_000
-      view = render_info(view, done)
-      assert text(view) =~ "Signed in to Claude (Anthropic) as k@example.com."
-
-      view = send_text(view, "/login")
-      assert text(view) =~ "Signed in: anthropic (k@example.com)"
-
-      view = send_text(view, "/login anthropic stale-code#other-state")
-      assert text(view) =~ "Type /login anthropic first"
-
-      view = send_text(view, "/logout anthropic")
-      assert text(view) =~ "Signed out of Claude (Anthropic)."
-      refute Operator.Auth.signed_in?(:anthropic)
-
-      view = send_text(view, "/login nonsense")
-      assert text(view) =~ "/login anthropic (Claude Pro/Max) or /login openai"
-
-      assert FakeLLM.requests(llm) == []
-      assert Loop.snapshot(loop).entries == []
-      assert assigns(view).status == :idle
-    end
-
-    test "a /logout the store refuses says so, and the sign-in stays", %{tmp_dir: dir} do
       creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
       :ok = Operator.Auth.put(:anthropic, creds)
-      FlakySecureStore.install([:delete])
-      on_exit(&FlakySecureStore.restore/0)
-
-      %{view: view} = mount_chat(dir, [])
-      view = send_text(view, "/logout anthropic")
-
-      assert text(view) =~
-               "Couldn't sign out of Claude (Anthropic) (:disk_full): it is still signed in."
-
-      assert Operator.Auth.signed_in?(:anthropic)
+      assert_receive {:operator_auth, :changed} = changed
+      view = render_info(view, changed)
+      refute text(view) =~ "Not signed in"
     end
   end
 
@@ -909,70 +888,6 @@ defmodule Operator.ChatScreenTest do
           Operator.Core.Tools.PickPhotos
         ] do
       assert tool.selftest() == :ok, inspect(tool)
-    end
-  end
-
-  describe "model picker" do
-    setup do
-      start_supervised!(Operator.Auth)
-      creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
-      :ok = Operator.Auth.put(:anthropic, creds)
-
-      on_exit(fn ->
-        for p <- Operator.Auth.providers(), do: Operator.SecureStore.delete("auth:#{p}")
-      end)
-    end
-
-    defp sheet(view), do: find(view, :sheet)
-
-    test "the model chip lists the signed-in provider's models; tapping one switches", %{
-      tmp_dir: dir
-    } do
-      %{view: view, loop: loop} = mount_chat(dir, [])
-      assert sheet(view) == nil
-
-      view = render_info(view, {:tap, :edit_model})
-      shown = view |> sheet() |> text()
-      assert shown =~ "Claude Sonnet"
-      assert shown =~ "Claude Haiku 4.5"
-      # retired models aren't offered
-      refute shown =~ "Claude Haiku 3"
-      # ChatGPT isn't signed in: a hint, no Codex models
-      assert shown =~ "/login openai to add these"
-      refute shown =~ "GPT-6"
-
-      opus = Enum.find(Models.catalog(:anthropic), &(&1.name =~ "Opus"))
-      view = render_info(view, {:tap, {:pick_model, opus.spec}})
-      assert sheet(view) == nil
-      assert Loop.snapshot(loop).model == opus.spec
-
-      # the current one is marked
-      view = render_info(view, {:tap, :edit_model})
-      assert view |> sheet() |> text() =~ "● " <> opus.name
-    end
-
-    test "/models opens it without reaching the model; Custom… opens the field", %{
-      tmp_dir: dir
-    } do
-      %{view: view, llm: llm} = mount_chat(dir, [])
-      view = send_text(view, "/models")
-      assert sheet(view) != nil
-      assert FakeLLM.requests(llm) == []
-
-      view = render_info(view, {:tap, :custom_model})
-      assert sheet(view) == nil
-      assert button?(view, "save")
-    end
-
-    test "ChatGPT signed in: omp's Codex models are listed" do
-      creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
-      :ok = Operator.Auth.put(:openai_codex, creds)
-
-      assert [{:anthropic, true, [_ | _]}, {:openai_codex, true, codex}] = Models.by_provider()
-
-      assert Enum.any?(codex, &(&1.spec == "openai_codex:gpt-5.5"))
-      refute Enum.any?(codex, &String.contains?(&1.spec, "image"))
-      assert Models.same?("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5-20251001")
     end
   end
 

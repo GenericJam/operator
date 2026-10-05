@@ -1,12 +1,13 @@
 defmodule Operator.Core.Models do
   @moduledoc """
-  The models Operator can call right now, like omp's `/models`: the static
-  catalog filtered to the providers that are signed in (`Operator.Auth`).
+  The models Operator can call right now (menu › model, like omp's
+  `/models`): the static catalog filtered to the providers that are signed
+  in (`Operator.Auth`).
 
-    * Claude (`/login anthropic`): llm_db's Anthropic models (the catalog
+    * Claude: llm_db's Anthropic models (the catalog
       req_llm resolves them through), retired and deprecated ones left out,
       newest first within Opus, Sonnet, Haiku, then the rest.
-    * ChatGPT (`/login openai`): the Codex backend serves its own set, which
+    * ChatGPT: the Codex backend serves its own set, which
       llm_db doesn't list; `priv/models/openai_codex.json` is omp's list
       (its source and version are in the file).
   """

@@ -34,7 +34,7 @@ defmodule Operator.RescueScreen do
     ~MOB"""
     <Scroll background={:background}>
       <Column background={:background} padding={:space_lg}>
-        {Toggle.title("Rescue")}
+        {Operator.TermUI.title_bar("Rescue")}
         <Text text={status_line(assigns.status)} text_color={:primary} />
         {message(assigns.message)}
         <Spacer size={8} />

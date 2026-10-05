@@ -97,7 +97,7 @@ defmodule Operator.Auth.LoginTest do
     assert_received {:token_request, %{"code" => "good"}}
   end
 
-  test "a new /login cancels an exchange still running for the old one" do
+  test "a new sign-in cancels an exchange still running for the old one" do
     {:ok, _url} = Login.begin(:anthropic)
     state = opened_state()
     :ok = Login.paste(:anthropic, "slow##{state}")
@@ -118,7 +118,7 @@ defmodule Operator.Auth.LoginTest do
 
     {:ok, _url} = Login.begin(:anthropic)
     assert_receive {:operator_login, :anthropic, {:error, message}}, 1_000
-    assert message =~ "type /login anthropic to try again"
+    assert message =~ "sign in again from [menu] › accounts"
     assert {:error, _} = Req.get("http://127.0.0.1:#{port}/callback", retry: false)
   end
 
