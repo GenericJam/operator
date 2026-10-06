@@ -243,7 +243,7 @@ defmodule Operator.MenuScreenTest do
 
       shown = text(view)
       assert shown =~ "Claude Sonnet"
-      assert shown =~ "● Claude Haiku 4.5"
+      assert shown =~ ~r/● +Claude Haiku 4.5/
       # retired models aren't offered
       refute shown =~ "Claude Haiku 3"
       # ChatGPT isn't signed in: a hint, no Codex models
@@ -257,7 +257,7 @@ defmodule Operator.MenuScreenTest do
 
       # the current one is marked
       view = mount_on(loop, dir, :model)
-      assert text(view) =~ "● " <> opus.name
+      assert text(view) =~ ~r/● +#{Regex.escape(opus.name)}/
     end
 
     test "a custom model, in omp's provider/model form too", %{tmp_dir: dir} do
@@ -321,7 +321,7 @@ defmodule Operator.MenuScreenTest do
 
       assert_renderable(view)
       shown = text(view)
-      assert shown =~ "● Current work"
+      assert shown =~ ~r/● +Current work/
       assert shown =~ "  Older work"
       assert shown =~ "3d ago"
       assert :binary.match(shown, "Current work") < :binary.match(shown, "Older work")

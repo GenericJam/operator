@@ -159,6 +159,7 @@ defmodule Operator.TermUI do
   def item(label, value, tag, t, opts \\ []) do
     lead = if opts[:mark], do: "● ", else: "  "
     font = if opts[:bold], do: :term_bold, else: :term
+    color = Keyword.get(opts, :color, "fg")
 
     %{
       type: :box,
@@ -173,11 +174,15 @@ defmodule Operator.TermUI do
           type: :row,
           props: %{fill_width: true, gap: 8, align: :center},
           children: [
-            text(lead <> label, t, Keyword.get(opts, :color, "fg"),
-              font: font,
-              weight: 1,
-              max_lines: 2
-            ),
+            # The lead apart from the label, so a wrapped label stays under itself.
+            %{
+              type: :row,
+              props: %{weight: 1, align: :center},
+              children: [
+                text(lead, t, color, font: font, max_lines: 1),
+                text(label, t, color, font: font, weight: 1, max_lines: 2)
+              ]
+            },
             text(value, t, "dim", max_lines: 1, text_size: t.text_size - 1),
             text("›", t, "dim")
           ]
