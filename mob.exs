@@ -117,11 +117,6 @@ config :mob, :trusted_plugins, %{
   mob_nx_eigen: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg="
 }
 
-# mob_whisper comes from its git tag until Hex has it (mix.exs), and a git
-# checkout carries no signature (CI signs only what it publishes to Hex): until
-# then the trust gate is acknowledged for it. Drop this with the switch to Hex.
-config :mob, :acknowledge_unsafe_plugins, [:mob_whisper]
-
 # Style packages the front may use (mob_themes, as `mix mob.new` sets up). No
 # :default_style: Operator's own theme stays as the Core and Dyn set it.
 config :mob, :styles, [:mob_themes]
