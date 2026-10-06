@@ -1002,6 +1002,30 @@ defmodule Operator.ChatScreenTest do
 
       assert_received {:phone_reply, ^ref, {:ok, :cancelled}}
     end
+
+    test "an action whose native side can't start is answered at once, not left waiting", %{
+      tmp_dir: dir
+    } do
+      %{view: view} = mount_chat(dir, [])
+      Process.put(:fake_native_result, {:error, :unavailable})
+      [r1, r2] = [make_ref(), make_ref()]
+
+      view =
+        view
+        |> render_info({:phone_request, r1, self(), :pick_photos, %{max: 1}})
+        |> render_info({:phone_request, r2, self(), :location, %{}})
+
+      assert_received {:phone_reply, ^r1, {:error, "Couldn't start pick_photos: :unavailable"}}
+      assert_received {:phone_reply, ^r2, {:error, "Couldn't start location: :unavailable"}}
+      assert assigns(view).phone == %{}
+
+      # nothing is left waiting, so the next request isn't refused as a duplicate
+      Process.delete(:fake_native_result)
+      r3 = make_ref()
+      render_info(view, {:phone_request, r3, self(), :pick_photos, %{max: 1}})
+      assert_received {:phone_call, :pick_photos, %{max: 1}}
+      refute_received {:phone_reply, ^r3, _}
+    end
   end
 
   # A tool process that has already given up.

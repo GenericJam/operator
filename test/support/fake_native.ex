@@ -24,7 +24,7 @@ defmodule Operator.Test.FakeNative do
   @impl true
   def request_permission(capability) do
     send(self(), {:requested_permission, capability})
-    :ok
+    Process.get(:fake_native_result, :ok)
   end
 
   # Tests run the Keeper with Operator.Test.Dyn.Approval, which needs no confirmation.
@@ -37,7 +37,7 @@ defmodule Operator.Test.FakeNative do
   @impl true
   def phone(action, args) do
     send(self(), {:phone_call, action, args})
-    :ok
+    Process.get(:fake_native_result, :ok)
   end
 
   @doc "A lazy list (Android, item indexes) showing items `first..first+visible-1` of `total`."

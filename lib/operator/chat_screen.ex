@@ -960,15 +960,25 @@ defmodule Operator.ChatScreen do
 
   # Each action waits under its own key as `{ref, from, args, started}`;
   # `:permission` requests wait as a list of `{ref, from}` under
-  # `{:permission, capability}` (handle_info above).
+  # `{:permission, capability}` (handle_info above). An action whose picker
+  # or permission request can't even start (e.g. its NIF isn't loaded) is
+  # answered at once instead of waiting out the tool's timeout.
   defp start_phone(socket, ref, from, action, args) do
     started = action in [:pick_photos, :pick_file]
 
-    if started,
-      do: Native.impl().phone(action, args),
-      else: Native.impl().request_permission(needs(action))
+    result =
+      if started,
+        do: Native.impl().phone(action, args),
+        else: Native.impl().request_permission(needs(action))
 
-    {:noreply, put_phone(socket, action, {ref, from, args, started})}
+    case result do
+      :ok ->
+        {:noreply, put_phone(socket, action, {ref, from, args, started})}
+
+      {:error, reason} ->
+        Phone.reply(from, ref, {:error, "Couldn't start #{action}: #{inspect(reason)}"})
+        {:noreply, socket}
+    end
   end
 
   defp put_phone(socket, key, entry),
