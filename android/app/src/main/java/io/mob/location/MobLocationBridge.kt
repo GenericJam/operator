@@ -26,6 +26,10 @@ object MobLocationBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPerm
     private var locationClient: FusedLocationProviderClient? = null
     private var locationCallback: LocationCallback? = null
 
+    // locationClient/locationCallback are written by BEAM threads
+    // (location_start/stop) and by a request's failure listener on main.
+    private val stateLock = Any()
+
     @JvmStatic external fun nativeRegister()
 
     @JvmStatic external fun nativeDeliverLocation(
@@ -88,24 +92,41 @@ object MobLocationBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPerm
             nativeDeliverLocationError(pid, 0); return
         }
         val client = LocationServices.getFusedLocationProviderClient(activity)
-        client.lastLocation.addOnSuccessListener { loc ->
-            if (loc != null) {
-                nativeDeliverLocation(pid, loc.latitude, loc.longitude, loc.accuracy.toDouble(), loc.altitude)
-            } else {
-                val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 1000)
-                    .setMaxUpdates(1).build()
-                val cb = object : LocationCallback() {
-                    override fun onLocationResult(result: LocationResult) {
-                        result.lastLocation?.let { l ->
-                            nativeDeliverLocation(pid, l.latitude, l.longitude, l.accuracy.toDouble(), l.altitude)
+        // A failed Fused call must still answer the caller: a SecurityException
+        // (the grant is gone despite the check above) is permission_denied,
+        // anything else (e.g. Play services unavailable) is unavailable. It can
+        // throw synchronously or fail the returned Task, so handle both.
+        try {
+            client.lastLocation
+                .addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        nativeDeliverLocation(pid, loc.latitude, loc.longitude, loc.accuracy.toDouble(), loc.altitude)
+                    } else {
+                        val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 1000)
+                            .setMaxUpdates(1).build()
+                        val cb = object : LocationCallback() {
+                            override fun onLocationResult(result: LocationResult) {
+                                result.lastLocation?.let { l ->
+                                    nativeDeliverLocation(pid, l.latitude, l.longitude, l.accuracy.toDouble(), l.altitude)
+                                }
+                                client.removeLocationUpdates(this)
+                            }
                         }
-                        client.removeLocationUpdates(this)
+                        try {
+                            client.requestLocationUpdates(req, cb, activity.mainLooper)
+                                .addOnFailureListener { e -> nativeDeliverLocationError(pid, errorCode(e)) }
+                        } catch (_: SecurityException) {
+                            nativeDeliverLocationError(pid, 0)
+                        }
                     }
                 }
-                client.requestLocationUpdates(req, cb, activity.mainLooper)
-            }
+                .addOnFailureListener { e -> nativeDeliverLocationError(pid, errorCode(e)) }
+        } catch (_: SecurityException) {
+            nativeDeliverLocationError(pid, 0)
         }
     }
+
+    private fun errorCode(e: Exception): Int = if (e is SecurityException) 0 else 1
 
     @JvmStatic
     fun location_start(pid: Long, accuracy: String) {
@@ -119,13 +140,6 @@ object MobLocationBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPerm
             else -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
         }
         val client = LocationServices.getFusedLocationProviderClient(activity)
-        // If location_start was called before without an intervening
-        // location_stop (e.g. user switched accuracy, or the plugin was
-        // re-activated mid-session), the previous callback keeps firing
-        // AND the new one starts — doubled updates, doubled battery drain.
-        // Symmetric with location_stop's remove/null. See MOB-76.
-        locationCallback?.let { locationClient?.removeLocationUpdates(it) }
-        locationClient = client
         val req = LocationRequest.Builder(priority, 5000).build()
         val cb = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
@@ -134,13 +148,44 @@ object MobLocationBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPerm
                 }
             }
         }
-        locationCallback = cb
-        client.requestLocationUpdates(req, cb, activity.mainLooper)
+        synchronized(stateLock) {
+            // If location_start was called before without an intervening
+            // location_stop (e.g. user switched accuracy, or the plugin was
+            // re-activated mid-session), the previous callback keeps firing
+            // AND the new one starts — doubled updates, doubled battery drain.
+            // Symmetric with location_stop's remove/null. See MOB-76.
+            locationCallback?.let { locationClient?.removeLocationUpdates(it) }
+            locationClient = client
+            locationCallback = cb
+            // Same failure handling as location_get_once. A failure only
+            // clears the state and answers if no later location_start or
+            // location_stop has replaced this request.
+            try {
+                client.requestLocationUpdates(req, cb, activity.mainLooper)
+                    .addOnFailureListener { e ->
+                        val current = synchronized(stateLock) {
+                            (locationCallback === cb).also { mine ->
+                                if (mine) {
+                                    locationCallback = null
+                                    locationClient = null
+                                }
+                            }
+                        }
+                        if (current) nativeDeliverLocationError(pid, errorCode(e))
+                    }
+            } catch (_: SecurityException) {
+                locationCallback = null
+                locationClient = null
+                nativeDeliverLocationError(pid, 0)
+            }
+        }
     }
 
     @JvmStatic
     fun location_stop() {
-        locationCallback?.let { locationClient?.removeLocationUpdates(it) }
-        locationCallback = null
+        synchronized(stateLock) {
+            locationCallback?.let { locationClient?.removeLocationUpdates(it) }
+            locationCallback = null
+        }
     }
 }

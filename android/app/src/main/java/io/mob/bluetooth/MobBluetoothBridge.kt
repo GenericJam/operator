@@ -362,10 +362,19 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
                       else
                           @Suppress("DEPRECATION") intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                       if (device != null) {
+                          // bondState needs BLUETOOTH_CONNECT on 31+, which
+                          // discovery (BLUETOOTH_SCAN) doesn't: an app holding
+                          // SCAN without CONNECT would throw here, on the main
+                          // thread, for every device found. Report it unbonded
+                          // (unknown) instead, as btSafeName falls back to the
+                          // address.
+                          val bonded = try {
+                              device.bondState == BluetoothDevice.BOND_BONDED
+                          } catch (_: SecurityException) { false }
                           nativeDeliverBtDiscovered(deliveryPid,
                               device.address,
                               btSafeName(device),
-                              device.bondState == BluetoothDevice.BOND_BONDED)
+                              bonded)
                       }
                   }
                   BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
@@ -647,10 +656,17 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
                           "setPin returned false for ${dev.address} — falling through to system dialog",
                       )
                   }
+              } catch (e: SecurityException) {
+                  // Permission denied: fall through to the system dialog;
+                  // the bond-state receiver still surfaces the outcome. A
+                  // separate clause for lint (see bleGattServerCallback).
+                  Log.w(
+                      "MobBluetooth",
+                      "PIN pairing auto-answer failed for ${dev.address}: ${e.javaClass.simpleName}",
+                  )
               } catch (e: RuntimeException) {
-                  // SecurityException = permission denied.
                   // IllegalStateException = broadcast wasn't ordered on
-                  // some OEM stack. Either way, fall through to the
+                  // some OEM stack. Same fall-through to the
                   // system dialog — the bond-state receiver still
                   // surfaces the outcome. Kept narrower than Throwable so
                   // OOM / StackOverflow etc. still propagate.
@@ -1179,6 +1195,11 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
   /// The GATT-server callback: central connect/disconnect, CCCD subscribe, and
   /// characteristic writes. Always answers responseNeeded requests with
   /// GATT_SUCCESS so a central isn't left hanging.
+  ///
+  /// Lint's MissingPermission only accepts an explicit SecurityException catch,
+  /// so the GATT calls here and in setPin/bleTeardown/restoreAdapterName list
+  /// one before the broader catch. Don't merge them: lintRelease fails in the
+  /// host.
   private fun bleGattServerCallback(pid: Long) = object : BluetoothGattServerCallback() {
       override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
           when (newState) {
@@ -1227,7 +1248,7 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
           if (responseNeeded) {
               try {
                   bleGattServer?.sendResponse(device, requestId, android.bluetooth.BluetoothGatt.GATT_SUCCESS, offset, value)
-              } catch (_: Exception) {}
+              } catch (_: SecurityException) {} catch (_: Exception) {}
           }
       }
 
@@ -1245,7 +1266,7 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
           if (responseNeeded) {
               try {
                   bleGattServer?.sendResponse(device, requestId, android.bluetooth.BluetoothGatt.GATT_SUCCESS, offset, value)
-              } catch (_: Exception) {}
+              } catch (_: SecurityException) {} catch (_: Exception) {}
           }
       }
   }
@@ -1477,13 +1498,14 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
   /// Tear down advertiser + GATT server + central state, and (unless a
   /// restart passes restoreName = false) give the adapter its own name back.
   /// Must tolerate being called when nothing is up (idempotent). Run on
-  /// `main` by callers.
+  /// `main` by callers. (The SecurityException catches: see
+  /// bleGattServerCallback.)
   private fun bleTeardown(restoreName: Boolean = true) {
       bleStartGate.cancel()
       val advertiser = bleAdvertiser
       val callback = bleAdvertiseCallback
       if (advertiser != null && callback != null) {
-          try { advertiser.stopAdvertising(callback) } catch (_: Exception) {}
+          try { advertiser.stopAdvertising(callback) } catch (_: SecurityException) {} catch (_: Exception) {}
       }
       bleAdvertiseCallback = null
       bleAdvertiser = null
@@ -1491,9 +1513,9 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
       bleGattServer?.let { server ->
           // Disconnect any connected centrals, then close.
           for (device in bleDevices.values) {
-              try { server.cancelConnection(device) } catch (_: Exception) {}
+              try { server.cancelConnection(device) } catch (_: SecurityException) {} catch (_: Exception) {}
           }
-          try { server.close() } catch (_: Exception) {}
+          try { server.close() } catch (_: SecurityException) {} catch (_: Exception) {}
       }
       bleGattServer = null
       bleCharacteristics.clear()
@@ -1506,9 +1528,12 @@ object MobBluetoothBridge : io.mob.plugin.MobActivityAware, io.mob.plugin.MobPer
   /// MOB-321: put back the adapter name start_advertising(local_name:)
   /// replaced. No-op when nothing was renamed; if the adapter is unreachable
   /// or the rename is refused, the saved name is kept for the next attempt.
+  /// (The SecurityException catch: see bleGattServerCallback.)
   private fun restoreAdapterName() {
       val adapter = btAdapter() ?: return
-      bleNameGuard.restore { n -> try { adapter.setName(n) } catch (_: Exception) { false } }
+      bleNameGuard.restore { n ->
+          try { adapter.setName(n) } catch (_: SecurityException) { false } catch (_: Exception) { false }
+      }
   }
 
   /// MOB-321: register (once per Activity) the receiver that reports the

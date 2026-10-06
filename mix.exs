@@ -38,7 +38,7 @@ defmodule Operator.MixProject do
       # foreground service; iOS silent audio session): Operator.Core.KeepAlive.
       {:mob_background, "~> 0.1.2"},
       # Phone tools (Operator.Core.Phone brokers them through the chat screen).
-      {:mob_location, "~> 0.1.5"},
+      {:mob_location, "~> 0.1.6"},
       {:mob_notify, "~> 0.2.0"},
       # camera_snap (MobCamera.snap/1: the agent's own headless photo).
       {:mob_camera, "~> 0.1.12"},
@@ -54,7 +54,7 @@ defmodule Operator.MixProject do
       # permission is asked at first use. Operator's own approval stays on
       # OperatorApproval.kt; mob_biometric is for front screens.
       {:mob_biometric, "~> 0.1.5"},
-      {:mob_bluetooth, "~> 0.4.1"},
+      {:mob_bluetooth, "~> 0.4.2"},
       {:mob_screencast, "~> 0.1.2"},
       {:mob_video, "~> 0.1.1"},
       {:mob_touch, "~> 0.1.1"},

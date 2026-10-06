@@ -15,6 +15,7 @@
    :mob_nfc, :mob_midi, :mob_audio_capture, :mob_scene3d, :mob_nx_eigen,
    :mob_ash, :mob_deliver, :mob_whisper, :mob_mishka],
   styles: [%{name: :mob_themes, theme: MobThemes.Obsidian}],
+  composites: [],
   screens: [
     %{
       module: MobLocation.DemoScreen,
@@ -75,6 +76,5 @@
     %{on_start: {MobMishka, :register_all, []}, plugin: :mob_mishka}
   ],
   default_font: nil,
-  default_style: nil,
-  composites: []
+  default_style: nil
 }
