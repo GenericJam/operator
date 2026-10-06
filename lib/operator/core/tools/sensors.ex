@@ -162,7 +162,7 @@ defmodule Operator.Core.Tools.Sensors do
       end
 
     "battery: #{battery}; thermal: #{d[:thermal_state] || "?"}; low power mode: " <>
-      "#{on_off(d[:low_power_mode])}; network: #{d[:network] || "?"}\n" <>
+      "#{on_off(d[:low_power_mode])}; network: #{network(d[:network])}\n" <>
       "device: #{d[:model] || "?"}, #{platform(d[:platform])} #{d[:os_version] || ""}"
   end
 
@@ -317,4 +317,13 @@ defmodule Operator.Core.Tools.Sensors do
 
   @points ~w(N NE E SE S SW W NW)
   defp compass(h), do: Enum.at(@points, rem(round(h / 45), 8))
+
+  # Mob.Device.network_state/0 answers a map (transport, online, ...).
+  defp network(%{} = n) do
+    online = if n[:online] == false, do: "offline", else: "online"
+    "#{n[:transport] || "?"}, #{online}" <> if(n[:expensive] == true, do: ", metered", else: "")
+  end
+
+  defp network(nil), do: "?"
+  defp network(other), do: to_string(other)
 end

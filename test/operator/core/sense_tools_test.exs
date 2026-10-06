@@ -85,7 +85,8 @@ defmodule Operator.Core.SenseToolsTest do
         battery_state: :charging,
         thermal_state: :nominal,
         low_power_mode: false,
-        network: :wifi,
+        # Mob.Device.network_state/0's real shape (a bare value crashed on it).
+        network: %{transport: :wifi, online: true, validated: true, expensive: false},
         model: "moto g power (2021)",
         os_version: "11",
         platform: :android
@@ -110,7 +111,7 @@ defmodule Operator.Core.SenseToolsTest do
 
       assert text ==
                """
-               battery: 82 % (charging); thermal: nominal; low power mode: off; network: wifi
+               battery: 82 % (charging); thermal: nominal; low power mode: off; network: wifi, online
                device: moto g power (2021), Android 11
                accelerometer: x 0.12, y 9.81, z 0.30 m/s²
                gyroscope: x 0.00, y 0.01, z 0.00 rad/s
