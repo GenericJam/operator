@@ -29,9 +29,17 @@ on the phone's own BEAM, and is a sibling of
 [Sloppy Joe](https://sloppyjoe.ca), whose agent lives on your computer
 instead. More at [sloppyjoe.ca/operator](https://sloppyjoe.ca/operator).
 
-> **Status:** a personal project that runs on its author's phones (Moto G
-> 2021 / 2024, Android 11 and 15; an iPhone SE port is under way). Not in any
-> store. Expect sharp edges.
+## Install (Android)
+
+Download **[Operator.apk](https://github.com/GenericJam/operator/releases/latest/download/Operator.apk)**
+from the [latest release](https://github.com/GenericJam/operator/releases/latest)
+on an Android 9+ phone, open it, and allow your browser or Files app to install
+it. In Operator, tap the dial for the terminal, then `[menu] › accounts` to sign
+in with your own Claude or ChatGPT subscription.
+
+> **Status:** 1.0.0, sideloaded from GitHub; not in any store. Tested on a Moto
+> G 2021 and 2024 (Android 11 and 15). The iPhone port runs on the simulator and
+> is under way on a device. Expect sharp edges.
 
 ## What it can do
 
