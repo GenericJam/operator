@@ -696,6 +696,128 @@ defmodule Operator.ChatScreenTest do
     end
   end
 
+  describe "the composer" do
+    # Tapping the field focuses it: {:focus, :draft} opens the composer,
+    # which slides up over a few frames.
+    defp open(view), do: view |> render_info({:focus, :draft}) |> slide()
+
+    defp slide(view) do
+      if assigns(view).slide do
+        assert_receive {:composer_slide, _} = frame, 1_000
+        view |> render_info(frame) |> slide()
+      else
+        view
+      end
+    end
+
+    defp field(view), do: find(view, :text_field)
+    defp transcript(view), do: find(view, :column, id: "transcript_box")
+
+    test "tapping the field opens it over a live sliver of the transcript; [hide] keeps the draft",
+         %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [[{:text, "first reply"}, {:sleep, 200}]])
+      closed = field(view)
+      assert transcript(view).props.weight == 1
+      refute find(view, :text, text: "[hide]")
+
+      # opened while the agent works on a message sent from the closed bar
+      view = view |> send_text("one") |> pump(:message_update) |> open()
+      view = render_info(view, {:change, :draft, "line one\nline two"})
+      assert assigns(view).composing
+      # the same field (its focus and keyboard carry over), now tall
+      assert field(view).props.id == closed.props.id
+      assert field(view).props.lines > 1
+      assert field(view).props.value == "line one\nline two"
+      assert find(view, :text, text: "[hide]")
+      assert button?(view, "Steer") and button?(view, "Stop")
+
+      # the transcript shrinks to its last lines and goes on updating
+      assert %{height: h} = transcript(view).props
+      refute Map.has_key?(transcript(view).props, :weight)
+      assert h < 100
+      view = pump(view, :agent_end)
+      assert assigns(view).composing
+      assert text(transcript(view)) =~ "first reply"
+
+      # dismissing keeps the draft, in a new (unfocused) field
+      typed = field(view)
+      view = render_info(view, {:tap, :hide_composer})
+      refute assigns(view).composing
+      assert assigns(view).draft == "line one\nline two"
+      assert field(view).props.value == "line one\nline two"
+      assert field(view).props.id != typed.props.id
+      assert transcript(view).props.weight == 1
+
+      view = open(view)
+      assert field(view).props.value == "line one\nline two"
+    end
+
+    test "Send in the composer sends the draft, clears it and closes", %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [[{:text, "done"}]])
+
+      view =
+        view
+        |> open()
+        |> render_info({:change, :draft, "two\nlines"})
+        |> render_info({:tap, :send})
+
+      refute assigns(view).composing
+      assert assigns(view).draft == ""
+      assert field(view).props.value == ""
+
+      view = pump(view, :agent_end)
+      [%{messages: [%{content: [typed]}]}] = FakeLLM.requests(llm)
+      assert typed.text == "two\nlines"
+      assert text(view) =~ "done"
+    end
+
+    test "an empty draft doesn't send or close", %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [])
+      view = view |> open() |> render_info({:tap, :send})
+      assert assigns(view).composing
+      assert FakeLLM.requests(llm) == []
+    end
+
+    test "[attach] opens inside it and what's picked shows there as chips", %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [[{:text, "read it"}]])
+      notes = Path.join(dir, "picked_notes")
+      File.write!(notes, "buy milk\n")
+
+      view = view |> open() |> render_info({:tap, :attach})
+      assert find(view, :text, text: "[photo library]") && find(view, :text, text: "[file]")
+
+      view =
+        view
+        |> render_info({:tap, {:attach, :files}})
+        |> serve_pick(:pick_file, {:files, :picked, [%{path: notes, name: "notes.txt"}]})
+
+      assert assigns(view).composing
+      assert find(view, :text, text: "[x] notes.txt 9 B")
+
+      view = view |> render_info({:tap, :send}) |> pump(:agent_end)
+      refute assigns(view).composing
+      refute find(view, :text, text: "[x] notes.txt 9 B")
+      [%{messages: [%{content: [file]}]}] = FakeLLM.requests(llm)
+      assert file.text =~ "buy milk"
+    end
+
+    test "dictation lands in the open field, unsent", %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [])
+
+      view =
+        view
+        |> open()
+        |> render_info({:change, :draft, "fix the"})
+        |> dictate([:listening], [{:final, "flaky test"}])
+        |> release()
+        |> speech(:idle)
+
+      assert assigns(view).composing
+      assert field(view).props.value == "fix the flaky test"
+      assert FakeLLM.requests(llm) == []
+    end
+  end
+
   test "the first send asks for notifications, once", %{tmp_dir: dir} do
     %{view: view} = mount_chat(dir, [[{:text, "a"}], [{:text, "b"}]])
     view = view |> send_text("one") |> pump(:agent_end)

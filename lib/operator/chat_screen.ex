@@ -15,6 +15,15 @@ defmodule Operator.ChatScreen do
   extends it). The list follows new output unless the user scrolled up
   (`Operator.ChatScreen.Follow`).
 
+  Tapping the composer's field opens it over the screen above the keyboard:
+  the transcript shrinks to a sliver under the status line showing its last
+  #{2} lines, live, and the composer gets a tall multi-line field (it
+  scrolls), the [attach] chips, mic, Send/Steer and Stop. `[hide]` closes it
+  and keeps the draft; sending closes it too. The field keeps its id and
+  place in the tree across the two layouts, so the focus (and the keyboard)
+  the tap gave it carries over; closing renders it under a new id, which
+  drops the focus and the keyboard.
+
   Long-press a line to copy its whole message (native Markdown rows select
   text instead: long-press, drag the handles, Copy); `[copy]` on a code
   fence copies that block; "copy last reply" copies the last assistant
@@ -91,6 +100,18 @@ defmodule Operator.ChatScreen do
   @min_hold_ms 300
   # Photos per [attach] › photo library.
   @attach_max 10
+  # The transcript lines left showing above the open composer.
+  @sliver_lines 2
+  # The draft's field: rows in the bar, and in the open composer the rows
+  # it draws before it scrolls (on Android it also fills the composer).
+  @closed_lines 2
+  @composer_lines 12
+  @composer_lines_ios 8
+  # Opening, the composer slides up over the transcript: its share of the
+  # height (a weight against the transcript's 1) per frame, @slide_ms apart,
+  # before the transcript settles at its sliver.
+  @slide_weights [0.15, 0.5, 1.2, 3.0, 7.0]
+  @slide_ms 25
 
   def mount(params, _session, socket) do
     loop = Map.get(params, :loop) || Operator.Core.current()
@@ -110,6 +131,7 @@ defmodule Operator.ChatScreen do
     {:ok,
      socket
      |> Mob.Socket.assign(window: @window, draft: "", toast: nil, signed_in: signed_in?())
+     |> Mob.Socket.assign(composing: false, slide: nil, field_gen: 0)
      |> Mob.Socket.assign(
        settings_dir: settings_dir,
        voice: Settings.voice(settings_dir),
@@ -140,18 +162,26 @@ defmodule Operator.ChatScreen do
       children:
         [header(assigns, t)] ++
           [
+            # Sized by its column: iOS's lazy list ignores a height of its own.
             %{
-              type: :lazy_list,
-              props: %{id: @list_id, weight: 1, padding: t.padding, background: bg},
-              children: assigns.visible
+              type: :column,
+              props: Map.merge(%{id: "transcript_box", fill_width: true}, list_size(assigns, t)),
+              children: [
+                %{
+                  type: :lazy_list,
+                  props: %{id: @list_id, weight: 1, padding: t.padding, background: bg},
+                  children: assigns.visible
+                }
+              ]
             },
             footer(assigns, t)
           ] ++
-          approval_bar(assigns, t) ++
+          if(assigns.composing, do: [], else: approval_bar(assigns, t)) ++
+          composer_head(assigns, t) ++
           attach_rows(assigns, t) ++
-          [
-            composer(assigns, t)
-          ]
+          [composer(assigns, t)] ++
+          composer_spacer(assigns, t) ++
+          composer_actions(assigns, t)
     }
   end
 
@@ -208,7 +238,34 @@ defmodule Operator.ChatScreen do
   def handle_info({:change, :draft, value}, socket),
     do: {:noreply, Mob.Socket.assign(socket, :draft, value)}
 
-  def handle_info({:submit, :draft}, socket), do: send_draft(socket)
+  # Focusing the closed field opens the composer around it.
+  def handle_info({:focus, :draft}, %{assigns: %{composing: false}} = socket) do
+    if ios?() do
+      {:noreply, socket |> Mob.Socket.assign(composing: true, slide: nil) |> restick()}
+    else
+      Process.send_after(self(), {:composer_slide, 1}, @slide_ms)
+      {:noreply, Mob.Socket.assign(socket, composing: true, slide: 0)}
+    end
+  end
+
+  # One chain of frames: a late one from an earlier opening doesn't match.
+  def handle_info({:composer_slide, step}, %{assigns: %{composing: true, slide: s}} = socket)
+      when step == s + 1 do
+    if step < length(@slide_weights) do
+      Process.send_after(self(), {:composer_slide, step + 1}, @slide_ms)
+      {:noreply, Mob.Socket.assign(socket, :slide, step)}
+    else
+      {:noreply, socket |> Mob.Socket.assign(:slide, nil) |> restick()}
+    end
+  end
+
+  # Closed (or sent) before it finished sliding.
+  def handle_info({:composer_slide, _step}, socket), do: {:noreply, socket}
+
+  def handle_info({:focus, :draft}, socket), do: {:noreply, socket}
+
+  def handle_info({:tap, :hide_composer}, socket), do: {:noreply, close_composer(socket)}
+
   def handle_info({:tap, :send}, socket), do: send_draft(socket)
 
   # A front screen's "use this" (Operator.Core.Terminal): text for the
@@ -858,7 +915,7 @@ defmodule Operator.ChatScreen do
 
       socket.assigns.status == :running ->
         :ok = Loop.steer(socket.assigns.loop, text, files)
-        {:noreply, Mob.Socket.assign(socket, sent)}
+        {:noreply, socket |> Mob.Socket.assign(sent) |> close_composer()}
 
       true ->
         case Loop.prompt(socket.assigns.loop, text, files) do
@@ -866,8 +923,29 @@ defmodule Operator.ChatScreen do
           {:error, :running} -> Loop.steer(socket.assigns.loop, text, files)
         end
 
-        {:noreply, socket |> ask_notifications() |> Mob.Socket.assign(sent)}
+        {:noreply, socket |> ask_notifications() |> Mob.Socket.assign(sent) |> close_composer()}
     end
+  end
+
+  # Back to the full transcript; the draft stays. A new field (its id) drops
+  # the focus, and the keyboard with it.
+  defp close_composer(%{assigns: %{composing: true}} = socket) do
+    socket
+    |> Mob.Socket.assign(
+      composing: false,
+      slide: nil,
+      field_gen: socket.assigns.field_gen + 1,
+      attach_menu: false
+    )
+    |> restick()
+  end
+
+  defp close_composer(socket), do: socket
+
+  # The transcript changed height: a following list goes back to its end.
+  defp restick(socket) do
+    if socket.assigns.following, do: Process.send_after(self(), :stick, @stick_ms)
+    socket
   end
 
   # The pick runs in a task: the pickers and the camera are phone actions
@@ -1272,27 +1350,113 @@ defmodule Operator.ChatScreen do
   defp footer_link(label, tag, t),
     do: UI.link(label, tag, t, text_size: t.text_size - 2, padding: 0)
 
-  defp composer(a, t) do
-    running = a.status == :running
-    send_label = if running, do: "Steer", else: "Send"
-    stop = if running, do: [UI.chip("Stop", :stop, t, "error")], else: []
+  # The transcript fills the screen; while composing it shrinks to its last
+  # lines (still following), a live sliver above the composer.
+  defp list_size(%{composing: true, slide: nil}, t),
+    do: %{height: round(@sliver_lines * (t.text_size * t.line_height + 3) + 2 * t.padding)}
 
-    UI.bar_row(
-      t,
-      [
+  defp list_size(_a, _t), do: %{weight: 1}
+
+  # One row, the draft's field first, in both states: the field keeps its
+  # id and place (root › "composer" › its id), so the focus that opened the
+  # composer, and the keyboard, carry over into it. Closing renders a new
+  # field (`field_gen`), which takes the focus and the keyboard away.
+  defp composer(a, t) do
+    placeholder = if a.status == :running, do: "› steer the agent…", else: "› ask Operator…"
+    field_props = [id: "draft-#{a.field_gen}", on_focus: {self(), :draft}]
+
+    if a.composing do
+      {flex, lines} =
+        if ios?(),
+          do: {%{}, [lines: @composer_lines_ios]},
+          else:
+            {%{weight: if(a.slide, do: Enum.at(@slide_weights, a.slide), else: 1)},
+             [lines: @composer_lines, fill_height: true]}
+
+      %{
+        type: :row,
+        props:
+          Map.merge(
+            %{id: "composer", fill_width: true, padding: 6, background: Term.color(t, "bar")},
+            flex
+          ),
+        children: [
+          UI.field(
+            a.draft,
+            placeholder,
+            :draft,
+            t,
+            field_props ++ [weight: 1, underline: false] ++ lines
+          )
+        ]
+      }
+    else
+      t
+      |> UI.bar_row([
         UI.field(
           a.draft,
-          if(running, do: "› steer the agent…", else: "› ask Operator…"),
+          placeholder,
           :draft,
           t,
-          weight: 1,
-          on_submit: {self(), :draft}
+          field_props ++ [weight: 1, lines: @closed_lines]
         )
-      ] ++
-        [UI.link("attach", :attach, t, padding: 4)] ++
-        mic(a, t) ++ [UI.chip(send_label, :send, t, "user")] ++ stop
-    )
+        | send_controls(a, t)
+      ])
+      |> put_in([:props, :id], "composer")
+    end
   end
+
+  defp send_controls(a, t) do
+    running = a.status == :running
+    stop = if running, do: [UI.chip("Stop", :stop, t, "error")], else: []
+
+    [UI.link("attach", :attach, t, padding: 4)] ++
+      mic(a, t) ++ [UI.chip(if(running, do: "Steer", else: "Send"), :send, t, "user")] ++ stop
+  end
+
+  # The composer's title: what it's for, and [hide] (the draft stays).
+  defp composer_head(%{composing: true} = a, t) do
+    title = if a.status == :running, do: "── steer ", else: "── compose "
+
+    [
+      UI.bar_row(t, [
+        UI.text(title <> String.duplicate("─", 20), t, "dim", weight: 1, max_lines: 1),
+        UI.link("hide", :hide_composer, t, padding: 4)
+      ])
+    ]
+  end
+
+  defp composer_head(_a, _t), do: []
+
+  defp composer_actions(%{composing: true} = a, t),
+    do: [UI.bar_row(t, [UI.text("", t, "dim", weight: 1) | send_controls(a, t)])]
+
+  defp composer_actions(_a, _t), do: []
+
+  # On iOS a node that gains or loses a weight is a new view to SwiftUI, and
+  # its subtree with it: the field would lose the focus that opened the
+  # composer. There the composer row never flexes; a spacer below it takes
+  # the slack, the field has fewer rows (small iPhones), and it doesn't slide.
+  defp ios?, do: Term.platform() == :ios
+
+  defp composer_spacer(%{composing: true}, t) do
+    if ios?(),
+      do: [
+        %{
+          type: :column,
+          props: %{
+            id: "composer_spacer",
+            weight: 1,
+            fill_width: true,
+            background: Term.color(t, "bar")
+          },
+          children: []
+        }
+      ],
+      else: []
+  end
+
+  defp composer_spacer(_a, _t), do: []
 
   # Above the composer: the [attach] list while it's open, a pick in
   # progress, and what goes with the next message (tap a line to drop it).

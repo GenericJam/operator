@@ -559,6 +559,17 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    current model's provider as `5h 42% · wk 18%` (plus `429 3d 6h` while a
    limit holds). Counting starts with this version (old sessions aren't
    backfilled); cost is req_llm's and reads $0 for models it has no price for.
+14. **The composer** (Kevin, 2026-10-06). Tapping the terminal's input
+   slides a composer up over everything above the keyboard but a sliver:
+   the status line and the transcript's last two lines stay on top, live.
+   It holds a tall multi-line field (it scrolls), `[attach]` and its chips,
+   the mic (dictation lands in the field), Send/Steer and Stop; `[hide]`
+   closes it and keeps the draft, sending closes it too. Plain layout, not
+   mob's `:sheet`: the field keeps its id and place in the tree from the
+   bar to the composer, so the tap's focus and the keyboard carry over
+   (one tap), and the sliver is the same transcript list, shrunk.
+   Android's back still leaves the app from the composer (mob's router
+   owns back at a stack's root).
 
 ## iOS parity (2026-10-04)
 
