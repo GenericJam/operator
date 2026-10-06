@@ -47,6 +47,25 @@ defmodule Operator.Core.Tools.FileTool do
     end)
   end
 
+  @doc """
+  Is the file text? Its first 8 KB are valid UTF-8 (a cut character at
+  the end doesn't count) without NUL bytes.
+  """
+  @spec text?(Path.t()) :: boolean()
+  def text?(file) do
+    case File.open(file, [:read, :binary], &IO.binread(&1, 8192)) do
+      {:ok, head} when is_binary(head) -> not String.contains?(head, <<0>>) and utf8?(head)
+      _ -> false
+    end
+  end
+
+  defp utf8?(head) do
+    String.valid?(head) or
+      Enum.any?(1..3, fn cut ->
+        byte_size(head) > cut and String.valid?(binary_part(head, 0, byte_size(head) - cut))
+      end)
+  end
+
   @doc "Byte count, readable."
   @spec size(non_neg_integer()) :: String.t()
   def size(n) when n < 1024, do: "#{n} B"

@@ -41,7 +41,7 @@ defmodule Operator.Core.SenseToolsTest do
       assert_received {:asked, :camera_snap, %{facing: :front, flash: :auto}}
       assert [kept] = Path.wildcard(Path.join(dir, "workspace/photos/snap-*-front.jpg"))
       assert File.read!(kept) == "jpeg-bytes"
-      assert text == "Photo from the front camera, 1568×1176, saved to #{kept}."
+      assert text == "Photo from the front camera:\n1. #{kept} · 10 B · 1568×1176 (shown)"
       refute File.exists?(shot)
     end
 
@@ -226,8 +226,10 @@ defmodule Operator.Core.SenseToolsTest do
                {"content://media/external/images/media/42",
                 "content://media/external/images/media/41"}
 
-      assert text =~ "The newest 2 photos:\n1. IMG_42.jpg · image · 1.9 MB · content://"
-      assert text =~ "taken 2026-10-04T08:00:00Z · no GPS in the file (shown)"
+      assert text =~
+               "The newest 2 photos:\n" <>
+                 "1. IMG_42.jpg · content://media/external/images/media/42 · 1.9 MB · " <>
+                 "1568×1176 · taken 2026-10-04T08:00:00Z · no GPS in the file (shown)\n2. IMG_41.jpg"
     end
 
     test "asks for photo access first; a refusal is the answer" do

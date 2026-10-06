@@ -169,7 +169,9 @@ defmodule Operator.Core.ToolsTest do
         end
       end)
 
-    thumbnail = fn ^path, opts ->
+    kept = Path.join(dir, "data/workspace/inbox/mob_pick_1.jpg")
+
+    thumbnail = fn ^kept, opts ->
       assert opts[:max_size] <= 1568
       File.write!(thumb, "small")
 
@@ -188,16 +190,17 @@ defmodule Operator.Core.ToolsTest do
        }}
     end
 
-    assert {:ok, {:images, [{"image/jpeg", "small"}], text}} =
-             PickPhotos.run(%{"max" => 2}, %{phone_host: host, thumbnail: thumbnail})
+    ctx = %{phone_host: host, thumbnail: thumbnail, data_dir: Path.join(dir, "data")}
+    assert {:ok, {:images, [{"image/jpeg", "small"}], text}} = PickPhotos.run(%{"max" => 2}, ctx)
 
     assert text ==
              "Picked:\n" <>
-               "1. mob_pick_1.jpg · image · 5 B · #{path} · 4000×3000 · " <>
-               "taken 2026-10-03T14:02:11-06:00 · GPS 51.0447, -114.0719 · motorola moto g (shown)\n" <>
-               "2. gone.mov · video · #{Path.join(dir, "gone.mov")} (a video: not shown)"
+               "1. #{kept} · 5 B · 4000×3000 · taken 2026-10-03T14:02:11-06:00 · " <>
+               "GPS 51.0447, -114.0719 · motorola moto g (shown)\n" <>
+               "2. #{Path.join(dir, "gone.mov")} · a video (not shown)"
 
-    # the scaled copy is read and removed
+    # the picker's copy is moved into the inbox; the scaled copy is read and removed
+    refute File.exists?(path)
     refute File.exists?(thumb)
   end
 end

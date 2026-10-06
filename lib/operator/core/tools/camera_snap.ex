@@ -3,12 +3,13 @@ defmodule Operator.Core.Tools.CameraSnap do
   Core tool: the agent takes a photo itself, with no one pressing a
   shutter (`MobCamera.snap/1`, headless: no preview, the camera opens,
   settles its exposure, takes one still and closes). The model sees the
-  photo; it's kept in the workspace's `photos/`. The chat screen asks for
-  the camera permission the first time (`Operator.Core.Phone`).
+  photo; it's kept in the workspace's `photos/`
+  (`Operator.Core.Attachments.snap/3`). The chat screen asks for the
+  camera permission the first time (`Operator.Core.Phone`).
   """
   @behaviour Operator.Core.Tool
 
-  alias Operator.Core.Files
+  alias Operator.Core.Attachments
   alias Operator.Core.Tools.PhoneTool
 
   @impl true
@@ -43,28 +44,9 @@ defmodule Operator.Core.Tools.CameraSnap do
     facing = if args["camera"] == "front", do: :front, else: :back
     flash = Map.get(%{"on" => :on, "auto" => :auto}, args["flash"], :off)
 
-    case PhoneTool.call(:camera_snap, %{facing: facing, flash: flash}, ctx, 115_000) do
-      {:ok, %{path: path} = photo} -> keep(path, photo, facing, ctx)
-      {:error, _} = error -> error
-    end
-  end
-
-  defp keep(path, photo, facing, ctx) do
-    dir = Path.join(Files.workspace(ctx), "photos")
-    File.mkdir_p!(dir)
-    stamp = DateTime.utc_now() |> Calendar.strftime("%Y%m%d-%H%M%S")
-    dest = Path.join(dir, "snap-#{stamp}-#{facing}.jpg")
-
-    with :ok <- File.cp(path, dest),
-         {:ok, jpeg} <- File.read(dest) do
-      _ = File.rm(path)
-
-      {:ok,
-       {:images, [{"image/jpeg", jpeg}],
-        "Photo from the #{facing} camera, #{photo[:width]}×#{photo[:height]}, saved to #{dest}."}}
-    else
-      {:error, reason} -> {:error, "The photo was taken but couldn't be kept: #{reason}"}
-    end
+    facing
+    |> Attachments.snap(flash, ctx)
+    |> Attachments.tool_result("Photo from the #{facing} camera:")
   end
 
   @impl true

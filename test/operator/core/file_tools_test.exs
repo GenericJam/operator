@@ -241,7 +241,7 @@ defmodule Operator.Core.FileToolsTest do
     assert File.read!(Path.join(dest, "locked/a.txt")) == "a"
   end
 
-  test "file_pick copies picked files into the inbox without clobbering", %{
+  test "file_pick keeps picked files in the inbox without clobbering; text comes inline", %{
     ctx: ctx,
     dir: dir,
     workspace: ws
@@ -249,7 +249,9 @@ defmodule Operator.Core.FileToolsTest do
     File.mkdir_p!(Path.join(ws, "inbox"))
     File.write!(Path.join(ws, "inbox/a.pdf"), "old")
     picked = Path.join(dir, "mob_file_a.pdf")
-    File.write!(picked, "new")
+    File.write!(picked, "%PDF-new")
+    notes = Path.join(dir, "mob_file_b")
+    File.write!(notes, "buy milk\n")
 
     host =
       spawn(fn ->
@@ -258,7 +260,11 @@ defmodule Operator.Core.FileToolsTest do
             Phone.reply(
               from,
               ref,
-              {:ok, [%{path: picked, name: "a.pdf", mime: "application/pdf", size: 3}]}
+              {:ok,
+               [
+                 %{path: picked, name: "a.pdf", mime: "application/pdf", size: 3},
+                 %{path: notes, name: "notes.txt", mime: "text/plain", size: 9}
+               ]}
             )
         end
       end)
@@ -266,9 +272,14 @@ defmodule Operator.Core.FileToolsTest do
     assert {:ok, text} =
              FilePick.run(%{"types" => ["pdf", "csv"]}, Map.put(ctx, :phone_host, host))
 
-    assert text == "Picked:\n#{Path.join(ws, "inbox/a-2.pdf")} · application/pdf · 3 B"
+    assert text ==
+             "Picked (kept in your workspace's inbox/):\n" <>
+               "1. #{Path.join(ws, "inbox/a-2.pdf")} · 8 B, a PDF whose pages couldn't be " <>
+               "counted, not sent as a document: work with it through its path\n" <>
+               "2. #{Path.join(ws, "inbox/notes.txt")} · 9 B\nbuy milk\n"
+
     assert File.read!(Path.join(ws, "inbox/a.pdf")) == "old"
-    assert File.read!(Path.join(ws, "inbox/a-2.pdf")) == "new"
+    assert File.read!(Path.join(ws, "inbox/a-2.pdf")) == "%PDF-new"
   end
 
   test "Dyn code's file calls stay inside the roots", %{dir: dir} do

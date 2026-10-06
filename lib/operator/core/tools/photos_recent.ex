@@ -3,14 +3,14 @@ defmodule Operator.Core.Tools.PhotosRecent do
   Core tool: the newest photos in the phone's library, without the user
   picking (`MobPhotos.list_media/2`, which needs the photo library
   permission: asked through the chat screen the first time). The model
-  sees them with their metadata (`Operator.Core.Tools.Photos`).
+  sees them with their metadata (`Operator.Core.Attachments.library_item/2`).
   `ctx[:list_media]` (`(count -> {:ok, items} | {:error, text})`) replaces
   the library in tests.
   """
   @behaviour Operator.Core.Tool
 
+  alias Operator.Core.Attachments
   alias Operator.Core.Tools.PhoneTool
-  alias Operator.Core.Tools.Photos
 
   @impl true
   def name, do: "photos_recent"
@@ -46,7 +46,8 @@ defmodule Operator.Core.Tools.PhotosRecent do
           {:ok, "The photo library is empty (or Operator may only see some photos)."}
 
         items ->
-          Photos.result(Enum.map(items, &item/1), "The newest #{length(items)} photos:", ctx)
+          {:ok, Enum.map(items, &Attachments.library_item(&1, ctx))}
+          |> Attachments.tool_result("The newest #{length(items)} photos:")
       end
     end
   end
@@ -74,7 +75,7 @@ defmodule Operator.Core.Tools.PhotosRecent do
   @fields ~w(uri path display_name type size date_taken)
 
   @doc false
-  # The JSON list_media delivers, as the atom-keyed items item/1 reads.
+  # The JSON list_media delivers, as the atom-keyed items Attachments.library_item/2 reads.
   @spec listed(binary()) :: [map()]
   def listed(json) do
     case JSON.decode(json) do
@@ -85,14 +86,4 @@ defmodule Operator.Core.Tools.PhotosRecent do
 
   defp known_fields(item),
     do: for({key, value} <- item, key in @fields, into: %{}, do: {String.to_atom(key), value})
-
-  defp item(item) do
-    %{
-      source: item[:uri] || item[:path],
-      name: item[:display_name] || "?",
-      type: to_string(item[:type] || "image"),
-      size: item[:size],
-      taken: item[:date_taken]
-    }
-  end
 end

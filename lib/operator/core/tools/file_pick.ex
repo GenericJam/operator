@@ -3,13 +3,13 @@ defmodule Operator.Core.Tools.FilePick do
   Core tool: the user picks files with the system document picker
   (`Mob.Files.pick/2`: Files on iOS, the storage picker on Android, so
   iCloud Drive, Google Drive, Downloads, ...). Each is copied into the
-  workspace's `inbox/` and the agent gets its path.
+  workspace's `inbox/`; the agent gets its path, a text file's text, a
+  picture to look at. The same pick as the chat's `[attach] › file`
+  (`Operator.Core.Attachments.pick_files/2`).
   """
   @behaviour Operator.Core.Tool
 
-  alias Operator.Core.Files
-  alias Operator.Core.Tools.FileTool
-  alias Operator.Core.Tools.PhoneTool
+  alias Operator.Core.Attachments
 
   @impl true
   def name, do: "file_pick"
@@ -18,9 +18,10 @@ defmodule Operator.Core.Tools.FilePick do
   def description,
     do:
       "Let the user pick files (any app's documents: Files/iCloud on iOS, Downloads/Drive on " <>
-        "Android). Each is copied into your workspace's inbox/; you get the paths (read them " <>
-        ~s|with file_read). `types` narrows the picker: extensions ("pdf", "csv"), MIME | <>
-        ~s|types ("text/*") or "images", "video", "audio", "pdf", "text". The user can cancel.|
+        "Android). Each is copied into your workspace's inbox/; you get its path, a text " <>
+        "file's text (read the rest with file_read), a picture to look at. `types` narrows " <>
+        ~s|the picker: extensions ("pdf", "csv"), MIME types ("text/*") or "images", "video", | <>
+        ~s|"audio", "pdf", "text". The user can cancel.|
 
   @impl true
   def parameter_schema do
@@ -51,47 +52,8 @@ defmodule Operator.Core.Tools.FilePick do
         _ -> [:any]
       end
 
-    case PhoneTool.call(:pick_file, %{types: types}, ctx, 295_000) do
-      {:ok, :cancelled} -> {:ok, "The user cancelled the picker."}
-      {:ok, []} -> {:ok, "Nothing was picked."}
-      {:ok, items} when is_list(items) -> keep(items, ctx)
-      {:error, _} = error -> error
-    end
-  end
-
-  defp keep(items, ctx) do
-    inbox = Path.join(Files.workspace(ctx), "inbox")
-    File.mkdir_p!(inbox)
-
-    lines =
-      Enum.map(items, fn item ->
-        src = item[:path]
-        dest = unique(inbox, item[:name] || Path.basename(src))
-
-        case File.cp(src, dest) do
-          :ok ->
-            _ = File.rm(src)
-            "#{dest} · #{item[:mime] || "?"} · #{FileTool.size(File.stat!(dest).size)}"
-
-          {:error, reason} ->
-            "#{item[:name] || src}: couldn't copy it (#{FileTool.posix(reason, src)})"
-        end
-      end)
-
-    {:ok, "Picked:\n" <> Enum.join(lines, "\n")}
-  end
-
-  # The picked name, or name-2, name-3, ... if the inbox has it already.
-  defp unique(dir, name) do
-    name = name |> Path.basename() |> String.replace(~r/[\/\x00]/, "_")
-    base = Path.rootname(name)
-    ext = Path.extname(name)
-
-    Stream.iterate(1, &(&1 + 1))
-    |> Stream.map(fn
-      1 -> Path.join(dir, name)
-      n -> Path.join(dir, "#{base}-#{n}#{ext}")
-    end)
-    |> Enum.find(&(not File.exists?(&1)))
+    types
+    |> Attachments.pick_files(ctx)
+    |> Attachments.tool_result("Picked (kept in your workspace's inbox/):")
   end
 end

@@ -1,7 +1,12 @@
 defmodule Operator.Core.Tools.CameraPhoto do
-  @moduledoc "Core tool: the user takes a photo with the camera; returns the saved file."
+  @moduledoc """
+  Core tool: the user takes a photo with the camera app; the model sees it,
+  kept in the workspace's `inbox/`. The same shot as the chat's
+  `[attach] › take photo` (`Operator.Core.Attachments.take_photo/1`).
+  """
   @behaviour Operator.Core.Tool
 
+  alias Operator.Core.Attachments
   alias Operator.Core.Tools.PhoneTool
 
   @impl true
@@ -10,8 +15,9 @@ defmodule Operator.Core.Tools.CameraPhoto do
   @impl true
   def description,
     do:
-      "Open the camera so the user can take a photo; returns where it was saved and its size. " <>
-        "The user can cancel. (You get the file's path, not the image itself.)"
+      "Open the camera so the user can frame and take a photo; you see it, with its path (a " <>
+        "copy in your workspace's inbox/). The user can cancel. To take one yourself without " <>
+        "anyone touching the phone, use camera_snap."
 
   @impl true
   def parameter_schema,
@@ -21,25 +27,15 @@ defmodule Operator.Core.Tools.CameraPhoto do
   def timeout_ms, do: 180_000
 
   @impl true
-  def run(_args, ctx) do
-    case PhoneTool.call(:camera_photo, %{}, ctx, 175_000) do
-      {:ok, %{path: path} = photo} ->
-        {:ok, "Photo saved: #{path} (#{photo[:width]}×#{photo[:height]})"}
-
-      {:ok, :cancelled} ->
-        {:ok, "The user cancelled the camera."}
-
-      {:error, _} = error ->
-        error
-    end
-  end
+  def run(_args, ctx),
+    do: ctx |> Attachments.take_photo() |> Attachments.tool_result("Photo taken:")
 
   @impl true
   def selftest,
     do:
       PhoneTool.selftest(
         &run(%{}, &1),
-        {:ok, %{path: "/tmp/p.jpg", width: 4, height: 3}},
-        &(&1 == {:ok, "Photo saved: /tmp/p.jpg (4×3)"})
+        {:ok, :cancelled},
+        &(&1 == {:ok, "The user cancelled."})
       )
 end
