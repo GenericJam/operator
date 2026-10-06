@@ -11,6 +11,9 @@
 set -euo pipefail
 
 FILAMENT_VERSION="v1.75.1"
+# SHA-256 of filament-v1.75.1-ios.tgz (matches the digest GitHub publishes
+# for the release asset). Bump together with FILAMENT_VERSION.
+FILAMENT_SHA256="afdfdccfb0870a667c73400d9e81e5ec69c8604d867fc4430b9fbfe72934ade3"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$ROOT/ios/vendor/filament"
 URL="https://github.com/google/filament/releases/download/${FILAMENT_VERSION}/filament-${FILAMENT_VERSION}-ios.tgz"
@@ -25,6 +28,10 @@ trap 'rm -rf "$TMP"' EXIT
 
 echo "Downloading $URL ..."
 curl -sfL -o "$TMP/filament-ios.tgz" "$URL"
+echo "$FILAMENT_SHA256  $TMP/filament-ios.tgz" | shasum -a 256 -c - >/dev/null || {
+  echo "filament-ios.tgz SHA-256 mismatch: refusing to extract" >&2
+  exit 1
+}
 tar xzf "$TMP/filament-ios.tgz" -C "$TMP"
 
 mkdir -p "$DEST"

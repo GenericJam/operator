@@ -18,6 +18,7 @@ android/*.keystore
 
 # Native build caches / outputs
 android/app/src/main/assets/otp.zip
+android/app/src/release/assets/otp.zip
 android/local.properties
 android/.gradle/
 android/app/build/

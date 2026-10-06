@@ -179,7 +179,9 @@ config :ash, default_string_length_count: :codepoints
 config :mob_deliver,
   trusted_publish_key: trusted_publish_key,
   app: "com.genericjam.operator",
-  channel: "dev",
+  # The public channel: sideloaded release installs and `mix operator.publish`
+  # both use it.
+  channel: "stable",
   # While the app is in front; also at launch and from Diagnostics.
   poll_interval: :timer.minutes(5),
   # No mob_wake: no silent-push checks. No store listing: no update gate.
