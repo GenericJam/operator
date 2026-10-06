@@ -5,6 +5,7 @@ defmodule Operator.Core.LoopTest do
 
   alias Operator.Core.Loop
   alias Operator.Core.Session
+  alias Operator.Core.Term
   alias Operator.Core.ToolRunner
   alias Operator.Test.FakeLLM
 
@@ -121,6 +122,107 @@ defmodule Operator.Core.LoopTest do
            }
 
     assert [_, _, %{role: :tool, content: [_, %{type: :image}]}, _] = Session.messages(entries)
+  end
+
+  describe "attachments" do
+    defp photo do
+      %{
+        kind: :image,
+        name: "IMG_0412.jpg",
+        path: "/ws/inbox/IMG_0412.jpg",
+        mime: "image/jpeg",
+        about: "1.2 MB · 3024×4032 · GPS 49.28, -123.12",
+        image: {"image/jpeg", <<0xFF, 0xD8, 0xFF, 0xD9>>}
+      }
+    end
+
+    defp pdf(dir) do
+      path = Path.join(dir, "report.pdf")
+      File.write!(path, "%PDF-1.7 tiny")
+      %{kind: :pdf, name: "report.pdf", path: path, mime: "application/pdf", about: "13 B"}
+    end
+
+    test "go to the model as blocks: typed text, each file's envelope, the picture, the PDF",
+         %{tmp_dir: dir} do
+      %{loop: loop, llm: llm} = start_loop(dir, [[{:text, "a cat"}]])
+      notes = %{kind: :text, name: "notes.txt", path: "/ws/inbox/notes.txt", mime: "text/plain"}
+      notes = Map.merge(notes, %{about: "8 B", text: "buy milk"})
+
+      :ok = Loop.prompt(loop, "what's in this?", [photo(), notes, pdf(dir)])
+      collect()
+
+      [request] = FakeLLM.requests(llm)
+      [%{role: :user, content: parts}] = request.messages
+
+      assert [
+               %{type: :text, text: "what's in this?"},
+               %{type: :text, text: photo_envelope},
+               %{type: :image, data: <<0xFF, 0xD8, 0xFF, 0xD9>>, media_type: "image/jpeg"},
+               %{type: :text, text: notes_envelope},
+               %{type: :text, text: "<attachment name=\"report.pdf\"" <> _},
+               %{type: :file, data: "%PDF-1.7 tiny", media_type: "application/pdf"}
+             ] = parts
+
+      assert photo_envelope ==
+               ~s|<attachment name="IMG_0412.jpg" type="image/jpeg" | <>
+                 ~s|path="/ws/inbox/IMG_0412.jpg">\n| <>
+                 "1.2 MB · 3024×4032 · GPS 49.28, -123.12\n</attachment>"
+
+      assert notes_envelope =~ "8 B\nbuy milk\n</attachment>"
+    end
+
+    test "a model without pictures gets the path and metadata only", %{tmp_dir: dir} do
+      %{loop: loop, llm: llm} = start_loop(dir, [[{:text, "ok"}]], inputs: [:text])
+      :ok = Loop.prompt(loop, "", [photo(), pdf(dir)])
+      collect()
+
+      [request] = FakeLLM.requests(llm)
+      [%{role: :user, content: parts}] = request.messages
+      assert Enum.map(parts, & &1.type) == [:text, :text, :text]
+      [envelope, note, pdf_envelope] = Enum.map(parts, & &1.text)
+      assert envelope =~ ~s|path="/ws/inbox/IMG_0412.jpg"|
+      assert envelope =~ "GPS 49.28, -123.12"
+      assert note =~ "doesn't take pictures"
+      assert pdf_envelope =~ "report.pdf"
+    end
+
+    test "persist, title an attachment-only session and come back on resume",
+         %{tmp_dir: dir} do
+      %{loop: loop, session: session} = start_loop(dir, [[{:text, "a cat"}]])
+      :ok = Loop.prompt(loop, "", [photo()])
+      collect()
+      live = Loop.context(loop)
+
+      {:ok, reopened, entries} = Session.open(session.path, "x")
+      assert reopened.title == "IMG_0412.jpg"
+      assert Session.context(entries, inputs: [:text, :image, :pdf]) == live
+
+      [user] = for %{"message" => %{"role" => "user"}} = e <- entries, do: e
+      assert Session.typed(message(user)) == ""
+
+      assert [%{"name" => "IMG_0412.jpg", "path" => "/ws/inbox/IMG_0412.jpg", "kind" => "image"}] =
+               Session.attachments(message(user))
+
+      rows = user |> Term.entry_rows("u", nil) |> Term.rows_text()
+      assert rows == ["› + IMG_0412.jpg · 1.2 MB · 3024×4032 · GPS 49.28, -123.12"]
+    end
+
+    test "steered and queued with the message", %{tmp_dir: dir} do
+      script = [
+        [{:tool_call, "c1", "echo", %{"text" => "x", "sleep_ms" => 150}}],
+        [{:text, "ok"}]
+      ]
+
+      %{loop: loop, llm: llm} = start_loop(dir, script)
+      :ok = Loop.prompt(loop, "start")
+      await_event(:tool_execution_start)
+      :ok = Loop.steer(loop, "", [photo()])
+      assert Loop.snapshot(loop).queue.steering == ["IMG_0412.jpg"]
+      collect()
+
+      [_, second] = FakeLLM.requests(llm)
+      assert [:text, :image] = Enum.map(List.last(second.messages).content, & &1.type)
+    end
   end
 
   test "parallel tool calls: run together, results kept in call order", %{tmp_dir: dir} do

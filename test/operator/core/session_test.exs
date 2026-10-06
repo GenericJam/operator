@@ -297,6 +297,80 @@ defmodule Operator.Core.SessionTest do
 
       assert [{:user, "Prior model work" <> _}, {:user, "b"}] = texts(Session.context(gone))
     end
+
+    test "attachments survive a compaction: listed in the summary, kept ones whole" do
+      photo = %{
+        kind: :image,
+        name: "IMG_0412.jpg",
+        path: "/ws/inbox/IMG_0412.jpg",
+        mime: "image/jpeg",
+        about: "1.2 MB · 3024×4032 · taken 2026:10:01 09:12:00",
+        image: {"image/jpeg", <<0xFF, 0xD8, 0xFF, 0xD9>>}
+      }
+
+      notes = %{kind: :text, name: "notes.txt", path: "/ws/inbox/notes.txt", mime: "text/plain"}
+      notes = Map.merge(notes, %{about: "12 B", text: "buy milk"})
+
+      entries = [
+        e(Session.user("what's this?", attachments: [photo]), "u1"),
+        e(reply("a cat"), "a1"),
+        e(Session.user("", attachments: [notes]), "u2"),
+        e(Session.compaction("## Goal\n- cat", "u2", 9_000, 300), "c1")
+      ]
+
+      [summary, kept] = Session.context(entries)
+      [%{text: summary_text}] = summary.content
+
+      assert summary_text =~ "<summary>\n## Goal\n- cat\n</summary>"
+
+      assert summary_text =~
+               "- IMG_0412.jpg (image/jpeg) at /ws/inbox/IMG_0412.jpg: 1.2 MB · 3024×4032"
+
+      refute summary_text =~ "notes.txt"
+      assert [%{type: :text, text: "<attachment name=\"notes.txt\"" <> rest}] = kept.content
+      assert rest =~ "buy milk"
+
+      # kept from the photo on: its picture still goes to the model
+      [_summary, first | _] =
+        Session.context(List.replace_at(entries, 3, e(Session.compaction("S", "u1", 1, 1), "c1")))
+
+      assert [:text, :text, :image] == Enum.map(first.content, & &1.type)
+    end
+  end
+
+  describe "attachments" do
+    defp pdf(dir, name, pages) do
+      path = Path.join(dir, name)
+      File.write!(path, "%PDF-1.7 " <> name)
+      %{kind: :pdf, name: name, path: path, mime: "application/pdf", about: "x", pages: pages}
+    end
+
+    test "PDFs go as documents newest first, within 100 pages a request", %{tmp_dir: dir} do
+      entries = [
+        Session.user("old", attachments: [pdf(dir, "old.pdf", 30)]),
+        Session.user("new", attachments: [pdf(dir, "new.pdf", 80)]),
+        Session.user("small", attachments: [pdf(dir, "small.pdf", 20)])
+      ]
+
+      [old, new, small] = Session.messages(entries, inputs: [:text, :image, :pdf])
+      assert [:text, :text, :file] = Enum.map(small.content, & &1.type)
+      assert [:text, :text, :file] = Enum.map(new.content, & &1.type)
+      assert [_, _, %{type: :text, text: note}] = old.content
+      assert note =~ "old.pdf isn't sent as a document this time"
+
+      # a model without PDFs gets the envelopes (path and about) only
+      assert [[:text, :text], [:text, :text], [:text, :text]] =
+               for(m <- Session.messages(entries), do: Enum.map(m.content, & &1.type))
+    end
+
+    test "what the user typed is told from the files by the message's attachments" do
+      typed = Session.user("<attachment hi> is a tag", attachments: [pdf("/tmp", "a.pdf", 1)])
+      assert Session.typed(typed["message"]) == "<attachment hi> is a tag"
+      assert Session.typed(Session.user("<attachment x>")["message"]) == "<attachment x>"
+
+      assert Session.typed(Session.user("", attachments: [pdf("/tmp", "b.pdf", 1)])["message"]) ==
+               ""
+    end
   end
 
   test "lists sessions newest first, by header", %{tmp_dir: dir} do

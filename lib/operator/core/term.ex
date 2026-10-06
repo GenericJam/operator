@@ -78,6 +78,7 @@ defmodule Operator.Core.Term do
       },
       roles: %{
         user: %{color: "user", prefix: "› "},
+        attachment: %{color: "user", prefix: "› + "},
         assistant: %{color: "fg"},
         thinking: %{color: "dim", italic: true},
         # "●" renders as text on both platforms ("⏺" gets emoji presentation on Android)
@@ -238,6 +239,11 @@ defmodule Operator.Core.Term do
     |> Enum.join("\n")
   end
 
+  def plain_text(%{"type" => "message", "message" => %{"role" => "user"} = m}) do
+    names = for a <- Session.attachments(m), do: "[#{a["name"]}]"
+    [Session.typed(m) | names] |> Enum.reject(&(&1 == "")) |> Enum.join("\n")
+  end
+
   def plain_text(%{"type" => "message", "message" => m}), do: Session.text(m["content"])
   def plain_text(%{"type" => "custom_message", "content" => c}), do: Session.text(c)
   def plain_text(%{"type" => "compaction", "summary" => s}) when is_binary(s), do: s
@@ -260,8 +266,18 @@ defmodule Operator.Core.Term do
 
   # An entry → render lines: {:line, segs} | {:code, segs} | {:fence, lang, n}
   # | {:native, markdown}. Assistant messages render in parts (`entry_rows/4`).
-  defp entry_lines(%{"type" => "message", "message" => %{"role" => "user"} = m}, theme),
-    do: prefixed(Session.text(m["content"]), theme.roles.user)
+  defp entry_lines(%{"type" => "message", "message" => %{"role" => "user"} = m}, theme) do
+    typed = Session.typed(m)
+    style = theme.roles.attachment
+
+    files =
+      for a <- Session.attachments(m) do
+        line = clip_line("#{a["name"]} · #{a["about"]}", theme.max_line_chars)
+        {:line, [{style.prefix <> line, style}]}
+      end
+
+    if(typed == "", do: [], else: prefixed(typed, theme.roles.user)) ++ files
+  end
 
   defp entry_lines(%{"type" => "message", "message" => %{"role" => "toolResult"} = m}, theme) do
     style = if m["isError"], do: theme.roles.tool_error, else: theme.roles.tool_result

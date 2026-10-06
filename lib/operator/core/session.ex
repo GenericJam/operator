@@ -18,10 +18,20 @@ defmodule Operator.Core.Session do
       `tokensBefore`, `tokensAfter`, `method: "soft"`): the branch before
       `firstKeptEntryId`, summarized by the model (`Operator.Core.Compaction`)
 
+  A user message may carry attachments (`user/2`): each is a text part
+  wrapped in `<attachment …>` (name, type, path, a line about it and, for a
+  text file, its text), then pi's image part for a picture. The message's
+  `attachments` field (Operator's; pi ignores it) lists them for the chat
+  (`attachments/1`), and `typed/1` is what the user typed. A picture goes
+  to the model only if it takes pictures, a PDF (read from its path) only
+  if it takes PDFs (`context/2`'s `:inputs`); otherwise the model gets
+  the path and the line about it. After a compaction, the summary message
+  lists the attachments it summarized away, so their paths aren't lost.
+
   Reading keeps every entry, including types Operator doesn't know (omp's
   `custom`, `title_change`, `thinking_level_change`, …). They are carried
   along (Operator only appends, never rewrites) and ignored when building
-  the model context. `context/1` walks the leaf's branch as pi's
+  the model context. `context/2` walks the leaf's branch as pi's
   `buildSessionContext` does: the latest `compaction`'s summary first, then
   the entries from its `firstKeptEntryId` on, `message` and
   `custom_message` entries turned into req_llm messages.
@@ -172,18 +182,79 @@ defmodule Operator.Core.Session do
 
   # ── entry builders (pi shapes; id/parentId/timestamp added by append/2) ──
 
+  @typedoc """
+  A file going with a user message (built by `Operator.Core.Attachments`):
+  `kind` `:image` (with `image`, the picture for the model), `:text` (with
+  `text`, already cut to the output budget), `:pdf` (with `pages` when
+  known) or `:file`; `path` is its copy in the workspace, `about` one line
+  for the model (size, when and where a photo was taken, ...).
+  """
+  @type attachment :: %{
+          required(:kind) => :image | :text | :pdf | :file,
+          required(:name) => String.t(),
+          required(:path) => String.t(),
+          required(:mime) => String.t(),
+          required(:about) => String.t(),
+          optional(:image) => {String.t(), binary()} | nil,
+          optional(:text) => String.t() | nil,
+          optional(:pages) => pos_integer() | nil
+        }
+
+  @doc """
+  A user message: `text` (may be empty when `opts[:attachments]` isn't)
+  then each attachment's parts. `opts[:steering]` marks a message sent
+  while the agent was running.
+  """
   @spec user(String.t(), keyword()) :: entry()
   def user(text, opts \\ []) do
+    attachments = Keyword.get(opts, :attachments, [])
+    typed = if text == "", do: [], else: [text_part(text)]
+
     message = %{
       "role" => "user",
-      "content" => [text_part(text)],
+      "content" => typed ++ Enum.flat_map(attachments, &attachment_parts/1),
       "attribution" => "user",
       "timestamp" => now_ms()
     }
 
+    message =
+      if attachments == [],
+        do: message,
+        else: Map.put(message, "attachments", Enum.map(attachments, &attachment_meta/1))
+
     message = if opts[:steering], do: Map.put(message, "steering", true), else: message
     %{"type" => "message", "message" => message}
   end
+
+  defp attachment_parts(a) do
+    body = Enum.reject([a.about, a[:text]], &(&1 in [nil, ""]))
+
+    envelope =
+      ~s|<attachment name="#{attr(a.name)}" type="#{attr(a.mime)}" path="#{attr(a.path)}">\n| <>
+        Enum.join(body, "\n") <> "\n</attachment>"
+
+    image =
+      case a[:image] do
+        {mime, data} -> [%{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}]
+        nil -> []
+      end
+
+    [text_part(envelope) | image]
+  end
+
+  defp attachment_meta(a) do
+    meta = %{
+      "kind" => Atom.to_string(a.kind),
+      "name" => a.name,
+      "path" => a.path,
+      "mimeType" => a.mime,
+      "about" => a.about
+    }
+
+    if a[:pages], do: Map.put(meta, "pages", a.pages), else: meta
+  end
+
+  defp attr(value), do: value |> to_string() |> String.replace(~s|"|, "'")
 
   @doc """
   An assistant message. `reply` has `:text`, `:thinking`, `:tool_calls`
@@ -288,6 +359,29 @@ defmodule Operator.Core.Session do
 
   def text(_), do: ""
 
+  @doc """
+  What the user typed: a user message's text without its attachments
+  (each adds one text part, its envelope, after the typed text).
+  """
+  @spec typed(map()) :: String.t()
+  def typed(%{"content" => content} = message) do
+    case attachments(message) do
+      [] ->
+        text(content)
+
+      files ->
+        texts = for %{"type" => "text"} = part <- List.wrap(content), do: part
+        texts |> Enum.drop(-length(files)) |> text()
+    end
+  end
+
+  def typed(_message), do: ""
+
+  @doc ~S|A user message's attachments: `[%{"kind", "name", "path", "mimeType", "about"}]`.|
+  @spec attachments(map()) :: [map()]
+  def attachments(%{"attachments" => list}) when is_list(list), do: list
+  def attachments(_message), do: []
+
   @doc "Thinking text of an assistant message."
   @spec thinking(map()) :: String.t()
   def thinking(%{"content" => content}) when is_list(content),
@@ -307,19 +401,23 @@ defmodule Operator.Core.Session do
   @doc """
   The req_llm messages for a branch (no system prompt), as pi's
   `buildSessionContext` builds them. With a `compaction` on the branch,
-  the latest one's summary comes first (rendered as pi renders it), then
-  the entries from its `firstKeptEntryId` up to it, then everything after
-  it (see `compacted/1`); otherwise the whole branch. See `messages/1`.
+  the latest one's summary comes first (rendered as pi renders it, plus
+  the attachments it summarized away), then the entries from its
+  `firstKeptEntryId` up to it, then everything after it (see
+  `compacted/1`); otherwise the whole branch. See `messages/2` for `opts`.
   """
-  @spec context([entry()]) :: [ReqLLM.Message.t()]
-  def context(entries) do
+  @spec context([entry()], keyword()) :: [ReqLLM.Message.t()]
+  def context(entries, opts \\ []) do
     {compaction, kept, later} = compacted(entries)
 
     summary =
-      for %{"summary" => s} when is_binary(s) <- List.wrap(compaction),
-          do: Context.user(compaction_context(s))
+      for %{"summary" => s} when is_binary(s) <- List.wrap(compaction) do
+        shown = MapSet.new(kept ++ later, & &1["id"])
+        away = Enum.reject(entries, &MapSet.member?(shown, &1["id"]))
+        Context.user(compaction_context(s) <> attachments_note(away))
+      end
 
-    summary ++ messages(kept ++ later)
+    summary ++ messages(kept ++ later, opts)
   end
 
   @doc """
@@ -329,11 +427,19 @@ defmodule Operator.Core.Session do
   aborts) and pi's superseded `retryRecovery` turns are dropped, and a
   tool call left without a result gets pi's synthetic "aborted" result,
   so the context is always valid for the provider.
+
+  `opts[:inputs]` is what the model takes (`Operator.Core.Models.inputs/1`,
+  default `[:text, :image]`): without `:image`, pictures become a note;
+  with `:pdf`, attached PDFs go as documents, read from their paths, the
+  newest first while the request stays inside the provider's limits.
   """
-  @spec messages([entry()]) :: [ReqLLM.Message.t()]
-  def messages(entries) do
+  @spec messages([entry()], keyword()) :: [ReqLLM.Message.t()]
+  def messages(entries, opts \\ []) do
+    inputs = Keyword.get(opts, :inputs, [:text, :image])
+    ctx = %{inputs: inputs, docs: documents(entries, inputs)}
+
     entries
-    |> Enum.flat_map(&to_messages/1)
+    |> Enum.flat_map(&to_messages(&1, ctx))
     |> close_dangling_calls()
   end
 
@@ -382,15 +488,33 @@ defmodule Operator.Core.Session do
     """
   end
 
-  defp to_messages(%{"type" => "message", "message" => %{"role" => role} = m})
+  defp attachments_note(entries) do
+    lines =
+      for %{"type" => "message", "message" => %{"role" => "user"} = m} <- entries,
+          a <- attachments(m),
+          do: "- #{a["name"]} (#{a["mimeType"]}) at #{a["path"]}: #{a["about"]}"
+
+    if lines == [],
+      do: "",
+      else:
+        "\n\nFiles the user attached before this summary (still in the workspace; " <>
+          "read them again with file_read):\n" <> Enum.join(lines, "\n")
+  end
+
+  @no_picture "(The picture isn't sent: this model doesn't take pictures.)"
+
+  defp to_messages(%{"type" => "message", "message" => %{"role" => role} = m}, ctx)
        when role in ["user", "developer"] do
-    case text(m["content"]) do
-      "" -> []
-      text -> [Context.user(text)]
+    parts = Enum.flat_map(List.wrap(m["content"]), &user_part(&1, ctx)) ++ pdf_parts(m, ctx)
+
+    case parts do
+      [] -> []
+      [%ContentPart{type: :text, text: text}] -> [Context.user(text)]
+      parts -> [Context.user(parts)]
     end
   end
 
-  defp to_messages(%{"type" => "message", "message" => %{"role" => "assistant"} = m}) do
+  defp to_messages(%{"type" => "message", "message" => %{"role" => "assistant"} = m}, _ctx) do
     calls =
       for c <- tool_calls(m),
           do: ToolCall.new(c["id"], c["name"], Jason.encode!(c["arguments"] || %{}))
@@ -402,11 +526,11 @@ defmodule Operator.Core.Session do
       else: [Context.assistant(text, tool_calls: calls)]
   end
 
-  defp to_messages(%{"type" => "message", "message" => %{"role" => "toolResult"} = m}) do
+  defp to_messages(%{"type" => "message", "message" => %{"role" => "toolResult"} = m}, ctx) do
     images =
-      for %{"type" => "image", "data" => data, "mimeType" => mime} <- List.wrap(m["content"]),
-          {:ok, bytes} <- [Base.decode64(data)],
-          do: ContentPart.image(bytes, mime)
+      for %{"type" => "image"} = part <- List.wrap(m["content"]),
+          image <- picture(part, ctx),
+          do: image
 
     content =
       if images == [],
@@ -416,14 +540,88 @@ defmodule Operator.Core.Session do
     [Context.tool_result(m["toolCallId"], m["toolName"], content)]
   end
 
-  defp to_messages(%{"type" => "custom_message", "content" => content}) do
+  defp to_messages(%{"type" => "custom_message", "content" => content}, _ctx) do
     case text(content) do
       "" -> []
       text -> [Context.user(text)]
     end
   end
 
-  defp to_messages(_entry), do: []
+  defp to_messages(_entry, _ctx), do: []
+
+  defp user_part(text, ctx) when is_binary(text), do: user_part(text_part(text), ctx)
+  defp user_part(%{"type" => "text", "text" => ""}, _ctx), do: []
+
+  defp user_part(%{"type" => "text", "text" => t}, _ctx) when is_binary(t),
+    do: [ContentPart.text(t)]
+
+  defp user_part(%{"type" => "image"} = part, ctx), do: picture(part, ctx)
+  defp user_part(_part, _ctx), do: []
+
+  defp picture(%{"data" => data, "mimeType" => mime}, %{inputs: inputs}) do
+    cond do
+      :image not in inputs -> [ContentPart.text(@no_picture)]
+      bytes = decode64(data) -> [ContentPart.image(bytes, mime)]
+      true -> []
+    end
+  end
+
+  defp picture(_part, _ctx), do: []
+
+  defp decode64(data) do
+    case Base.decode64(data) do
+      {:ok, bytes} -> bytes
+      :error -> nil
+    end
+  end
+
+  defp pdf_parts(m, %{inputs: inputs, docs: docs}) do
+    if :pdf in inputs,
+      do: for(%{"kind" => "pdf"} = a <- attachments(m), do: pdf_part(a, docs)),
+      else: []
+  end
+
+  defp pdf_part(%{"path" => path, "name" => name} = a, docs) do
+    cond do
+      not File.exists?(path) ->
+        ContentPart.text("(#{name} is no longer at #{path}.)")
+
+      MapSet.member?(docs, path) ->
+        ContentPart.file(File.read!(path), name, "application/pdf", %{pages: a["pages"]})
+
+      true ->
+        ContentPart.text(
+          "(#{name} isn't sent as a document this time: newer documents fill the " <>
+            "request. It's at #{path}.)"
+        )
+    end
+  end
+
+  # The attached PDFs sent as documents: the newest first, while the request
+  # stays inside the provider's limits (Anthropic: 32 MB and 100 pages).
+  @docs_bytes 20_000_000
+  @docs_pages 100
+
+  defp documents(entries, inputs),
+    do: if(:pdf in inputs, do: fit_documents(entries), else: MapSet.new())
+
+  defp fit_documents(entries) do
+    pdfs =
+      for %{"type" => "message", "message" => %{"role" => "user"} = m} <- Enum.reverse(entries),
+          %{"kind" => "pdf", "path" => path} = a <- Enum.reverse(attachments(m)),
+          {:ok, %File.Stat{size: size}} <- [File.stat(path)],
+          # a count the PDF hides: a page per 100 KB
+          do: {path, size, a["pages"] || max(1, div(size, 100_000))}
+
+    {docs, _bytes, _pages} = Enum.reduce(pdfs, {MapSet.new(), 0, 0}, &add_document/2)
+    docs
+  end
+
+  defp add_document({path, size, more}, {docs, bytes, pages}) do
+    if bytes + size <= @docs_bytes and pages + more <= @docs_pages,
+      do: {MapSet.put(docs, path), bytes + size, pages + more},
+      else: {docs, bytes, pages}
+  end
 
   defp close_dangling_calls(messages) do
     {out, open} = Enum.reduce(messages, {[], []}, &track_calls/2)
@@ -615,8 +813,15 @@ defmodule Operator.Core.Session do
     end)
   end
 
-  defp title_for(%{"type" => "message", "message" => %{"role" => "user", "content" => c}}),
-    do: c |> text() |> String.split("\n", parts: 2) |> hd() |> String.slice(0, 60)
+  defp title_for(%{"type" => "message", "message" => %{"role" => "user"} = m}) do
+    line =
+      case typed(m) do
+        "" -> Enum.map_join(attachments(m), ", ", & &1["name"])
+        text -> text
+      end
+
+    line |> String.split("\n", parts: 2) |> hd() |> String.slice(0, 60)
+  end
 
   defp title_for(_entry), do: ""
 

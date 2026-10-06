@@ -77,6 +77,41 @@ defmodule Operator.Core.Models do
 
   defp undated(spec), do: String.replace(spec, ~r/-\d{8}$/, "")
 
+  @doc """
+  What `spec` takes as input (`:text`, `:image`, `:pdf`, ...): llm_db's
+  `modalities.input`, looked up once per spec and kept (the loop asks on
+  every request). Every model on the Codex backend takes text and pictures
+  (omp's catalog); a Claude model llm_db doesn't know (a custom id) takes
+  pictures and PDFs like every Claude; anything else unknown, text only.
+  """
+  @spec inputs(String.t()) :: [atom()]
+  def inputs(spec) do
+    key = {__MODULE__, :inputs, spec}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        inputs = lookup_inputs(spec)
+        :persistent_term.put(key, inputs)
+        inputs
+
+      inputs ->
+        inputs
+    end
+  end
+
+  @doc "Does `spec` take pictures?"
+  @spec images?(String.t()) :: boolean()
+  def images?(spec), do: :image in inputs(spec)
+
+  defp lookup_inputs("openai_codex:" <> _id), do: [:text, :image]
+
+  defp lookup_inputs(spec) do
+    case LLMDB.model(spec) do
+      {:ok, %{modalities: %{input: [_ | _] = input}}} -> input
+      _ -> if String.starts_with?(spec, "anthropic:"), do: [:text, :image, :pdf], else: [:text]
+    end
+  end
+
   # Opus, Sonnet, Haiku, then the rest; newest version first in each.
   defp claude_order(%{name: name}) do
     family =

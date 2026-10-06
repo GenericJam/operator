@@ -12,7 +12,8 @@ defmodule Operator.Core.Compaction do
     * how big: `context_tokens/2` is pi's `compactionContextTokens`: the
       larger of the last reply's reported usage (plus an estimate of what
       came after it) and an estimate of the whole request. Estimates are
-      bytes / 4 (pi's chars / 4, on ASCII).
+      bytes / 4 (pi's chars / 4, on ASCII), a picture 1,200 tokens (pi's), a
+      PDF page 2,000.
     * when: `should_compact?/3`, over the window minus pi's reserve
       (`resolveThresholdTokens` under pi's default settings).
     * where: `prepare/2` is pi's `prepareCompaction` / `findCutPoint`: keep
@@ -390,15 +391,33 @@ defmodule Operator.Core.Compaction do
     estimate(name) + estimate(description) + estimate(json)
   end
 
+  # pi's estimateTokens counts a picture as 4,800 characters (1,200 tokens).
+  # A PDF page costs Claude 1,500-3,000 tokens (text plus the page's
+  # image): 2,000 a page; without a page count, a page per 100 KB.
+  @image_tokens 1_200
+  @page_tokens 2_000
+
   defp message_tokens(%Message{content: parts, tool_calls: calls}) do
     Enum.sum_by(parts, fn
-      %ContentPart{type: :text, text: text} when is_binary(text) -> estimate(text)
-      _part -> 0
+      %ContentPart{type: :text, text: text} when is_binary(text) ->
+        estimate(text)
+
+      %ContentPart{type: :image} ->
+        @image_tokens
+
+      %ContentPart{type: :file, data: data} = p when is_binary(data) ->
+        pdf_tokens(p.metadata[:pages], byte_size(data))
+
+      _part ->
+        0
     end) +
       Enum.sum_by(calls || [], fn %ToolCall{function: f} ->
         estimate(f.name) + estimate(f.arguments || "")
       end)
   end
+
+  defp pdf_tokens(pages, _bytes) when is_integer(pages), do: pages * @page_tokens
+  defp pdf_tokens(_pages, bytes), do: max(1, div(bytes, 100_000)) * @page_tokens
 
   # What an entry adds to the context (thinking is never sent back).
   defp entry_tokens(%{"type" => "message", "message" => %{"role" => "assistant"} = m}) do
@@ -408,8 +427,14 @@ defmodule Operator.Core.Compaction do
       end)
   end
 
-  defp entry_tokens(%{"type" => "message", "message" => m}),
-    do: estimate(Session.text(m["content"]))
+  defp entry_tokens(%{"type" => "message", "message" => m}) do
+    pictures = for %{"type" => "image"} <- List.wrap(m["content"]), do: @image_tokens
+
+    pdfs =
+      for %{"kind" => "pdf"} = a <- Session.attachments(m), do: (a["pages"] || 1) * @page_tokens
+
+    estimate(Session.text(m["content"])) + Enum.sum(pictures) + Enum.sum(pdfs)
+  end
 
   defp entry_tokens(%{"type" => "custom_message", "content" => c}), do: estimate(Session.text(c))
   defp entry_tokens(_entry), do: 0

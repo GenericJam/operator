@@ -43,6 +43,7 @@ defmodule Operator.Core.Loop do
   alias Operator.Core.Compaction
   alias Operator.Core.Events
   alias Operator.Core.LLM
+  alias Operator.Core.Models
   alias Operator.Core.Session
   alias Operator.Core.Tool
   alias Operator.Core.ToolRegistry
@@ -75,23 +76,32 @@ defmodule Operator.Core.Loop do
   `:llm` (`{module, opts}`), `:tools` (`:registry` or a list of tool
   modules), `:before_tool_call` (`fn call, ctx -> :allow | {:block, reason}
   end`), `:task_supervisor`, `:budget` (the data dir holding the cost
-  ledger and cap; nil means no cap), and the compaction options and
-  guards above.
+  ledger and cap; nil means no cap), `:inputs` (what the model takes, for
+  attachments and tool pictures; default `Operator.Core.Models.inputs/1`
+  of the session's model), and the compaction options and guards above.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
 
-  @doc "Starts a run. `{:error, :running}` if one is in progress (use `steer/2`)."
-  @spec prompt(GenServer.server(), String.t()) :: :ok | {:error, :running}
-  def prompt(loop, text), do: GenServer.call(loop, {:prompt, text})
+  @doc """
+  Starts a run. `{:error, :running}` if one is in progress (use `steer/3`).
+  `attachments` (`t:Operator.Core.Session.attachment/0`) go with the message;
+  `text` may then be empty.
+  """
+  @spec prompt(GenServer.server(), String.t(), [Session.attachment()]) ::
+          :ok | {:error, :running}
+  def prompt(loop, text, attachments \\ []),
+    do: GenServer.call(loop, {:prompt, {text, attachments}})
 
   @doc "Injects `text` at the next step boundary; starts a run if idle."
-  @spec steer(GenServer.server(), String.t()) :: :ok
-  def steer(loop, text), do: GenServer.call(loop, {:steer, text})
+  @spec steer(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
+  def steer(loop, text, attachments \\ []),
+    do: GenServer.call(loop, {:steer, {text, attachments}})
 
   @doc "Runs `text` once the agent would otherwise stop; starts a run if idle."
-  @spec follow_up(GenServer.server(), String.t()) :: :ok
-  def follow_up(loop, text), do: GenServer.call(loop, {:follow_up, text})
+  @spec follow_up(GenServer.server(), String.t(), [Session.attachment()]) :: :ok
+  def follow_up(loop, text, attachments \\ []),
+    do: GenServer.call(loop, {:follow_up, {text, attachments}})
 
   @doc "Aborts the model call and unstarted tools; no-op when idle."
   @spec stop(GenServer.server()) :: :ok
@@ -143,22 +153,22 @@ defmodule Operator.Core.Loop do
   end
 
   @impl true
-  def handle_call({:prompt, text}, _from, %{status: :idle} = s),
-    do: {:reply, :ok, start_run(s, [Session.user(text)])}
+  def handle_call({:prompt, input}, _from, %{status: :idle} = s),
+    do: {:reply, :ok, start_run(s, [user(input)])}
 
-  def handle_call({:prompt, _text}, _from, s), do: {:reply, {:error, :running}, s}
+  def handle_call({:prompt, _input}, _from, s), do: {:reply, {:error, :running}, s}
 
-  def handle_call({:steer, text}, _from, %{status: :idle} = s),
-    do: {:reply, :ok, start_run(s, [Session.user(text)])}
+  def handle_call({:steer, input}, _from, %{status: :idle} = s),
+    do: {:reply, :ok, start_run(s, [user(input)])}
 
-  def handle_call({:steer, text}, _from, s),
-    do: {:reply, :ok, queued(%{s | steering: s.steering ++ [text]})}
+  def handle_call({:steer, input}, _from, s),
+    do: {:reply, :ok, queued(%{s | steering: s.steering ++ [input]})}
 
-  def handle_call({:follow_up, text}, _from, %{status: :idle} = s),
-    do: {:reply, :ok, start_run(s, [Session.user(text)])}
+  def handle_call({:follow_up, input}, _from, %{status: :idle} = s),
+    do: {:reply, :ok, start_run(s, [user(input)])}
 
-  def handle_call({:follow_up, text}, _from, s),
-    do: {:reply, :ok, queued(%{s | follow_up: s.follow_up ++ [text]})}
+  def handle_call({:follow_up, input}, _from, s),
+    do: {:reply, :ok, queued(%{s | follow_up: s.follow_up ++ [input]})}
 
   def handle_call(:stop, _from, s), do: {:reply, :ok, do_stop(s)}
 
@@ -197,14 +207,14 @@ defmodule Operator.Core.Loop do
       entries: entries,
       totals: Session.totals(entries),
       streaming: s.run && s.run.stream && IO.iodata_to_binary(s.run.stream.text),
-      queue: %{steering: s.steering, follow_up: s.follow_up}
+      queue: %{steering: labels(s.steering), follow_up: labels(s.follow_up)}
     }
 
     {:reply, snapshot, s}
   end
 
   def handle_call(:context, _from, s),
-    do: {:reply, Session.context(Enum.reverse(s.entries_rev)), s}
+    do: {:reply, Session.context(Enum.reverse(s.entries_rev), inputs(s)), s}
 
   # model stream worker
   @impl true
@@ -306,7 +316,13 @@ defmodule Operator.Core.Loop do
   end
 
   defp begin_turn(%{run: %{iteration: n}} = s, inputs) when n >= s.opts.max_iterations do
-    dropped = for %{"message" => m} <- inputs, do: Session.text(m["content"])
+    dropped =
+      for %{"message" => m} <- inputs do
+        case Session.typed(m) do
+          "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
+          text -> text
+        end
+      end
 
     text =
       "Stopped after #{n} model calls in one run (max_iterations)." <>
@@ -410,11 +426,14 @@ defmodule Operator.Core.Loop do
       model: s.session.model,
       session_id: s.session.id,
       system_prompt: s.opts[:system_prompt] || Operator.Core.system_prompt(),
-      messages: Session.context(entries),
+      messages: Session.context(entries, inputs(s)),
       tools: s |> tools() |> Map.values() |> Enum.map(&Tool.to_req_llm/1),
       max_tokens: s.opts.max_tokens
     }
   end
+
+  # What the model takes (pictures, PDFs); the `:inputs` option overrides it.
+  defp inputs(s), do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model)]
 
   defp tools(%{opts: %{tools: :registry}}),
     do: Map.new(ToolRegistry.list(), &{&1.name(), &1})
@@ -507,15 +526,25 @@ defmodule Operator.Core.Loop do
   end
 
   defp drain(s, :steering) do
-    inputs = for text <- s.steering, do: Session.user(text, steering: true)
+    inputs = for input <- s.steering, do: user(input, steering: true)
     s = %{s | steering: []}
     if inputs != [], do: queued(s)
     begin_turn(s, inputs)
   end
 
   defp drain(s, :follow_up) do
-    inputs = for text <- s.follow_up, do: Session.user(text)
+    inputs = for input <- s.follow_up, do: user(input)
     s |> Map.put(:follow_up, []) |> queued() |> begin_turn(inputs)
+  end
+
+  defp user({text, attachments}, opts \\ []),
+    do: Session.user(text, [attachments: attachments] ++ opts)
+
+  # A queued message as the screen shows it: its text, else its files.
+  defp labels(queue) do
+    for {text, attachments} <- queue do
+      if text == "", do: Enum.map_join(attachments, ", ", & &1.name), else: text
+    end
   end
 
   defp finish(s, reason) do
@@ -639,7 +668,7 @@ defmodule Operator.Core.Loop do
   end
 
   defp stopped(s) do
-    dropped = s.steering ++ s.follow_up
+    dropped = labels(s.steering) ++ labels(s.follow_up)
 
     text =
       "Stopped by the user." <>
@@ -780,7 +809,7 @@ defmodule Operator.Core.Loop do
   end
 
   defp queued(s) do
-    emit(s, %{type: :queue, steering: s.steering, follow_up: s.follow_up})
+    emit(s, %{type: :queue, steering: labels(s.steering), follow_up: labels(s.follow_up)})
     s
   end
 
