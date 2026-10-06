@@ -348,6 +348,39 @@ defmodule Operator.ChatScreenTest do
     assert text(view) =~ "idle · $0.0000 · 0 tok · gpt-5-mini"
   end
 
+  test "the status line shows the model's subscription windows, updated after a call",
+       %{tmp_dir: dir} do
+    alias Operator.Core.Usage
+    reset = System.os_time(:second) + 3600
+
+    headers = fn five, week ->
+      [
+        {"anthropic-ratelimit-unified-5h-utilization", five},
+        {"anthropic-ratelimit-unified-5h-reset", "#{reset}"},
+        {"anthropic-ratelimit-unified-7d-utilization", week},
+        {"anthropic-ratelimit-unified-7d-reset", "#{reset}"}
+      ]
+    end
+
+    %{view: view, loop: loop} = mount_chat(dir, [[{:text, "Hi."}]])
+    # no numbers yet: no figure
+    assert text(view) =~ "idle · $0.0000 · 0 tok · claude-haiku-4-5"
+
+    # what the call's headers reported is read once it ends
+    :ok =
+      Usage.record(dir, model(), %{status: 200, headers: headers.("0.42", "0.18"), usage: %{}})
+
+    codex = [{"x-codex-primary-used-percent", "7"}, {"x-codex-primary-window-minutes", "300"}]
+    :ok = Usage.record(dir, "openai_codex:gpt-5-mini", %{status: 200, headers: codex, usage: %{}})
+    view = view |> send_text("hello") |> pump(:agent_end)
+    assert text(view) =~ "idle · 5h 42% · wk 18% · $0.0010 · 120 tok · claude-haiku-4-5"
+
+    # another model: its provider's windows
+    :ok = Loop.set_model(loop, "openai_codex:gpt-5-mini")
+    view = pump(view, :model_change)
+    assert text(view) =~ "idle · 5h 7% · $0.0010 · 120 tok · gpt-5-mini"
+  end
+
   test "new session and resume, from the menu", %{tmp_dir: dir} do
     start_current(dir, [[{:text, "One."}]], [], Operator.Core.Current)
     view = mount_screen(ChatScreen, %{settings_dir: dir})

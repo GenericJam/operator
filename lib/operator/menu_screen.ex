@@ -8,7 +8,8 @@ defmodule Operator.MenuScreen do
     * `:main`: every setting at a glance, each line opening its page or
       acting at once: the provider sign-ins, the model, a new session,
       resuming a past one, the renderer (`md:native` / `md:term`,
-      `Operator.Core.Term.put_renderer/1`) and `Operator.DiagnosticsScreen`.
+      `Operator.Core.Term.put_renderer/1`), the subscription usage
+      (`Operator.UsageScreen`) and `Operator.DiagnosticsScreen`.
     * `:accounts`: per provider, sign in in the browser (`Operator.Auth.Login`,
       with a field for the `code#state` Anthropic's page shows when it doesn't
       redirect back) or sign out (`Operator.Auth.delete/1`, after a confirm),
@@ -86,6 +87,11 @@ defmodule Operator.MenuScreen do
 
   def handle_info({:tap, :diagnostics}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.DiagnosticsScreen)}
+
+  def handle_info({:tap, :usage}, socket) do
+    params = Map.take(socket.assigns, [:model, :path])
+    {:noreply, Mob.Socket.push_screen(socket, Operator.UsageScreen, params)}
+  end
 
   def handle_info({:tap, :scan_qr}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen)}
@@ -265,6 +271,8 @@ defmodule Operator.MenuScreen do
           UI.heading("display", t),
           UI.item("renderer: md:#{renderer}", "tap for md:#{other}", :toggle_renderer, t),
           UI.line(renderer_hint(renderer), t, "dim", text_size: t.text_size - 1),
+          UI.heading("usage", t),
+          UI.item("usage", "5h / weekly, tokens", :usage, t),
           UI.heading("diagnostics", t),
           UI.item("diagnostics", "updates, spend, dyn", :diagnostics, t)
         ]

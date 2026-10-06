@@ -13,10 +13,17 @@ defmodule Operator.Core.LLM.ReqLLM do
   A provider without a sign-in fails with `{:signed_out, provider}`; any
   other model prefix with `{:other, _}`. `max_tokens` is always explicit
   (req_llm's default is the model's whole output limit).
+
+  Every call that reached the provider is recorded with
+  `Operator.Core.Usage.record/3`: its tokens and cost, the subscription
+  windows its response headers report, and a 429's reset.
   """
   @behaviour Operator.Core.LLM
 
+  require Logger
+
   alias Operator.Auth
+  alias Operator.Core.Usage
   alias ReqLLM.StreamResponse
 
   @impl true
@@ -31,16 +38,61 @@ defmodule Operator.Core.LLM.ReqLLM do
     context =
       ReqLLM.Context.new([ReqLLM.Context.system(request.system_prompt) | request.messages])
 
-    with {:ok, stream} <- ReqLLM.stream_text(request.model, context, opts),
-         {:ok, response} <-
-           StreamResponse.process_stream(stream,
-             on_result: &sink.({:text, &1}),
-             on_thinking: &sink.({:thinking, &1})
-           ) do
-      {:ok, reply(response)}
-    else
-      {:error, reason} -> {:error, normalize(reason)}
+    case ReqLLM.stream_text(request.model, context, opts) do
+      {:ok, stream} ->
+        # Asked before the stream is read, answered with the rest of its
+        # metadata: the response's status and headers (the usage windows).
+        meta = :gen_server.send_request(stream.metadata_handle, :await)
+
+        result =
+          StreamResponse.process_stream(stream,
+            on_result: &sink.({:text, &1}),
+            on_thinking: &sink.({:thinking, &1})
+          )
+
+        finish(request.model, result, metadata(meta))
+
+      {:error, _reason} = error ->
+        finish(request.model, error, %{})
     end
+  end
+
+  defp finish(model, {:ok, response}, meta) do
+    record(model, %{status: meta[:status], headers: meta[:headers] || [], usage: response.usage})
+    {:ok, reply(response)}
+  end
+
+  defp finish(model, {:error, reason}, meta) do
+    error = normalize(reason)
+    {status, headers, body} = http_failure(reason, meta)
+    message = with {:http, _status, message} <- error, do: message
+    message = if is_binary(message), do: message, else: nil
+    record(model, %{status: status, headers: headers, body: body, error: message || "failed"})
+    {:error, error}
+  end
+
+  # The metadata the stream's handle sent; `%{}` if it stopped without.
+  defp metadata(request_id) do
+    case :gen_server.receive_response(request_id, 1_000) do
+      {:reply, {:ok, %{} = meta}} -> meta
+      _ -> %{}
+    end
+  end
+
+  # A failed response's status, headers and decoded body (a 429's reset).
+  defp http_failure(%ReqLLM.Error.API.Stream{cause: cause}, meta) when cause != nil,
+    do: http_failure(cause, meta)
+
+  defp http_failure(%ReqLLM.Error.API.Request{status: status} = e, meta) when is_integer(status),
+    do: {status, e.headers || meta[:headers] || [], e.response_body}
+
+  defp http_failure(_reason, meta), do: {meta[:status], meta[:headers] || [], nil}
+
+  # Usage bookkeeping never fails or slows a call beyond a small file write.
+  defp record(model, call) do
+    Usage.record(Operator.Paths.data_dir(), model, call)
+  rescue
+    e -> Logger.warning("[usage] couldn't record a model call: #{Exception.message(e)}")
   end
 
   @doc false

@@ -68,6 +68,11 @@ defmodule Operator.MenuScreenTest do
       assert view |> render_info({:tap, :diagnostics}) |> navigated_to() ==
                Operator.DiagnosticsScreen
 
+      %{model: model, path: path} = Loop.snapshot(loop)
+
+      assert {:push, Operator.UsageScreen, %{model: ^model, path: ^path}} =
+               view |> render_info({:tap, :usage}) |> nav()
+
       assert view |> render_info({:tap, :back}) |> nav() == {:pop}
 
       assert view |> render_info({:tap, :operator_toggle}) |> navigated_to() ==

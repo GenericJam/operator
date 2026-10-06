@@ -72,6 +72,7 @@ defmodule Operator.ChatScreen do
   alias Operator.Core.Term
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
+  alias Operator.Core.Usage
   alias Operator.Links
   alias Operator.TermUI, as: UI
   alias Operator.Toggle
@@ -603,6 +604,7 @@ defmodule Operator.ChatScreen do
     # may scroll the old one to its end, which counts as done); the second
     # once the new rows are laid out.
     send(self(), :stick)
+    socket = load_usage(socket)
     Process.send_after(self(), :stick, @attach_stick_ms)
     refresh(socket)
   end
@@ -627,7 +629,7 @@ defmodule Operator.ChatScreen do
     do: Mob.Socket.assign(socket, status: :running, detail: nil)
 
   defp on_event(%{type: :agent_end}, socket),
-    do: Mob.Socket.assign(socket, status: :idle, detail: nil, stream: nil)
+    do: socket |> Mob.Socket.assign(status: :idle, detail: nil, stream: nil) |> load_usage()
 
   defp on_event(%{type: :message_start, entry: %{"message" => %{"role" => "assistant"}}}, socket),
     do: socket |> Mob.Socket.assign(:detail, "thinking…") |> start_stream()
@@ -656,6 +658,7 @@ defmodule Operator.ChatScreen do
       end
 
     socket
+    |> load_usage()
     |> Mob.Socket.assign(
       stream: nil,
       totals: totals,
@@ -666,6 +669,7 @@ defmodule Operator.ChatScreen do
 
   defp on_event(%{type: :retry, delay_ms: ms}, socket) do
     socket
+    |> load_usage()
     |> cancel_flush()
     |> Mob.Socket.assign(stream: nil, detail: "retrying in #{div(ms, 1000)}s…")
     |> refresh()
@@ -1213,13 +1217,28 @@ defmodule Operator.ChatScreen do
 
     queued = if a.queued > 0, do: " · #{a.queued} queued", else: ""
     cost = :erlang.float_to_binary(a.totals.cost, decimals: 4)
-    line = "#{a.status}#{queued} · $#{cost} · #{tokens} tok · #{model}"
+    fields = ["#{a.status}#{queued}"] ++ limits(a) ++ ["$#{cost}", "#{tokens} tok", model]
+    line = Enum.join(fields, " · ")
 
     UI.top_bar(t, [
       UI.link("menu", :menu, t),
       UI.text(line, t, "dim", weight: 1, max_lines: 1, text_size: t.text_size - 2)
     ])
   end
+
+  # The model's subscription windows (`Operator.Core.Usage.status_text/3`).
+  defp limits(a) do
+    with {:ok, provider} <- Auth.provider_for_model(a.model),
+         text when is_binary(text) <- Usage.status_text(a.usage, provider) do
+      [text]
+    else
+      _ -> []
+    end
+  end
+
+  # What the last model call reported (the adapter wrote it before replying).
+  defp load_usage(socket),
+    do: Mob.Socket.assign(socket, :usage, Usage.load(socket.assigns.settings_dir))
 
   defp footer(a, t) do
     detail = a.detail || if(a.status == :running, do: "working…", else: "")
