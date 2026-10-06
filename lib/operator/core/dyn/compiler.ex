@@ -480,7 +480,7 @@ defmodule Operator.Core.Dyn.Compiler do
     receive do
       {^ref, result} ->
         Process.demonitor(mref, [:flush])
-        finish(result, n, files)
+        finish(result, n, files, Keyword.get(opts, :reuse))
 
       {:DOWN, ^mref, :process, ^pid, reason} ->
         purge(loaded(n))
@@ -500,8 +500,9 @@ defmodule Operator.Core.Dyn.Compiler do
 
   defp compile_files(files, n, reuse) do
     :ok = Trace.install()
-    # Debug info is what a later generation reuses (Reuse.recompile/4); it's
-    # on by default, but a host's `mix test` turns it off.
+    # Debug info is what a later generation plans its reuse from (Reuse) and
+    # recompiles from when renaming a binary won't do; it's on by default,
+    # but a host's `mix test` turns it off.
     :ok = Code.put_compiler_option(:debug_info, true)
 
     {us, {result, diagnostics}} =
@@ -599,7 +600,7 @@ defmodule Operator.Core.Dyn.Compiler do
     %{"modules" => defined |> Enum.map(&logical/1) |> Enum.sort(), "needs" => needs}
   end
 
-  defp finish({{:ok, modules, files_deps, reused}, ms, diagnostics}, n, files) do
+  defp finish({{:ok, modules, files_deps, reused}, ms, diagnostics}, n, files, reuse) do
     exported = Map.new(modules, fn {mod, _} -> {inspect(mod), mod} end)
 
     warnings =
@@ -608,7 +609,19 @@ defmodule Operator.Core.Dyn.Compiler do
           uniq: true,
           do: diagnostic(d, files)
 
-    refs = Map.new(modules, fn {mod, bin} -> {logical(mod), Reuse.refs(mod, bin, n)} end)
+    # A reused module names what its parent named (by written name); the
+    # rest are read from their debug info.
+    carried =
+      for rel <- reused,
+          mod <- files_deps[rel]["modules"],
+          into: %{},
+          do: {mod, reuse.deps["refs"][mod]}
+
+    refs =
+      Map.new(modules, fn {mod, bin} ->
+        name = logical(mod)
+        {name, Map.get_lazy(carried, name, fn -> Reuse.refs(mod, bin, n) end)}
+      end)
 
     {:ok,
      %{
@@ -620,7 +633,7 @@ defmodule Operator.Core.Dyn.Compiler do
      }}
   end
 
-  defp finish({{:error, failed}, _ms, diagnostics}, n, files) do
+  defp finish({{:error, failed}, _ms, diagnostics}, n, files, _reuse) do
     purge(loaded(n))
     failed_files = MapSet.new(failed, fn {{_rel, file, _ast}, _} -> file end)
 

@@ -133,6 +133,96 @@ defmodule Operator.Core.Dyn.ReuseTest do
              propose!(%{"label.ex" => String.replace(files("x")["label.ex"], "label", "tag")})
   end
 
+  # Dyn names held every way a reused binary keeps them.
+  defp holders(value) do
+    %{
+      "name.ex" => name(value),
+      "plain.ex" => files(value)["plain.ex"],
+      # Literals: a map, an improper list, a struct, an external fun.
+      "holder.ex" => """
+      defmodule Operator.Dyn.Holder do
+        def held,
+          do: %{module: Operator.Dyn.Name, list: [Operator.Dyn.Name | :tail], plain: %Operator.Dyn.Plain{}}
+
+        def fun, do: &Operator.Dyn.Name.value/0
+      end
+      """,
+      "board.ex" =>
+        screen("Board", "",
+          mount: "{:ok, Mob.Socket.assign(socket, :text, Operator.Dyn.Name.value())}"
+        ),
+      # Its own name in a charlist with a character past latin-1.
+      "chars.ex" => """
+      defmodule Operator.Dyn.Chars do
+        @chars String.to_charlist(inspect(__MODULE__) <> " ✓")
+        def chars, do: @chars
+      end
+      """
+    }
+  end
+
+  defp activate_reused!(files) do
+    %{n: n, reused: reused} = propose!(files)
+    {:ok, token} = Dyn.request_approval({:activate, n})
+    {:ok, _} = Dyn.activate(n, token)
+    {n, reused}
+  end
+
+  defp beam(dir, n, name), do: List.keyfind(Store.beams(dir, n), mod(n, name), 0) |> elem(1)
+
+  defp line_table(dir, n, name) do
+    {:ok, {_, [{~c"Line", table}]}} = :beam_lib.chunks(beam(dir, n, name), [~c"Line"])
+    table
+  end
+
+  defp board_text(n) do
+    board = mod(n, "Board")
+    {:ok, socket} = board.mount(%{}, %{}, Mob.Socket.new(board))
+    Mob.ScreenCase.text(board.render(socket.assigns))
+  end
+
+  test "a reused binary is renamed, not recompiled, through any number of generations",
+       %{dir: dir} do
+    one = activate!(holders("one"))
+
+    {two, reused} = activate_reused!(%{"name.ex" => name("two")})
+    # plain, holder, board; chars holds its old name: compiled from source.
+    assert reused == 3
+
+    assert call(two, "Holder", :held) == %{
+             module: mod(two, "Name"),
+             list: [mod(two, "Name") | :tail],
+             plain: struct(mod(two, "Plain"))
+           }
+
+    assert call(two, "Holder", :fun).() == "two"
+    assert board_text(two) =~ "two"
+    assert call(two, "Chars", :chars) == ~c"Operator.Dyn.G#{two}.Chars ✓"
+    # The line table still names the parent's copy of the source.
+    assert line_table(dir, two, "Holder") == line_table(dir, one, "Holder")
+
+    # Reused from a reused binary: its debug info names its own generation.
+    {three, 3} = activate_reused!(%{"name.ex" => name("three")})
+    assert call(three, "Holder", :fun).() == "three"
+    assert call(three, "Holder", :held).plain == struct(mod(three, "Plain"))
+    assert board_text(three) =~ "three"
+    assert call(three, "Chars", :chars) == ~c"Operator.Dyn.G#{three}.Chars ✓"
+    assert line_table(dir, three, "Holder") == line_table(dir, one, "Holder")
+
+    holder = beam(dir, three, "Holder")
+
+    assert Reuse.refs(mod(three, "Holder"), holder, three) == [
+             "Operator.Dyn.Name",
+             "Operator.Dyn.Plain"
+           ]
+
+    {:ok, {_, [abstract_code: {:raw_abstract_v1, forms}]}} =
+      :beam_lib.chunks(holder, [:abstract_code])
+
+    assert {:ok, compiled, _} = :compile.forms(forms, [:binary])
+    assert compiled == mod(three, "Holder")
+  end
+
   test "nothing is reused from a parent built by another runtime or without deps",
        %{dir: dir} do
     one = activate!(files("one"))
