@@ -325,7 +325,9 @@ defmodule Operator.MenuScreen do
       for s <- sessions do
         current = s.path == a.path
 
-        UI.item(s.title || "(untitled)", age(now - s.mtime), {:resume, s.path}, t,
+        title = if s.title in [nil, ""], do: "(untitled)", else: s.title
+
+        UI.item(title, age(now - s.mtime), {:resume, s.path}, t,
           mark: current,
           color: if(current, do: "user", else: "fg")
         )

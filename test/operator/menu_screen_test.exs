@@ -343,6 +343,13 @@ defmodule Operator.MenuScreenTest do
       assert_received {:operator_menu, :new_session}
     end
 
+    test "a session with no prompt yet (only a model change) shows as untitled", %{tmp_dir: dir} do
+      s = Session.new(dir, model(), dir)
+      Session.append(s, Session.model_change("anthropic:claude-sonnet-4-5"))
+      %{view: view} = mount_menu(dir, :sessions)
+      assert text(view) =~ "  (untitled)"
+    end
+
     test "none saved yet", %{tmp_dir: dir} do
       %{view: view} = mount_menu(dir, :sessions)
       assert text(view) =~ "no saved sessions yet"
