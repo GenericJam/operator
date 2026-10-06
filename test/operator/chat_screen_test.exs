@@ -785,28 +785,84 @@ defmodule Operator.ChatScreenTest do
       assert_received {:phone_reply, ^ref, {:error, "This phone has no camera" <> _}}
     end
 
-    test "permission requests: one per capability at a time, answered granted or denied", %{
+    test "permission requests: parallel ones for a capability share one request and answer", %{
       tmp_dir: dir
     } do
       %{view: view} = mount_chat(dir, [])
-      [r1, r2, r3] = [make_ref(), make_ref(), make_ref()]
+      [r1, r2, r3, r4] = [make_ref(), make_ref(), make_ref(), make_ref()]
 
       view =
         view
         |> render_info({:phone_request, r1, self(), :permission, %{capability: :all_files}})
         |> render_info({:phone_request, r2, self(), :permission, %{capability: :media}})
-        |> render_info({:phone_request, r3, self(), :permission, %{capability: :media}})
+        |> render_info({:phone_request, r3, self(), :permission, %{capability: :all_files}})
 
+      # two file tools in shared storage at once: one request, no refusal
       assert_received {:requested_permission, :all_files}
+      refute_received {:requested_permission, :all_files}
       assert_received {:requested_permission, :media}
-      assert_received {:phone_reply, ^r3, {:error, "Another permission request" <> _}}
+      refute_received {:phone_reply, _, _}
 
       view = render_info(view, {:permission, :media, :granted})
       assert_received {:phone_reply, ^r2, {:ok, :granted}}
-      refute_received {:phone_reply, ^r1, _}
+      refute_received {:phone_reply, _, _}
 
-      render_info(view, {:permission, :all_files, :denied})
-      assert_received {:phone_reply, ^r1, {:error, "All files access is off" <> _}}
+      view = render_info(view, {:permission, :all_files, :denied})
+      assert_received {:phone_reply, ^r1, {:error, "Operator has no access to the phone's" <> _}}
+      assert_received {:phone_reply, ^r3, {:error, "Operator has no access to the phone's" <> _}}
+
+      # answered: the next one asks again; a waiter that gave up doesn't
+      # hold it up
+      gone = dead_pid()
+
+      view
+      |> render_info({:phone_request, make_ref(), gone, :permission, %{capability: :media}})
+      |> render_info({:phone_request, r4, self(), :permission, %{capability: :media}})
+      |> render_info({:permission, :media, :granted})
+
+      assert_received {:requested_permission, :media}
+      assert_received {:requested_permission, :media}
+      assert_received {:phone_reply, ^r4, {:ok, :granted}}
+    end
+
+    test "a grant starts each waiting action once, and none for a tool that gave up", %{
+      tmp_dir: dir
+    } do
+      %{view: view} = mount_chat(dir, [])
+      args = %{facing: :back, flash: :off}
+      gone = dead_pid()
+
+      # the snap's tool timed out before the user allowed the camera
+      view =
+        view
+        |> render_info({:phone_request, make_ref(), gone, :camera_snap, args})
+        |> render_info({:permission, :camera, :granted})
+
+      assert_received {:requested_permission, :camera}
+      refute_received {:phone_call, :camera_snap, _}
+
+      # two camera actions wait together: each grant answers both requests,
+      # but each action starts once
+      [r1, r2] = [make_ref(), make_ref()]
+
+      view =
+        view
+        |> render_info({:phone_request, r1, self(), :camera_photo, %{}})
+        |> render_info({:phone_request, r2, self(), :camera_snap, args})
+        |> render_info({:permission, :camera, :granted})
+
+      assert_received {:phone_call, :camera_photo, %{}}
+      assert_received {:phone_call, :camera_snap, ^args}
+
+      view = render_info(view, {:permission, :camera, :granted})
+      refute_received {:phone_call, _, _}
+
+      view
+      |> render_info({:camera, :cancelled})
+      |> render_info({:camera, :snap_error, :busy})
+
+      assert_received {:phone_reply, ^r1, {:ok, :cancelled}}
+      assert_received {:phone_reply, ^r2, {:error, "The camera is busy" <> _}}
     end
 
     test "pick_file opens the document picker and relays what was picked", %{tmp_dir: dir} do
@@ -827,6 +883,13 @@ defmodule Operator.ChatScreenTest do
 
       assert_received {:phone_reply, ^ref, {:ok, :cancelled}}
     end
+  end
+
+  # A tool process that has already given up.
+  defp dead_pid do
+    {pid, ref} = spawn_monitor(fn -> :ok end)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+    pid
   end
 
   test "phone tools: no chat screen, a clear error; their selftests pass" do

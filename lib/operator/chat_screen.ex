@@ -300,20 +300,22 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
+  # Tools run in parallel, so several can ask for one capability at once
+  # (two file tools in shared storage): they all wait on one request and
+  # one answer. Another action of a kind that's still running is refused.
+  def handle_info({:phone_request, ref, from, :permission, %{capability: capability}}, socket) do
+    key = {:permission, capability}
+    live = socket.assigns.phone |> Map.get(key, []) |> Enum.filter(&alive?/1)
+    if live == [], do: Native.impl().request_permission(capability)
+    {:noreply, put_phone(socket, key, live ++ [{ref, from}])}
+  end
+
   def handle_info({:phone_request, ref, from, action, args}, socket) do
-    key = phone_key(action, args)
-
-    case socket.assigns.phone do
-      %{^key => {_ref, waiting, _args}} ->
-        if Process.alive?(waiting) do
-          Phone.reply(from, ref, {:error, "Another #{action} request is still waiting."})
-          {:noreply, socket}
-        else
-          start_phone(socket, ref, from, key, args)
-        end
-
-      _ ->
-        start_phone(socket, ref, from, key, args)
+    if alive?(socket.assigns.phone[action]) do
+      Phone.reply(from, ref, {:error, "Another #{action} request is still waiting."})
+      {:noreply, socket}
+    else
+      start_phone(socket, ref, from, action, args)
     end
   end
 
@@ -966,9 +968,8 @@ defmodule Operator.ChatScreen do
   defp voice_hint(:everything), do: "speaks every reply"
 
   # Location and the camera ask for their permission first (the answer
-  # starts the action, `{:permission, ...}` above); `:permission` asks for
-  # one and answers with it; a notification is scheduled at once and
-  # answered with its id; the pickers open.
+  # starts the action, `{:permission, ...}` above); a notification is
+  # scheduled at once and answered with its id; the pickers open.
   defp start_phone(socket, ref, from, :notify, args) do
     id = "operator-#{System.unique_integer([:positive])}"
 
@@ -982,42 +983,63 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
-  defp start_phone(socket, ref, from, key, args) do
-    socket =
-      Mob.Socket.assign(socket, :phone, Map.put(socket.assigns.phone, key, {ref, from, args}))
+  # Each action waits under its own key as `{ref, from, args, started}`;
+  # `:permission` requests wait as a list of `{ref, from}` under
+  # `{:permission, capability}` (handle_info above).
+  defp start_phone(socket, ref, from, action, args) do
+    started = action in [:pick_photos, :pick_file]
 
-    case key do
-      action when action in [:pick_photos, :pick_file] -> Native.impl().phone(action, args)
-      _ -> Native.impl().request_permission(needs(key))
-    end
+    if started,
+      do: Native.impl().phone(action, args),
+      else: Native.impl().request_permission(needs(action))
 
-    {:noreply, socket}
+    {:noreply, put_phone(socket, action, {ref, from, args, started})}
   end
 
-  # Each tool request waits under its key; a `:permission` request under
-  # the capability it asks for, so two can wait at once.
-  defp phone_key(:permission, %{capability: capability}), do: {:permission, capability}
-  defp phone_key(action, _args), do: action
+  defp put_phone(socket, key, entry),
+    do: Mob.Socket.assign(socket, :phone, Map.put(socket.assigns.phone, key, entry))
+
+  defp alive?({_ref, from}), do: Process.alive?(from)
+  defp alive?({_ref, from, _args, _started}), do: Process.alive?(from)
+  defp alive?(nil), do: false
 
   defp needs(:location), do: :location
   defp needs(action) when action in [:camera_photo, :camera_snap], do: :camera
-  defp needs({:permission, capability}), do: capability
   defp needs(_action), do: nil
 
+  # Every `:permission` waiter hears the answer. An action waiting on it
+  # starts once (a second grant, from another action's request, doesn't
+  # start it again), and only if its tool is still waiting: one that gave
+  # up is forgotten, so a late Allow takes no photo nobody asked for.
   defp permission_answered(socket, capability, result) do
-    socket.assigns.phone
-    |> Enum.filter(fn {key, _} -> needs(key) == capability end)
-    |> Enum.reduce(socket, fn
-      {{:permission, _} = key, _}, acc when result == :granted ->
-        phone_done(acc, key, {:ok, :granted})
+    {waiters, phone} = Map.pop(socket.assigns.phone, {:permission, capability}, [])
+    answer = if result == :granted, do: {:ok, :granted}, else: {:error, denied(capability)}
+    Enum.each(waiters, fn {ref, from} -> Phone.reply(from, ref, answer) end)
 
-      {key, {_ref, _from, args}}, acc when result == :granted ->
-        :ok = Native.impl().phone(key, args)
-        acc
+    phone =
+      Enum.reduce(phone, phone, fn
+        {action, {ref, from, args, false}}, acc ->
+          cond do
+            needs(action) != capability ->
+              acc
 
-      {key, _}, acc ->
-        phone_done(acc, key, {:error, denied(capability)})
-    end)
+            not Process.alive?(from) ->
+              Map.delete(acc, action)
+
+            result == :granted ->
+              :ok = Native.impl().phone(action, args)
+              Map.put(acc, action, {ref, from, args, true})
+
+            true ->
+              Phone.reply(from, ref, {:error, denied(capability)})
+              Map.delete(acc, action)
+          end
+
+        _started_or_waiters, acc ->
+          acc
+      end)
+
+    Mob.Socket.assign(socket, :phone, phone)
   end
 
   @doc false
@@ -1026,9 +1048,11 @@ defmodule Operator.ChatScreen do
   @spec denied(atom()) :: String.t()
   def denied(:all_files),
     do:
-      "All files access is off for Operator. Its Settings page was opened: ask the user to " <>
-        "switch on \"Allow access to manage all files\" for Operator, come back to the app, " <>
-        "then call the tool again."
+      "Operator has no access to the phone's shared storage. Ask the user to keep Operator " <>
+        "open and allow it when asked: on Android 11 and later that's the All files access " <>
+        "page in Settings (switch on \"Allow access to manage all files\" for Operator, then " <>
+        "come back to the app); on older Android it's a storage dialog (tap Allow). Then call " <>
+        "the tool again."
 
   def denied(capability) do
     "The user didn't allow #{permission_name(capability)} (they refused, or the prompt was " <>
@@ -1056,7 +1080,7 @@ defmodule Operator.ChatScreen do
 
   defp phone_done(socket, action, result) do
     case Map.pop(socket.assigns.phone, action) do
-      {{ref, from, _args}, rest} ->
+      {{ref, from, _args, _started}, rest} ->
         Phone.reply(from, ref, result)
         Mob.Socket.assign(socket, :phone, rest)
 
