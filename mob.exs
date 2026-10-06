@@ -47,6 +47,8 @@ config :mob, :plugins, [
   :mob_notify,
   :mob_camera,
   :mob_photos,
+  # Every sensor (barometer, light, proximity, steps, ...): the `sensors` tool, front screens.
+  :mob_sensors,
   :mob_scanner,
   # For the front (PLAN.md step 9): the rest of Sloppy Joe's toolbox.
   :mob_biometric,
@@ -98,6 +100,7 @@ config :mob, :trusted_plugins, %{
   mob_bluetooth: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_screencast: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_photos: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
+  mob_sensors: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_notify: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_mishka: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",
   mob_ash: "ed25519:nc56w+1Kx0gIt/4EkHxnMZCKHMzp4+S5kS/HoSzEZkg=",

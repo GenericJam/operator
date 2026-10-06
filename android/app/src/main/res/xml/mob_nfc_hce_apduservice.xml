@@ -1,6 +1,6 @@
 <host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/mob_nfc_hce_description"
-    android:requireDeviceUnlock="false">
+    android:requireDeviceUnlock="true">
     <aid-group android:category="other" android:description="@string/mob_nfc_hce_description">
         <!-- NFC Forum Type 4 Tag (NDEF) application -->
         <aid-filter android:name="D2760000850101" />

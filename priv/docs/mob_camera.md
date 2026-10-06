@@ -4,13 +4,16 @@ Native camera capture, live preview, and frame streaming for apps built with
 [Mob](https://hexdocs.pm/mob) — `Mob.Camera`, extracted from mob core as a plugin.
 
 iOS: `UIImagePickerController` + a shared `AVCaptureSession` (vImage frame
-conversion). Android: `TakePicture`/`CaptureVideo` activity contracts.
+conversion), `AVCapturePhotoOutput` for headless stills. Android:
+`TakePicture`/`CaptureVideo` activity contracts, CameraX `ImageCapture` for
+headless stills.
 
 ## Platform support
 
 | Feature | iOS | Android |
 |---|---|---|
 | `capture_photo/2`, `capture_video/2` | ✅ | ✅ |
+| `snap/1` (headless still, no UI) | ✅ (`:no_camera` on the simulator) | ✅ |
 | `start_preview/2` + `Mob.UI.camera_preview/1` | ✅ live feed | ⏳ accepted, renders nothing |
 | `start_frame_stream/2` | ✅ delivers frames | ⏳ accepted, delivers nothing |
 
@@ -49,6 +52,48 @@ def handle_info({:camera, :cancelled}, socket), do: ...
 ```
 
 `path` is a local temp file — copy it elsewhere before the next capture.
+
+### Headless still: `snap/1`
+
+`snap/1` takes a photo with no preview and no shutter — for code (an agent, a
+timer, a sensor trigger) that wants to see what the camera sees. Call it from
+any process; the result is sent to that process:
+
+```elixir
+:ok = MobCamera.snap(facing: :back, max_size: 1600, quality: 85, flash: :off)
+
+receive do
+  {:camera, :snapped, %{path: path, width: w, height: h, facing: :back}} -> ...
+  {:camera, :snap_error, reason} -> ...  # :no_camera | :permission | :busy | :background | "platform error"
+end
+```
+
+The native side opens the camera, waits for exposure/focus/white balance to
+settle (so the frame isn't black), shoots, releases the camera and writes an
+**upright** JPEG (orientation applied to the pixels, EXIF orientation 1) to
+the app's cache/temp dir. `max_size` caps the longest side (`nil` = full
+sensor resolution). It never prompts for permission: request `:camera` first,
+or you get `{:camera, :snap_error, :permission}`. Exactly one message arrives
+per `:ok`; both platforms give up after 10 s (`:busy`/`:background` when
+that's why, else an error string). Bad options return
+`{:error, {:invalid_option, key, value}}` / `{:error, {:unknown_option, key}}`
+and nothing is sent.
+
+- **Android**: CameraX `ImageCapture` plus a small frame-dropping
+  `ImageAnalysis` stream for 3A metering (no `Preview`) on its own
+  `LifecycleOwner`, so the activity's lifecycle is untouched; core's
+  `Mob.UI.camera_preview/1` view, if running, pauses while the snap holds the
+  camera and resumes after. Upright by gravity (`OrientationEventListener`),
+  falling back to the display rotation when the phone lies flat.
+  `:background` when no activity is started (Android refuses the camera to
+  background apps). `max_size: nil` decodes the full-size photo in memory.
+- **iOS**: a private `AVCaptureSession` + `AVCapturePhotoOutput` (no preview
+  layer), upright by gravity (`AVCaptureDeviceRotationCoordinator`). `:busy`
+  while the shared `start_preview/2` / `start_frame_stream/2` session runs —
+  it keeps running after `stop_frame_stream/1` until `stop_preview/1` — or a
+  `capture_photo/2` / `capture_video/2` picker is open. `max_size: nil` uses
+  the largest photo size the format supports (up to 48 MP). The simulator
+  has no camera: `:no_camera`.
 
 For real-time work (object detection, AR, custom filters), stream frames
 (**iOS only** — see [Platform support](#platform-support)):

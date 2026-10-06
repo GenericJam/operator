@@ -56,17 +56,39 @@ MobNfc.emulate_ndef(socket, rec, writable: true)   # a reader can write into it
 {:nfc, :ndef, %{tag_id: binary, ndef: binary, writable: boolean, max_size: integer}}
 {:nfc, :tag, %{tag_id: binary, tech: binary}}      # a tag with no NDEF data
 {:nfc, :written, %{bytes: integer}}                # write_ndef/3 succeeded
-{:nfc, :emulation_started | :emulation_stopped}    # HCE lifecycle
+{:nfc, :emulation_started | :emulation_stopped}    # HCE lifecycle (stopped also fires on background)
 {:nfc, :hce_read}                                  # a reader read the emulated tag
 {:nfc, :hce_written, %{ndef: binary}}              # a reader wrote to it (writable HCE)
 {:nfc, :session_ended, reason}                     # :done | :user_cancel | :timeout | ...
-{:nfc, :error, reason}                             # :unavailable | :read_only | :too_small | ...
+{:nfc, :error, reason}                             # :unavailable | :disabled | :too_large | :read_only | :too_small | ...
 ```
 
 `ndef` is the **raw NDEF message bytes** — turn it into records with
 `MobNfc.Ndef.parse/1` and decode Text/URI with `decode_text/1` / `decode_uri/1`.
 `MobNfc.available?/0` reports whether the radio is present and enabled; reading
 is a no-op on the simulator/emulator.
+
+### Android HCE: foreground-only, unlocked-only
+
+- `{:nfc, :emulation_started}` arrives only when emulation is actually live:
+  the device has the HCE feature, NFC is present and switched on, the app is in
+  the foreground, and it was granted preferred-service routing. Otherwise you
+  get one `{:nfc, :error, :unavailable}` (`:disabled` when NFC is off,
+  `:no_activity` before the activity attaches) — e.g. `:unavailable` on every
+  emulator.
+- The HCE service declares `requireDeviceUnlock="true"`: a locked phone never
+  serves the tag.
+- Whenever the activity pauses, emulation is **stopped**: the payload is
+  dropped, the service refuses all APDUs, and `{:nfc, :emulation_stopped}` is
+  delivered. That covers backgrounding and screen-off, and also a runtime
+  permission prompt or dialog-style activity on top. Nothing re-arms it
+  automatically — call `emulate_ndef/3` again on
+  `{:mob_device, :did_become_active}` (after `Mob.Device.subscribe([:app])`).
+  (Rotation doesn't pause a generated mob app; a config change that recreates
+  the activity stops emulation without a `:did_become_active`.)
+- The emulated tag advertises a 1024-byte NDEF file (incl. the 2-byte length),
+  so messages over **1022 bytes** (`MobNfc.Hce.max_message_size/0`) are
+  rejected with `{:nfc, :error, :too_large}`.
 
 ## Host setup
 
@@ -85,7 +107,8 @@ added by hand — the native build prints them as `host_requirements`:
 - **Android HCE** (`emulate_ndef/3`) — nothing to add: the `<service>` and
   `res/xml/mob_nfc_hce_apduservice.xml` are contributed by mob_dev (≥ 0.6.19).
   While emulating in the foreground the app is the preferred HCE service, so
-  other installed apps registering the NDEF AID don't intercept the reader.
+  other installed apps registering the NDEF AID don't intercept the reader;
+  emulation stops when the app is backgrounded (see above).
 - **Android** — add `<uses-feature android:name="android.hardware.nfc"
   android:required="false"/>` so NFC-less devices still install.
 
@@ -99,5 +122,5 @@ See the plugin manifest `host_requirements` for the exact XML snippets.
   APDU state machine; the Android `HostApduService` mirrors it (an HCE service
   must answer readers even when the BEAM is down, so it can't delegate at
   runtime).
-- 53 host tests cover the wire format, the API transport, and the HCE protocol;
+- Host tests cover the wire format, the API transport, and the HCE protocol;
   the native CoreNFC / `HostApduService` glue is verified on-device.

@@ -59,8 +59,12 @@ import com.google.android.filament.utils.Utils
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
 
 object MobScene3dBridge {
     @JvmStatic external fun nativeRegister()
@@ -165,11 +169,12 @@ object Scene3dRuntime {
             "set_animation",
             "set_camera",
             "set_light",
-            "set_environment",
         )
 
     // Additive grammar extensions riding existing ops (the Elixir side
     // refuses to encode them unless declared here — version-skew guard).
+    // No "environment": IBL/KTX skyboxes are not rendered, so environment
+    // entities are refused (Scene3dShadow) instead of accepted and ignored.
     private val SUPPORTED_FEATURES = listOf("material_scope")
 
     class ViewportState {
@@ -421,7 +426,7 @@ object Scene3dShadow {
                     }
 
                     else -> {
-                        animationError(entity) ?: materialError(entity) ?: run {
+                        unsupportedKind(entity) ?: animationError(entity) ?: materialError(entity) ?: run {
                             work[id] = entity
                             null
                         }
@@ -443,7 +448,7 @@ object Scene3dShadow {
                     }
 
                     else -> {
-                        animationError(entity) ?: materialError(entity) ?: run {
+                        unsupportedKind(entity) ?: animationError(entity) ?: materialError(entity) ?: run {
                             work[id] = entity
                             null
                         }
@@ -516,18 +521,6 @@ object Scene3dShadow {
                 }
             }
 
-            "set_environment" -> {
-                setData(work, op, "environment") { current, next ->
-                    if (current.optString("ibl", "") != next.optString("ibl", "") ||
-                        current.optString("skybox", "") != next.optString("skybox", "")
-                    ) {
-                        err("structural_field", op.optString(1), "environment_assets")
-                    } else {
-                        null
-                    }
-                }
-            }
-
             else -> {
                 err("unknown_op", name)
             }
@@ -536,19 +529,8 @@ object Scene3dShadow {
 
     /** Whole-scene invariants after a grammar-legal op sequence. */
     fun validateResult(work: Map<String, JSONObject>): JSONArray? {
-        var cameras = 0
-        var environments = 0
-        for (entity in work.values) {
-            when (kindOf(entity)) {
-                "camera" -> cameras++
-                "environment" -> environments++
-            }
-        }
-        return when {
-            cameras > 1 -> err("invalid_result", "multiple_cameras")
-            environments > 1 -> err("invalid_result", "multiple_environments")
-            else -> null
-        }
+        val cameras = work.values.count { kindOf(it) == "camera" }
+        return if (cameras > 1) err("invalid_result", "multiple_cameras") else null
     }
 
     fun kindOf(entity: JSONObject): String = entity.optJSONObject("data")?.optString("kind", "group") ?: "group"
@@ -596,6 +578,12 @@ object Scene3dShadow {
         val known = Scene3dRuntime.animationNames(data.optString("asset")) ?: return null
         return if (name in known) null else err("unknown_animation", entity.optString("id"), name)
     }
+
+    // Environment (IBL + KTX skybox) is not rendered by this applier, so it
+    // is refused rather than accepted, echoed in readback and never drawn.
+    // The Elixir caps guard refuses first; this covers raw patches.
+    private fun unsupportedKind(entity: JSONObject): JSONArray? =
+        if (kindOf(entity) == "environment") err("unsupported", "environment") else null
 
     private fun cyclic(
         work: Map<String, JSONObject>,
@@ -687,12 +675,18 @@ fun MobScene3dViewport(props: Map<String, Any?>) {
     // skybox. Applied on create and on every recomposition so a screen can
     // change it without recreating the surface.
     val background = (props["background"] as? Number)?.toLong()
+    // max_asset_bytes: the per-viewport model-file budget (Elixir always
+    // sends it; the default covers a host that predates the prop).
+    val maxAssetBytes = (props["max_asset_bytes"] as? Number)?.toLong() ?: Scene3dView.DEFAULT_MAX_ASSET_BYTES
     // clipToBounds: a surface otherwise draws past its declared bounds and
     // stomps siblings (MobGpuView's identical treatment).
     Box(modifier = Modifier.size(w.dp, h.dp).clipToBounds()) {
         AndroidView(
-            factory = { ctx -> Scene3dView(ctx, viewportId, background) },
-            update = { view -> view.setBackgroundArgb(background) },
+            factory = { ctx -> Scene3dView(ctx, viewportId, background, maxAssetBytes) },
+            update = { view ->
+                view.setBackgroundArgb(background)
+                view.maxAssetBytes = maxAssetBytes
+            },
         )
     }
 }
@@ -703,8 +697,63 @@ class Scene3dView(
     context: Context,
     private val viewportId: String,
     backgroundArgb: Long? = null,
+    maxAssetBytes: Long = DEFAULT_MAX_ASSET_BYTES,
 ) : SurfaceView(context),
     Choreographer.FrameCallback {
+    companion object {
+        /** Mirrors Mob.Scene3d.default_max_asset_bytes/0: 64 MiB. */
+        const val DEFAULT_MAX_ASSET_BYTES = 64L * 1024 * 1024
+
+        // One IO thread shared by every viewport: reads are serialized (no
+        // burst of parallel budget-sized allocations) and the daemon thread
+        // never holds the process.
+        private val io =
+            Executors.newSingleThreadExecutor { task ->
+                Thread(task, "scene3d-io").apply { isDaemon = true }
+            }
+
+        /**
+         * IO thread. Checks the size against [budget] before reading a byte,
+         * then reads the file once into a direct buffer gltfio can consume
+         * as-is (no heap ByteArray, no second copy).
+         */
+        private fun readAssetFile(
+            path: String,
+            budget: Long,
+        ): AssetRead {
+            val file = File(path)
+            val size = file.length()
+            if (!file.isFile) return AssetRead(path, size, null, "load_failed")
+            if (size > budget || size > Int.MAX_VALUE) return AssetRead(path, size, null, "too_large")
+            return try {
+                val buffer = ByteBuffer.allocateDirect(size.toInt()).order(ByteOrder.nativeOrder())
+                FileInputStream(file).channel.use { channel ->
+                    while (buffer.hasRemaining()) {
+                        if (channel.read(buffer) < 0) break
+                    }
+                }
+                if (buffer.hasRemaining()) {
+                    AssetRead(path, size, null, "load_failed")
+                } else {
+                    buffer.flip()
+                    AssetRead(path, size, buffer, null)
+                }
+            } catch (e: IOException) {
+                AssetRead(path, size, null, "load_failed")
+            } catch (e: OutOfMemoryError) {
+                AssetRead(path, size, null, "out_of_memory")
+            }
+        }
+    }
+
+    /** One finished off-thread read: the bytes, or a bad_asset reason. */
+    private class AssetRead(
+        val path: String,
+        val size: Long,
+        val buffer: ByteBuffer?,
+        val failure: String?,
+    )
+
     private class Rec(
         val entity: Int,
         var json: JSONObject,
@@ -765,6 +814,19 @@ class Scene3dView(
     private val assetLoader = AssetLoader(engine, materialProvider, EntityManager.get())
     private val resourceLoader = ResourceLoader(engine)
     private val assets = HashMap<String, AssetEntry>()
+
+    // ── asset loading: file IO off the render thread ──────────────────────
+    // A model's .glb is read on the shared scene3d-io thread: size checked
+    // against the budget before a byte is read, then read once into a
+    // direct buffer. Only gltfio asset creation (Filament resources) runs
+    // here, at the top of the next doFrame. Paths with a read in flight;
+    // records waiting on one carry status "loading".
+    private val loadingAssets = HashSet<String>()
+    private val finishedReads = ConcurrentLinkedQueue<AssetRead>()
+    private var destroyed = false
+
+    /** Largest model file (bytes) this viewport loads; read per request. */
+    var maxAssetBytes: Long = maxAssetBytes
 
     private val registry = LinkedHashMap<String, Rec>()
     private var irCameraId: String? = null
@@ -924,6 +986,8 @@ class Scene3dView(
         choreographer.postFrameCallback(this)
         recordFrameDelta(frameTimeNanos)
 
+        // Landed asset reads first: ops in this frame then see the asset.
+        drainFinishedReads()
         val drained = Scene3dRuntime.drain(viewportId)
         if (drained.reset) clearScene()
         applyOps(drained.ops)
@@ -1180,7 +1244,6 @@ class Scene3dView(
             "set_animation" -> setAnimation(op.getString(1), if (op.isNull(2)) null else op.getJSONObject(2))
             "set_camera" -> setCamera(op.getString(1), op.getJSONObject(2))
             "set_light" -> setLight(op.getString(1), op.getJSONObject(2))
-            "set_environment" -> setEnvironment(op.getString(1), op.getJSONObject(2))
         }
     }
 
@@ -1464,22 +1527,6 @@ class Scene3dView(
         }
     }
 
-    private fun setEnvironment(
-        id: String,
-        environment: JSONObject,
-    ) {
-        val rec = registry[id] ?: return
-        environment.put("kind", "environment")
-        rec.json.put("data", environment)
-        // IBL/skybox KTX loading is the asset-pipeline bead (mob_scene3d-392).
-        // Accepted and recorded for readback; loudly logged, never silent.
-        android.util.Log.w(
-            "scene3d",
-            "environment accepted but IBL/skybox loading is not wired yet " +
-                "(bead mob_scene3d-392): ${environment.optString("ibl", "-")}",
-        )
-    }
-
     // ── data builders / teardown ───────────────────────────────────────────
 
     private fun buildData(rec: Rec) {
@@ -1488,7 +1535,6 @@ class Scene3dView(
             "model" -> buildModel(rec, data)
             "light" -> buildLight(rec, data)
             "camera" -> buildCamera(rec)
-            "environment" -> setEnvironment(rec.json.getString("id"), data)
         }
     }
 
@@ -1497,19 +1543,22 @@ class Scene3dView(
         data: JSONObject,
     ) {
         val ref = data.getString("asset")
-        val entry = loadAsset(ref)
-        val instance =
-            entry?.let { it.freeInstances.removeFirstOrNull() ?: assetLoader.createInstance(it.asset) }
-        if (entry == null || instance == null) {
-            rec.status = "error"
-            rec.statusDetail = "bad_asset"
-            val owner = Scene3dRuntime.ownerPid(viewportId)
-            if (owner != 0L) {
-                val error = JSONArray().put("bad_asset").put(ref).put("load_failed")
-                MobScene3dBridge.nativeDeliverScene3d(owner, "error", viewportId, error.toString(), "")
-            }
+        val entry = assets[ref]
+        if (entry == null) {
+            // Not loaded: the file is read off-thread and drainFinishedReads
+            // builds (or fails) this model when the read lands.
+            rec.status = "loading"
+            rec.statusDetail = null
+            requestRead(ref)
             return
         }
+        val instance = entry.freeInstances.removeFirstOrNull() ?: assetLoader.createInstance(entry.asset)
+        if (instance == null) {
+            failModel(rec, ref, "load_failed")
+            return
+        }
+        rec.status = "ready"
+        rec.statusDetail = null
         rec.instance = instance
         rec.assetRef = ref
         rec.overridden = false
@@ -1687,16 +1736,70 @@ class Scene3dView(
         }
     }
 
-    private fun loadAsset(path: String): AssetEntry? {
-        assets[path]?.let { return it }
-        val bytes =
-            try {
-                File(path).readBytes()
-            } catch (e: Exception) {
-                return null
+    private fun failModel(
+        rec: Rec,
+        ref: String,
+        reason: String,
+    ) {
+        rec.status = "error"
+        rec.statusDetail = "bad_asset"
+        val owner = Scene3dRuntime.ownerPid(viewportId)
+        if (owner != 0L) {
+            val error = JSONArray().put("bad_asset").put(ref).put(reason)
+            MobScene3dBridge.nativeDeliverScene3d(owner, "error", viewportId, error.toString(), "")
+        }
+    }
+
+    private fun requestRead(path: String) {
+        if (!loadingAssets.add(path)) return
+        val budget = maxAssetBytes
+        io.execute {
+            // Always post a result: an escaped throwable would kill the app
+            // (default uncaught handler) and strand the path as loading.
+            val read =
+                try {
+                    readAssetFile(path, budget)
+                } catch (t: Throwable) {
+                    android.util.Log.w("scene3d", "asset read failed unexpectedly: $path", t)
+                    AssetRead(path, -1, null, "load_failed")
+                }
+            finishedReads.add(read)
+        }
+    }
+
+    /** Render thread, top of doFrame: turn landed reads into gltfio assets. */
+    private fun drainFinishedReads() {
+        if (destroyed) return
+        while (true) {
+            val read = finishedReads.poll() ?: return
+            loadingAssets.remove(read.path)
+            val entry = read.buffer?.let { createAsset(read.path, it) }
+            val reason = read.failure ?: if (entry == null) "load_failed" else null
+            if (reason != null) {
+                android.util.Log.w(
+                    "scene3d",
+                    "asset ${read.path}: $reason (${read.size} bytes, budget $maxAssetBytes)",
+                )
             }
-        val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
-        buffer.put(bytes).rewind()
+            for (rec in registry.values) {
+                if (rec.status != "loading") continue
+                val data = rec.json.optJSONObject("data") ?: continue
+                if (data.optString("asset") != read.path) continue
+                if (reason != null) {
+                    failModel(rec, read.path, reason)
+                } else {
+                    buildModel(rec, data)
+                    applyVisibility(rec)
+                }
+            }
+        }
+    }
+
+    private fun createAsset(
+        path: String,
+        buffer: ByteBuffer,
+    ): AssetEntry? {
+        assets[path]?.let { return it }
         // Instanced creation, and source data deliberately retained: both are
         // what makes createInstance work for later entities sharing this ref.
         val instances = arrayOfNulls<FilamentInstance>(1)
@@ -1866,6 +1969,11 @@ class Scene3dView(
     }
 
     private fun destroyRenderer() {
+        // Reads still in flight land in a queue nobody drains again; their
+        // direct buffers are simply collected.
+        destroyed = true
+        finishedReads.clear()
+        loadingAssets.clear()
         clearScene()
         uiHelper.detach()
         for (entry in assets.values) assetLoader.destroyAsset(entry.asset)

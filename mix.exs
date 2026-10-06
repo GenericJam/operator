@@ -25,7 +25,7 @@ defmodule Operator.MixProject do
   defp deps do
     [
       {:mob, "~> 0.9.12"},
-      {:mob_dev, "~> 0.7.14", only: :dev, runtime: false},
+      {:mob_dev, "~> 0.7.15", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,
       # tool calling) and req_llm (provider clients; Anthropic, OpenAI Codex).
@@ -38,10 +38,14 @@ defmodule Operator.MixProject do
       # foreground service; iOS silent audio session): Operator.Core.KeepAlive.
       {:mob_background, "~> 0.1.2"},
       # Phone tools (Operator.Core.Phone brokers them through the chat screen).
-      {:mob_location, "~> 0.1.4"},
+      {:mob_location, "~> 0.1.5"},
       {:mob_notify, "~> 0.2.0"},
-      {:mob_camera, "~> 0.1.11"},
-      {:mob_photos, "~> 0.1.3"},
+      # camera_snap (MobCamera.snap/1: the agent's own headless photo).
+      {:mob_camera, "~> 0.1.12"},
+      # Photos for the model: thumbnail/2 (scaled, with EXIF), list_media on iOS.
+      {:mob_photos, "~> 0.2.0"},
+      # Every sensor: barometer, light, proximity, steps, humidity, ... (`sensors`).
+      {:mob_sensors, "~> 0.1.0"},
       # Diagnostics → Scan QR: the codes `mix operator.login` and `mix
       # operator.handoff` show on the Mac (Operator.LoginScanScreen).
       {:mob_scanner, "~> 0.1.5"},
@@ -57,15 +61,18 @@ defmodule Operator.MixProject do
       {:mob_wake, "~> 0.1.1"},
       {:mob_sms, "~> 0.2.3"},
       {:mob_vision, "~> 0.1.2"},
-      {:mob_nfc, "~> 0.1.3"},
-      {:mob_midi, "~> 0.1.1"},
+      {:mob_nfc, "~> 0.1.4"},
+      {:mob_midi, "~> 0.1.2"},
       # Android only (iOS has no output-mix capture; its NIF answers
       # :unsupported_on_platform).
-      {:mob_audio_capture, "~> 0.1.1"},
+      {:mob_audio_capture, "~> 0.1.2"},
       # Declarative 3D scenes (Filament) for front screens.
-      {:mob_scene3d, "~> 0.1.2"},
+      {:mob_scene3d, "~> 0.1.3"},
       # Nx on the phone: the Eigen CPU backend (configured at boot by the plugin).
       {:mob_nx_eigen, "~> 0.1.1"},
+      # TensorFlow Lite on the GPU/NPU (NNAPI on Android, Core ML on iOS;
+      # `mix mob.enable tflite`'s dep; Operator.Core.Tflite picks the delegate).
+      {:nx_tflite_mob, "~> 0.0.4"},
       # 3D physics: a Rustler NIF, linked as the :lab_physics static NIF (mob.exs).
       {:mob_rapier, "~> 0.1.0"},
       # Ash resources (front screens declare them; Ash.DataLayer.Ets) and

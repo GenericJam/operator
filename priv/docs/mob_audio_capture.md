@@ -33,12 +33,14 @@ production app.
 ```elixir
 MobAudioCapture.start(socket)
 # → handle_info({:audio_capture, :permission, :granted | :denied}, socket)
+# → or handle_info({:audio_capture, :start_error, :busy}, socket) when another
+#   start/2 is still waiting on its consent dialog
 
 # once granted, while audio is playing anywhere on the device:
 MobAudioCapture.output_level()
 # => {-12.0, -3.4}   # {rms_db, peak_db}, or :silent
 
-MobAudioCapture.stop(socket)
+MobAudioCapture.stop(socket)   # also cancels a start still waiting on consent
 ```
 
 ## Host setup

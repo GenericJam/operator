@@ -44,6 +44,7 @@ extern fn mob_location_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_notify_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_camera_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_photos_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn mob_sensors_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_scanner_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_biometric_nif_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_bluetooth_nif_nif_init() callconv(.c) ?*anyopaque;
@@ -95,6 +96,7 @@ const base_nifs = [_]ErtsStaticNif{
     .{ .nif_init = mob_notify_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_camera_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_photos_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
+    .{ .nif_init = mob_sensors_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_scanner_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_biometric_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
     .{ .nif_init = mob_bluetooth_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },

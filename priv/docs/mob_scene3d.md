@@ -64,7 +64,6 @@ defp scene(assigns) do
     %Entity{id: "camera", transform: %Transform{position: {0.0, 1.2, 0.9}},
             data: %Camera{fov_y: 45.0}},
     %Entity{id: "sun", data: %Light{type: :directional, intensity: 100_000}},
-    %Entity{id: "env", data: %Environment{ibl: "studio"}},
     %Entity{id: "board", data: %Model{asset: "board.glb"}}
     | for p <- assigns.pieces do
         %Entity{
@@ -127,13 +126,18 @@ Do not accept FBX, OBJ, or USDZ into the pipeline — convert to glTF at
 authoring time (USDZ in particular is an Apple-only pipeline dead end here).
 
 - **Models / scenes / animations:** `.glb` (embedded buffers; single file
-  per asset — no loose `.gltf` + sidecar files on device)
+  per asset — no loose `.gltf` + sidecar files on device). Files are read
+  off the render thread and capped per viewport by `:max_asset_bytes`
+  (default 64 MiB); a bigger file fails with `{:bad_asset, ref,
+  "too_large"}` before it is read
 - **Textures:** KTX2 with Basis Universal supercompression (GPU-friendly on
   both Metal and GLES/Vulkan; PNG/JPEG inside a `.glb` work but transcode
   at load — fine for prototypes, KTX2 for anything shipping)
-- **Image-based lighting:** environments precomputed with Filament's
-  `cmgen` into KTX (a prefiltered specular cubemap + spherical-harmonics
-  irradiance), shipped in `priv/` and referenced by name
+- **Image-based lighting:** `mix scene3d.assets --ibl` precomputes
+  environments with Filament's `cmgen` into KTX (a prefiltered specular
+  cubemap + spherical-harmonics irradiance). The appliers do not render
+  them yet: committing a `Mob.Scene3d.IR.Environment` returns
+  `{:error, {:unsupported, :environment}}`
 - Asset prep is tooling, not app code: `mix scene3d.assets` wraps the
   conversions and validates against the Khronos validator — see
   [guides/assets.md](guides/assets.md) and
@@ -143,8 +147,10 @@ authoring time (USDZ in particular is an Apple-only pipeline dead end here).
 
 The core is in: Filament embedded on both platforms, scene IR, NIF wire and
 appliers, surface/lifecycle shims, asset pipeline, picking and input,
-introspection, camera, lights, environment, material overrides, and glTF
-animation playback.
+introspection, camera, lights, material overrides, and glTF animation
+playback. Environments (IBL + KTX skybox) are in the IR grammar but not
+rendered; commits carrying one are refused until an applier declares the
+`"environment"` capability.
 
 What is next, and the reasoning for the ordering, is in
 [PLAN.md](PLAN.md) — briefly:

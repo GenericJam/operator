@@ -4,15 +4,17 @@
 # Regenerated whenever `config :mob, :plugins` changes (the deploy/regen hook).
 %{
   nifs: [:mob_background_nif, :mob_location_nif, :mob_notify_nif,
-   :mob_camera_nif, :mob_photos_nif, :mob_scanner_nif, :mob_biometric_nif,
-   :mob_bluetooth_nif, :mob_screencast_nif, :mob_video_nif, :mob_touch_nif,
-   :mob_wake_nif, :mob_sms_nif, :mob_vision_nif, :mob_nfc_nif, :mob_midi_nif,
-   :mob_audio_capture_nif, :mob_scene3d_nif, :nx_eigen, :mob_whisper_nif],
+   :mob_camera_nif, :mob_photos_nif, :mob_sensors_nif, :mob_scanner_nif,
+   :mob_biometric_nif, :mob_bluetooth_nif, :mob_screencast_nif, :mob_video_nif,
+   :mob_touch_nif, :mob_wake_nif, :mob_sms_nif, :mob_vision_nif, :mob_nfc_nif,
+   :mob_midi_nif, :mob_audio_capture_nif, :mob_scene3d_nif, :nx_eigen,
+   :mob_whisper_nif],
   plugins: [:mob_background, :mob_location, :mob_notify, :mob_camera,
-   :mob_photos, :mob_scanner, :mob_biometric, :mob_bluetooth, :mob_screencast,
-   :mob_video, :mob_touch, :mob_wake, :mob_sms, :mob_vision, :mob_nfc,
-   :mob_midi, :mob_audio_capture, :mob_scene3d, :mob_nx_eigen, :mob_ash,
-   :mob_deliver, :mob_whisper, :mob_mishka],
+   :mob_photos, :mob_sensors, :mob_scanner, :mob_biometric, :mob_bluetooth,
+   :mob_screencast, :mob_video, :mob_touch, :mob_wake, :mob_sms, :mob_vision,
+   :mob_nfc, :mob_midi, :mob_audio_capture, :mob_scene3d, :mob_nx_eigen,
+   :mob_ash, :mob_deliver, :mob_whisper, :mob_mishka],
+  styles: [%{name: :mob_themes, theme: MobThemes.Obsidian}],
   screens: [
     %{
       module: MobLocation.DemoScreen,
@@ -60,20 +62,19 @@
       default_route: "/mob_audio_capture/demo"
     }
   ],
+  settings: [],
+  notification_handlers: [],
   lifecycle: [
-    %{plugin: :mob_nx_eigen, on_start: {MobNxEigen, :configure, []}},
+    %{on_start: {MobNxEigen, :configure, []}, plugin: :mob_nx_eigen},
     %{
-      plugin: :mob_deliver,
       on_start: {MobDeliver, :on_start, []},
+      plugin: :mob_deliver,
       on_resume: {MobDeliver, :on_resume, []},
       on_background: {MobDeliver, :on_background, []}
     },
-    %{plugin: :mob_mishka, on_start: {MobMishka, :register_all, []}}
+    %{on_start: {MobMishka, :register_all, []}, plugin: :mob_mishka}
   ],
-  settings: [],
-  notification_handlers: [],
   default_font: nil,
-  composites: [],
   default_style: nil,
-  styles: [%{name: :mob_themes, theme: MobThemes.Obsidian}]
+  composites: []
 }
