@@ -85,7 +85,8 @@ defmodule Operator.Dyn.Showcase do
       component(C.OverflowList.entry(), C.OverflowList),
       component(C.JsonInput.entry(), C.JsonInput),
       component(C.NavLink.entry(), C.NavLink),
-      component(C.FloatingWindow.entry(), C.FloatingWindow)
+      component(C.FloatingWindow.entry(), C.FloatingWindow),
+      component(C.DatePicker.entry(), C.DatePicker)
     ]
   end
 
@@ -101,7 +102,11 @@ defmodule Operator.Dyn.Showcase do
 
   # Phone widgets: Bluetooth, NFC, MIDI.
   defp radios do
-    []
+    [
+      widget(P.Bluetooth.entry(), P.Bluetooth),
+      widget(P.Nfc.entry(), P.Nfc),
+      widget(P.Midi.entry(), P.Midi)
+    ]
   end
 
   defp component(entry, module),
