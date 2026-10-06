@@ -220,7 +220,7 @@ defmodule Operator.MenuScreenTest do
       # retired models aren't offered
       refute shown =~ "Claude Haiku 3"
       # ChatGPT isn't signed in: a hint, no Codex models
-      assert shown =~ "sign in to ChatGPT (OpenAI Codex) (menu › accounts) to add these"
+      assert shown =~ "sign in under accounts to add these"
       refute shown =~ "GPT-"
 
       opus = Enum.find(Models.catalog(:anthropic), &(&1.name =~ "Opus"))

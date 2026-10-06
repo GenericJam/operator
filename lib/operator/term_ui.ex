@@ -140,14 +140,14 @@ defmodule Operator.TermUI do
     }
   end
 
-  @doc "A section heading: `── label ───`."
+  @heading_width 36
+
+  @doc "A section heading, `── label ───`, #{@heading_width} characters wide (fits a phone)."
   @spec heading(String.t(), map()) :: map()
   def heading(label, t) do
-    text("── #{label} " <> String.duplicate("─", 40), t, "dim",
-      max_lines: 1,
-      padding_top: 14,
-      padding_bottom: 4
-    )
+    head = "── #{label} "
+    rule = String.duplicate("─", max(@heading_width - String.length(head), 3))
+    text(head <> rule, t, "dim", max_lines: 1, padding_top: 14, padding_bottom: 4)
   end
 
   @doc """
@@ -186,17 +186,21 @@ defmodule Operator.TermUI do
     }
   end
 
-  @doc "A plain line of the page (indented like an entry's label)."
+  # Where an entry's label starts: the entry's padding plus its two-column lead.
+  @indent 24
+
+  @doc "A plain line of the page, wrapping under itself, aligned with the entries' labels."
   @spec line(String.t(), map(), String.t(), keyword()) :: map()
   def line(text, t, color \\ "fg", opts \\ []),
-    do: text("  " <> text, t, color, Keyword.merge([padding_left: 8], opts))
+    do: text(text, t, color, Keyword.merge([padding_left: @indent, padding_right: 8], opts))
 
-  @doc "A row of `[command]` links (and chips or fields), indented like the entries."
+  @doc "A row of `[command]` links (and chips or fields), aligned with the entries' labels."
   @spec actions(map(), [map()]) :: map()
   def actions(_t, children) do
     %{
       type: :row,
-      props: %{fill_width: true, gap: 8, align: :center, padding_left: 14},
+      # A link's own padding (6) makes up the rest of the indent.
+      props: %{fill_width: true, gap: 8, align: :center, padding_left: @indent - 6},
       children: children
     }
   end

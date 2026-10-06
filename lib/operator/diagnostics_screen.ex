@@ -62,7 +62,7 @@ defmodule Operator.DiagnosticsScreen do
           UI.item("propose sample: hello", "", {:propose, "hello"}, t),
           UI.item("propose sample: checklist", "~200 lines", {:propose, "checklist"}, t),
           UI.item("activate the proposal", "", :activate, t),
-          UI.item("rescue", "generations, diffs, crash log", :rescue, t),
+          UI.item("rescue", "generations, crashes", :rescue, t),
           UI.heading("front screens", t)
         ] ++ dyn_section(assigns.dyn, t)
 

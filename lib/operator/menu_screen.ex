@@ -285,7 +285,7 @@ defmodule Operator.MenuScreen do
             do: Enum.map(models, &model_item(&1, a.model, t)),
             else: [
               UI.line(
-                "sign in to #{Auth.label(provider)} (menu › accounts) to add these",
+                "sign in under accounts to add these",
                 t,
                 "dim"
               )
@@ -387,8 +387,8 @@ defmodule Operator.MenuScreen do
     end
   end
 
-  defp renderer_hint(:native), do: "replies as native Markdown views (text selectable)"
-  defp renderer_hint(:term), do: "replies drawn by Operator's own terminal renderer"
+  defp renderer_hint(:native), do: "native Markdown views, selectable"
+  defp renderer_hint(:term), do: "Operator's own terminal renderer"
 
   defp context_label(tokens) when tokens >= 1_000_000 and rem(tokens, 1_000_000) == 0,
     do: "#{div(tokens, 1_000_000)}M"
