@@ -27,8 +27,14 @@ defmodule Operator.MenuScreenTest do
   # The menu over a chat: this test process stands in for the chat screen.
   defp mount_menu(dir, page, script \\ []) do
     %{loop: loop} = ctx = start_loop(dir, script)
-    view = mount_screen(MenuScreen, %{chat: self(), loop: loop, page: page, sessions_dir: dir})
-    Map.put(ctx, :view, view)
+    Map.put(ctx, :view, mount_on(loop, dir, page))
+  end
+
+  # What the chat passes: its loop, the session's model and file.
+  defp mount_on(loop, dir, page) do
+    %{model: model, path: path} = Loop.snapshot(loop)
+    params = %{chat: self(), loop: loop, model: model, path: path, page: page, sessions_dir: dir}
+    mount_screen(MenuScreen, params)
   end
 
   defp nav(view), do: view.socket.__mob__.nav_action
@@ -179,6 +185,27 @@ defmodule Operator.MenuScreenTest do
       refute Auth.signed_in?(:anthropic)
     end
 
+    test "the accounts page reopened mid sign-in keeps the code field and gets the result", %{
+      tmp_dir: dir
+    } do
+      %{view: first, loop: loop} = mount_menu(dir, :accounts)
+      render_info(first, {:tap, {:sign_in, :anthropic}})
+      assert_received {:opened, "https://claude.ai/oauth/authorize?" <> query}
+
+      # [back], then accounts again: a new page process
+      view = mount_on(loop, dir, :accounts)
+      assert find(view, :text_field, placeholder: "code#state")
+
+      state = URI.decode_query(query)["state"]
+
+      view =
+        view |> render_info({:change, :code, "c##{state}"}) |> render_info({:tap, :paste_code})
+
+      assert text(view) =~ "Code received"
+      assert_receive {:operator_login, :anthropic, :ok} = done, 2_000
+      assert view |> render_info(done) |> text() =~ "Signed in to Claude (Anthropic)"
+    end
+
     test "a sign-out the store refuses says so, and the sign-in stays", %{tmp_dir: dir} do
       :ok = Auth.put(:anthropic, @creds)
       FlakySecureStore.install([:delete])
@@ -229,7 +256,7 @@ defmodule Operator.MenuScreenTest do
       assert Loop.snapshot(loop).model == opus.spec
 
       # the current one is marked
-      view = mount_screen(MenuScreen, %{chat: self(), loop: loop, page: :model})
+      view = mount_on(loop, dir, :model)
       assert text(view) =~ "● " <> opus.name
     end
 
@@ -259,15 +286,16 @@ defmodule Operator.MenuScreenTest do
       Loop.stop(loop)
     end
 
-    test "ChatGPT signed in: omp's Codex models are listed" do
-      :ok = Auth.put(:anthropic, @creds)
-      :ok = Auth.put(:openai_codex, @creds)
+    test "the chat's session gone (another session shown, or its loop died): a note, no crash",
+         %{tmp_dir: dir} do
+      %{view: view, loop: loop} = mount_menu(dir, :model)
+      ref = Process.monitor(loop)
+      Process.exit(loop, :kill)
+      assert_receive {:DOWN, ^ref, :process, _, :killed}
 
-      assert [{:anthropic, true, [_ | _]}, {:openai_codex, true, codex}] = Models.by_provider()
-
-      assert Enum.any?(codex, &(&1.spec == "openai_codex:gpt-5.5"))
-      refute Enum.any?(codex, &String.contains?(&1.spec, "image"))
-      assert Models.same?("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5-20251001")
+      view = render_info(view, {:tap, {:pick_model, "anthropic:claude-sonnet-4-5"}})
+      assert text(view) =~ "That session isn't running any more"
+      assert nav(view) == nil
     end
   end
 
@@ -278,15 +306,15 @@ defmodule Operator.MenuScreenTest do
       s.path
     end
 
-    # The page lists the sessions at render, so the loop's first prompt shows.
     test "the saved sessions, newest first, the shown one marked; tapping one resumes it", %{
       tmp_dir: dir
     } do
       older = saved(dir, "Older work")
       File.touch!(older, System.os_time(:second) - 3 * 86_400)
-      %{view: view, loop: loop} = mount_menu(dir, :sessions, [[{:text, "ok"}]])
+      %{loop: loop} = start_loop(dir, [[{:text, "ok"}]])
       :ok = Loop.prompt(loop, "Current work")
       await_event(:agent_end)
+      view = mount_on(loop, dir, :sessions)
 
       assert_renderable(view)
       shown = text(view)

@@ -54,6 +54,14 @@ defmodule Operator.Auth.Login do
           :ok | {:error, :no_login_started | :no_code | :state_mismatch | {:started_for, atom()}}
   def paste(provider, input), do: GenServer.call(__MODULE__, {:paste, provider, input})
 
+  @doc """
+  The provider of the sign-in in progress (nil when none), whose result
+  goes to the caller from now on: a page reopened during the browser flow
+  takes it over from the one that started it.
+  """
+  @spec pending() :: Auth.provider() | nil
+  def pending, do: GenServer.call(__MODULE__, {:pending, self()})
+
   @doc false
   # `{code, state}` from a redirect URL, a query string or `code#state`
   # (omp's parseCallbackInput); either may be nil.
@@ -126,6 +134,11 @@ defmodule Operator.Auth.Login do
         {:reply, {:error, {:listen, port, reason}}, s}
     end
   end
+
+  def handle_call({:pending, _notify}, _from, %{flow: nil} = s), do: {:reply, nil, s}
+
+  def handle_call({:pending, notify}, _from, %{flow: flow} = s),
+    do: {:reply, flow.provider, %{s | flow: %{flow | notify: notify}}}
 
   def handle_call({:paste, _provider, _input}, _from, %{flow: nil} = s),
     do: {:reply, {:error, :no_login_started}, s}

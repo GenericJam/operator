@@ -450,7 +450,7 @@ defmodule Operator.ChatScreen do
        socket |> Mob.Socket.assign(:window, socket.assigns.window + @window) |> refresh()}
 
   def handle_info({:tap, :menu}, socket) do
-    params = %{chat: self(), loop: socket.assigns.loop}
+    params = socket.assigns |> Map.take([:loop, :model, :path]) |> Map.put(:chat, self())
     {:noreply, Mob.Socket.push_screen(socket, Operator.MenuScreen, params)}
   end
 
@@ -532,6 +532,7 @@ defmodule Operator.ChatScreen do
       Mob.Socket.assign(socket,
         loop: loop,
         sid: snap.session_id,
+        path: snap.path,
         model: snap.model,
         status: snap.status,
         detail: nil,

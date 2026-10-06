@@ -19,9 +19,11 @@ defmodule Operator.MenuScreen do
       first, the shown one marked.
 
   Params: `:chat` (the chat screen's pid, told about a new or resumed session
-  and a renderer change with `{:operator_menu, action}`), `:loop` (the shown
-  session's loop: the model is set on it), `:page` (default `:main`),
-  `:sessions_dir` (default `Operator.Core.Session.dir/0`).
+  and a renderer change with `{:operator_menu, action}`), `:loop`, `:model`
+  and `:path` (the shown session's loop, model and file: the model is set on
+  the loop), `:page` (default `:main`), `:sessions_dir` (default
+  `Operator.Core.Session.dir/0`). The accounts page takes over a sign-in
+  still in progress (`Operator.Auth.Login.pending/0`).
   """
   use Mob.Screen
 
@@ -40,19 +42,20 @@ defmodule Operator.MenuScreen do
   def mount(params, _session, socket) do
     page = Map.get(params, :page, :main)
     if page in [:main, :accounts] and Process.whereis(Auth), do: :ok = Auth.subscribe()
-    snap = Loop.snapshot(params.loop)
+    dir = Map.get_lazy(params, :sessions_dir, &Session.dir/0)
 
     {:ok,
      Mob.Socket.assign(socket,
        page: page,
        chat: params.chat,
        loop: params.loop,
-       sessions_dir: Map.get_lazy(params, :sessions_dir, &Session.dir/0),
-       model: snap.model,
-       path: snap.path,
+       sessions_dir: dir,
+       model: params.model,
+       path: params.path,
        auth: Auth.status(),
+       sessions: if(page == :sessions, do: Enum.take(Session.list(dir), @max_sessions), else: []),
        note: nil,
-       pending: nil,
+       pending: if(page == :accounts and Process.whereis(Login), do: Login.pending()),
        code: "",
        confirm: nil,
        model_draft: ""
@@ -73,8 +76,11 @@ defmodule Operator.MenuScreen do
   def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
 
   def handle_info({:tap, {:open, page}}, socket) when page in @pages do
-    a = socket.assigns
-    params = %{page: page, chat: a.chat, loop: a.loop, sessions_dir: a.sessions_dir}
+    params =
+      socket.assigns
+      |> Map.take([:chat, :loop, :model, :path, :sessions_dir])
+      |> Map.put(:page, page)
+
     {:noreply, Mob.Socket.push_screen(socket, __MODULE__, params)}
   end
 
@@ -208,11 +214,16 @@ defmodule Operator.MenuScreen do
     Mob.Socket.pop_to(socket, Operator.ChatScreen)
   end
 
+  # The chat may have moved to another session (or its loop died) since the
+  # menu opened: say so rather than crash the page.
   defp set_model(socket, spec) do
     case Loop.set_model(socket.assigns.loop, spec) do
       :ok -> Mob.Socket.pop_to(socket, Operator.ChatScreen)
       {:error, :running} -> note(socket, "Can't change the model while the agent runs.")
     end
+  catch
+    :exit, _ ->
+      note(socket, "That session isn't running any more: go back and open the menu again.")
   end
 
   defp note(socket, text), do: Mob.Socket.assign(socket, :note, text)
@@ -307,7 +318,7 @@ defmodule Operator.MenuScreen do
   end
 
   defp page(:sessions, a, t) do
-    sessions = a.sessions_dir |> Session.list() |> Enum.take(@max_sessions)
+    sessions = a.sessions
     now = System.os_time(:second)
 
     items =

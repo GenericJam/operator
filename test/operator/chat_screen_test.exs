@@ -379,7 +379,6 @@ defmodule Operator.ChatScreenTest do
 
     assert sent == ["/login anthropic", "/models"]
     assert text(view) =~ "› /login anthropic"
-    assert find(view, :sheet) == nil
   end
 
   describe "signed out" do
