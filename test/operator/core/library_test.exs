@@ -65,7 +65,8 @@ defmodule Operator.Core.LibraryTest do
   test "every component page of the seed has one line, by its path" do
     pages = for {"showcase/components/" <> _ = path, _} <- Seed.sources(), do: path
     assert pages != []
-    assert Enum.sort(Enum.map(Library.entries(), & &1.path)) == Enum.sort(pages)
+    components = for %{kind: :component, path: path} <- Library.entries(), do: path
+    assert Enum.sort(components) == Enum.sort(pages)
 
     for path <- pages do
       assert [_] = line_for(Library.catalogue(), path), path
