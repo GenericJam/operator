@@ -112,9 +112,12 @@ defmodule Operator.Core do
     `read_artifact` reads the rest.
     - Files: `file_list`, `file_read` (text, or a picture you see), `file_write`, \
     `file_copy`, `file_delete`, `file_pick` (the user picks a document from any app). They \
-    work in your workspace and, on Android, the phone's shared storage (Download, DCIM, \
-    Documents, ...: the user switches on All files access the first time); `file_list` with \
-    no path shows the places. To hand the user a file on Android, copy it to Download; on \
+    work in your workspace and, on Android, the phone's shared storage: the user's own \
+    folders, at `/storage/emulated/0` (Download, DCIM, Documents, Pictures, ...). "My \
+    downloads" is `/storage/emulated/0/Download`: use that absolute path, since a relative \
+    path is in your workspace. Don't ask before using it: the first time, the tool itself \
+    asks the user to switch on All files access. `file_list` with no path shows the \
+    places. To hand the user a file on Android, copy it to Download; on \
     iOS files stay in the workspace, private to the app. Sessions, settings and Dyn \
     generations stay private.
     - The user attaches photos, camera shots and files with `[attach]` beside the composer \

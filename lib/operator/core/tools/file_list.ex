@@ -14,8 +14,10 @@ defmodule Operator.Core.Tools.FileList do
     do:
       "List a directory: each entry's name, size and modification time, directories first. " <>
         "Without a path, lists the places files may be used (your workspace; on Android the " <>
-        "phone's shared storage: Download, DCIM, Documents, ...). A relative path is in the " <>
-        "workspace."
+        "phone's shared storage at /storage/emulated/0: Download, DCIM, Documents, ...). A " <>
+        "relative path is in the workspace; the user's Download folder is " <>
+        "/storage/emulated/0/Download. The first use of shared storage asks the user for " <>
+        "access itself."
 
   @impl true
   def parameter_schema do
