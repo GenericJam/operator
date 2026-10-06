@@ -1934,43 +1934,133 @@ object MobBridge {
     @JvmStatic external fun nativeDeliverAlertAction(action: String)
 
     // ── Pending callback PIDs ──────────────────────────────────────────────
-    var pendingPermissionPid:  Long = 0
-    var pendingPermissionCap:  String = ""
     var pendingFilesPid:       Long = 0
 
     // ── Permissions ────────────────────────────────────────────────────────
+    // One system request at a time, each answered to its own pid: see
+    // MobPermissionQueue (mob_new MOB-391). Touched on the main thread only.
+    private val permissionQueue = MobPermissionQueue(
+        isGranted = { perm ->
+            val activity = activityRef?.get()
+            activity != null &&
+                ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+        },
+        // Returning false answers :denied and moves the queue on. Don't launch
+        // where no result would come back: never from a finishing or
+        // destroyed activity (its result is dropped), and never with nothing
+        // to ask — below API 33 androidx drops POST_NOTIFICATIONS and returns
+        // without any callback when that leaves the request empty.
+        launch = { perms, requestCode ->
+            val activity = activityRef?.get()?.takeUnless { it.isFinishing || it.isDestroyed }
+            val askable = perms.any {
+                android.os.Build.VERSION.SDK_INT >= 33 || it != android.Manifest.permission.POST_NOTIFICATIONS
+            }
+            if (activity != null && askable) ActivityCompat.requestPermissions(activity, perms, requestCode)
+            activity != null && askable
+        },
+        deliver = { pid, cap, granted ->
+            nativeDeliverAtom3(pid, "permission", cap, if (granted) "granted" else "denied")
+        },
+    )
+
+    // All files access (Android 11+) is a Settings page, not a dialog, so it
+    // stays out of the queue: everyone asking while the page is open gets the
+    // answer read when Operator is back in front (onActivityResumed).
+    private val allFilesWaiting = mutableListOf<Long>()
+    private var allFilesLeftApp = false
+
     @JvmStatic
     fun request_permission(pid: Long, cap: String) {
-        pendingPermissionPid = pid
-        pendingPermissionCap = cap
-        val activity = activityRef?.get() ?: run {
-            nativeDeliverAtom3(pid, "permission", cap, "denied"); return
-        }
-        val perms = when (cap) {
-            "camera"        -> arrayOf(android.Manifest.permission.CAMERA)
-            "microphone"    -> arrayOf(android.Manifest.permission.RECORD_AUDIO)
-            "photo_library" -> if (android.os.Build.VERSION.SDK_INT >= 33)
-                arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO)
-            else arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-            "notifications" -> if (android.os.Build.VERSION.SDK_INT >= 33)
-                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS)
-            else { nativeDeliverAtom3(pid, "permission", "notifications", "granted"); return }
-            // Fall through to a plugin-supplied capability (e.g. mob_location
-            // once :location leaves core). Unknown -> denied.
-            else -> io.mob.plugin.MobPluginBootstrap.permissionsFor(cap)
-                ?: run { nativeDeliverAtom3(pid, "permission", cap, "denied"); return }
-        }
-        if (perms.all { ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED }) {
-            nativeDeliverAtom3(pid, "permission", cap, "granted")
-        } else {
-            ActivityCompat.requestPermissions(activity, perms, PERM_REQUEST_CODE)
+        mainHandler.post {
+            if (cap == "all_files" && android.os.Build.VERSION.SDK_INT >= 30) {
+                requestAllFiles(pid)
+                return@post
+            }
+            val perms = when (cap) {
+                "camera"        -> arrayOf(android.Manifest.permission.CAMERA)
+                "microphone"    -> arrayOf(android.Manifest.permission.RECORD_AUDIO)
+                "photo_library" -> if (android.os.Build.VERSION.SDK_INT >= 33)
+                    arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO)
+                else arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                "notifications" -> if (android.os.Build.VERSION.SDK_INT >= 33)
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS)
+                else { nativeDeliverAtom3(pid, "permission", "notifications", "granted"); return@post }
+                // Before Android 11, shared storage is the plain storage permissions.
+                "all_files"     -> arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                                           android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                // Fall through to a plugin-supplied capability (e.g. mob_location
+                // once :location leaves core). Unknown -> denied.
+                else -> io.mob.plugin.MobPluginBootstrap.permissionsFor(cap)
+                    ?: run { nativeDeliverAtom3(pid, "permission", cap, "denied"); return@post }
+            }
+            permissionQueue.request(pid, cap, perms)
         }
     }
 
+    /** Called from MainActivity.onRequestPermissionsResult (main thread). */
     @JvmStatic
-    fun onPermissionResult(granted: Boolean) {
-        nativeDeliverAtom3(pendingPermissionPid, "permission", pendingPermissionCap, if (granted) "granted" else "denied")
+    fun onPermissionResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        permissionQueue.onResult(requestCode, permissions, grantResults)
     }
+
+    @androidx.annotation.RequiresApi(30)
+    private fun requestAllFiles(pid: Long) {
+        if (android.os.Environment.isExternalStorageManager()) {
+            nativeDeliverAtom3(pid, "permission", "all_files", "granted")
+            return
+        }
+        allFilesWaiting.add(pid)
+        if (allFilesWaiting.size > 1) return  // the page is already open
+        val activity = activityRef?.get()?.takeUnless { it.isFinishing || it.isDestroyed }
+        val opened = activity != null && try {
+            allFilesLeftApp = false
+            activity.startActivity(android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${activity.packageName}")))
+            true
+        } catch (e: Exception) {
+            try {
+                activity.startActivity(android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                true
+            } catch (e2: Exception) {
+                false
+            }
+        }
+        // The next onResume is the return from the page. Set here as well as in
+        // onActivityPaused: Operator may already be paused (another permission
+        // dialog over it) when the page opens, and then no new onPause comes.
+        if (opened) allFilesLeftApp = true else answerAllFiles()
+    }
+
+    private fun answerAllFiles() {
+        val granted = android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager()
+        val pids = allFilesWaiting.toList()
+        allFilesWaiting.clear()
+        allFilesLeftApp = false
+        pids.forEach { nativeDeliverAtom3(it, "permission", "all_files", if (granted) "granted" else "denied") }
+    }
+
+    /** MainActivity.onPause: the All files access page has covered Operator. */
+    @JvmStatic
+    fun onActivityPaused() {
+        if (allFilesWaiting.isNotEmpty()) allFilesLeftApp = true
+    }
+
+    /** MainActivity.onResume: back from the All files access page, answer. */
+    @JvmStatic
+    fun onActivityResumed() {
+        if (allFilesWaiting.isNotEmpty() && allFilesLeftApp) answerAllFiles()
+    }
+
+    // The name the provider shows for a picked document; the URI's last
+    // segment is often "primary:Download/x.pdf" or "msf:1234".
+    private fun displayName(activity: Activity, uri: Uri): String? = try {
+        activity.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    } catch (e: Exception) {
+        null
+    } ?: uri.lastPathSegment?.substringAfterLast('/')
 
     // ── File picker ───────────────────────────────────────────────────────
     @JvmStatic
@@ -1988,12 +2078,17 @@ object MobBridge {
         Thread {
             try {
                 val items = uris.mapIndexed { i, uri ->
-                    val name = uri.lastPathSegment ?: "file_$i"
+                    val name = displayName(activity, uri)
+                        ?.replace(Regex("[/\\\\\\u0000]"), "_")
+                        ?.takeUnless { it.isBlank() || it == "." || it == ".." }
+                        ?: "file_$i"
                     val tmp = File(activity.cacheDir, "mob_file_${System.currentTimeMillis()}_$name")
                     activity.contentResolver.openInputStream(uri)?.use { it.copyTo(tmp.outputStream()) }
                     val size = tmp.length()
                     val mime = activity.contentResolver.getType(uri) ?: "application/octet-stream"
-                    """{"path":"${tmp.absolutePath}","name":"$name","mime":"$mime","size":$size}"""
+                    org.json.JSONObject()
+                        .put("path", tmp.absolutePath).put("name", name)
+                        .put("mime", mime).put("size", size).toString()
                 }
                 val json = "[${items.joinToString(",")}]"
                 nativeDeliverFileResult(pid, "files", "picked", json)
@@ -2734,7 +2829,6 @@ object MobBridge {
     // mob_notify plugin (io.mob.notify.MobNotifyBridge); shared delivery state
     // lives in the generated io.mob.plugin.MobNotifyHub. The channel id +
     // delivery thunks/receiver stay host-side (delivery is core/host-owned).
-    private const val PERM_REQUEST_CODE = 9001
 
     /**
      * Called from nif_safe_area via JNI — returns [top, right, bottom, left] in dp.

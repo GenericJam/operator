@@ -2,7 +2,6 @@ package com.genericjam.operator
 
 import android.app.Activity
 import android.content.Context
-import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
@@ -95,11 +94,13 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         foreground = true
+        MobBridge.onActivityResumed()
         if (recreating) recreating = false else notifyAppLifecycle("did_become_active")
     }
 
     override fun onPause() {
         foreground = false
+        MobBridge.onActivityPaused()
         if (isChangingConfigurations) recreating = true else notifyAppLifecycle("will_resign_active")
         super.onPause()
     }
@@ -185,13 +186,11 @@ class MainActivity : ComponentActivity() {
     }
 
     // ── Permission result ─────────────────────────────────────────────────
+    // Forwarded as-is: MobBridge's permission queue matches the request code
+    // to the request in flight and ignores any other code.
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 9001) {
-            val granted = grantResults.isNotEmpty() &&
-                grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-            MobBridge.onPermissionResult(granted)
-        }
+        MobBridge.onPermissionResult(requestCode, permissions, grantResults)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -39,6 +39,14 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Shared storage for the agent's file tools (Operator.Core.Files):
+         "All files access", switched on in Settings at first use (Android
+         11+; personal use, never for a store build); the plain storage pair
+         below Android 11. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
     <!-- Bluetooth Classic + BLE (mob_bluetooth). Scanning never derives
          location on API 31+; the legacy pair covers API <= 30. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
@@ -102,6 +110,8 @@
 
     <!-- mob:plugin-permissions BEGIN (managed — regenerated each build; do not edit) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.NFC" />
     <!-- mob:plugin-permissions END -->
     <application
