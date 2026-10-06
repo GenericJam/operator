@@ -525,7 +525,9 @@ defmodule Operator.Core.Dyn do
     - Files only through `Operator.Core.Files` (`read/1`, `write/3`, `ls/1`, `stat/1`, \
     `mkdir_p/1`, `rm/1`, `expand/1`): the same places as your `file_*` tools (the workspace; \
     on Android shared storage once the user allows All files access, which a screen asks for \
-    with `Mob.Permissions.request(socket, :all_files)`). `Path` is fine except \
+    with `Mob.Permissions.request(socket, :all_files)`); a capability's output in the app's \
+    temporary files (a `Mob.Files.pick/2` pick, a photo, a recording) is copied in with \
+    `keep(path, name)`, to `inbox/`. `Path` is fine except \
     `Path.wildcard`. No `File`, `Mob.Storage`, `System.cmd`, `Port`, `:os`, `Code`, `Module`, \
     `:code`, `Node`; no tracing, suspending or listing processes; no `:persistent_term.put`; \
     no `defmacro`, `quote` or `unquote` (`use Mob.Screen` and `~MOB` are fine); no \

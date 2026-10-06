@@ -152,11 +152,13 @@ defmodule Operator.Core.Attachments do
       else: copy(src, unique(dir, named(name, src)), ctx)
   end
 
+  @doc false
   # The given name keeps the source's extension when it has none (iOS's
   # photo picker names a pick `IMG_0042`), so the copy is still a picture.
-  defp named(nil, src), do: Path.basename(src)
+  @spec named(String.t() | nil, Path.t()) :: String.t()
+  def named(nil, src), do: Path.basename(src)
 
-  defp named(name, src) do
+  def named(name, src) do
     if Path.extname(name) == "", do: name <> Path.extname(src), else: name
   end
 
@@ -176,7 +178,10 @@ defmodule Operator.Core.Attachments do
     not Enum.any?(Files.roots(ctx), &String.starts_with?(Path.expand(src), &1.path <> "/"))
   end
 
-  defp unique(dir, name) do
+  @doc false
+  # A free path for `name` (its base name) in `dir`: `name`, `name-2`, …
+  @spec unique(Path.t(), String.t()) :: Path.t()
+  def unique(dir, name) do
     name = name |> Path.basename() |> String.replace(~r/[\/\x00]/, "_")
     base = Path.rootname(name)
     ext = Path.extname(name)

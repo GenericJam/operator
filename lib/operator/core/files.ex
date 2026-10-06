@@ -21,11 +21,22 @@ defmodule Operator.Core.Files do
   (`roots/1`, `workspace/1`, `resolve/3`, ...) takes a caller's ctx and
   is off limits to Dyn code (`Operator.Core.Dyn.Check`).
 
+  What the phone's capabilities hand a screen (a `Mob.Files.pick/2` pick, a
+  `MobCamera` photo, a `MobPhotos` pick, a recording) is a file in the app's
+  temporary files (Android's cache dir, iOS's tmp), which is no root;
+  `keep/2` copies one into the workspace's `inbox/`, where `read/1`
+  reaches it. It takes nothing else: only a regular file under that dir,
+  after `..` and symlinks are resolved, so no app-private file (sessions,
+  the Dyn store, settings) can be pulled into the workspace through it.
+
   `ctx[:file_roots]` replaces the roots (tests); otherwise the workspace is
-  under `ctx[:data_dir]` or `Operator.Paths.data_dir/0`.
+  under `ctx[:data_dir]` or `Operator.Paths.data_dir/0`. The app env
+  `:operator, :app_temp` (a dir) replaces the temporary files' dir (tests).
   """
 
+  alias Operator.Core.Attachments
   alias Operator.Core.Term
+  alias Operator.Core.Tools.FileTool
 
   @type root :: %{
           name: String.t(),
@@ -166,6 +177,69 @@ defmodule Operator.Core.Files do
   def expand(path) do
     with {:ok, abs, _root} <- resolve(path, :read), do: {:ok, abs}
   end
+
+  @doc """
+  Copies a file from the app's temporary files (a capability's output: a
+  `Mob.Files.pick/2` item's `path`, a photo, a recording) into the
+  workspace's `inbox/`, as `name` if given (else its own name; `name-2`, …
+  if taken), and returns its path there. Anything but a regular file under
+  the temporary files' dir is `{:error, text}` (see the moduledoc).
+  """
+  @spec keep(String.t(), String.t() | nil) :: {:ok, Path.t()} | {:error, String.t()}
+  def keep(path, name \\ nil)
+
+  def keep(path, name) when is_binary(path) do
+    with {:ok, src} <- app_temp_file(path) do
+      inbox = Path.join(workspace(), "inbox")
+      dest = Attachments.unique(inbox, Attachments.named(plain_name(name), src))
+
+      with :ok <- File.mkdir_p(inbox),
+           :ok <- File.cp(src, dest) do
+        {:ok, dest}
+      else
+        {:error, reason} -> {:error, "Couldn't keep it: " <> FileTool.posix(reason, path)}
+      end
+    end
+  end
+
+  def keep(other, _name), do: {:error, "Not a path: #{inspect(other, limit: 5)}."}
+
+  defp app_temp_file(path) do
+    case app_temp() do
+      nil ->
+        {:error, "There are no temporary files here (not on a phone)."}
+
+      dir ->
+        real = real_path(Path.expand(path))
+        dir = real_path(Path.expand(dir))
+
+        if ".." not in Path.split(path) and String.starts_with?(real, dir <> "/") and
+             File.regular?(real),
+           do: {:ok, real},
+           else: {:error, "#{path} isn't in the app's temporary files."}
+    end
+  end
+
+  # Where the capabilities leave their output: Android's cacheDir, iOS's
+  # NSTemporaryDirectory().
+  defp app_temp do
+    with nil <- Application.get_env(:operator, :app_temp) do
+      case Term.platform() do
+        :android -> Mob.Storage.dir(:cache)
+        :ios -> Mob.Storage.dir(:temp)
+        _ -> nil
+      end
+    end
+  rescue
+    _ in [UndefinedFunctionError, ErlangError] -> nil
+  end
+
+  defp plain_name(name) when is_binary(name) do
+    name = Path.basename(name)
+    if name in ["", ".", ".."], do: nil, else: name
+  end
+
+  defp plain_name(_name), do: nil
 
   defp with_path(path, mode, fun) do
     with {:ok, abs, _root} <- resolve(path, mode), do: fun.(abs)
