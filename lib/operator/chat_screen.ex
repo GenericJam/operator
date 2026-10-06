@@ -1027,8 +1027,7 @@ defmodule Operator.ChatScreen do
               Map.delete(acc, action)
 
             result == :granted ->
-              :ok = Native.impl().phone(action, args)
-              Map.put(acc, action, {ref, from, args, true})
+              start_granted(acc, action, ref, from, args)
 
             true ->
               Phone.reply(from, ref, {:error, denied(capability)})
@@ -1040,6 +1039,17 @@ defmodule Operator.ChatScreen do
       end)
 
     Mob.Socket.assign(socket, :phone, phone)
+  end
+
+  defp start_granted(phone, action, ref, from, args) do
+    case Native.impl().phone(action, args) do
+      :ok ->
+        Map.put(phone, action, {ref, from, args, true})
+
+      {:error, reason} ->
+        Phone.reply(from, ref, {:error, "Couldn't start #{action}: #{inspect(reason)}"})
+        Map.delete(phone, action)
+    end
   end
 
   @doc false

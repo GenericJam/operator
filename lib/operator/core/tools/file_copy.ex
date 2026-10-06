@@ -17,7 +17,8 @@ defmodule Operator.Core.Tools.FileCopy do
     do:
       "Copy (or with `move`: move) a file or directory. To give the user a file on Android, " <>
         "copy it to the shared storage's Download (or Documents, Pictures) where their apps " <>
-        "find it. Won't overwrite unless `overwrite` is true."
+        "find it. A directory in shared storage moves only within it (moving it out deletes " <>
+        "it there): copy it instead. Won't overwrite unless `overwrite` is true."
 
   @impl true
   def parameter_schema do
@@ -43,7 +44,8 @@ defmodule Operator.Core.Tools.FileCopy do
 
     with {:ok, src, src_root} <- FileTool.resolve(from, if(move?, do: :write, else: :read), ctx),
          :ok <- not_root(src, src_root),
-         {:ok, dest, _root} <- FileTool.resolve(to, :write, ctx),
+         {:ok, dest, dest_root} <- FileTool.resolve(to, :write, ctx),
+         :ok <- not_tree_move(src, src_root, dest_root, move?),
          dest = if(File.dir?(dest), do: Path.join(dest, Path.basename(src)), else: dest),
          :ok <- not_inside(src, dest),
          :ok <- free(dest, args["overwrite"] == true),
@@ -60,6 +62,22 @@ defmodule Operator.Core.Tools.FileCopy do
       do: {:error, "#{path} is a whole root; pick something inside it."},
       else: :ok
   end
+
+  # A move to another root is a copy and a delete (another file system):
+  # for a directory outside the workspace that's the tree delete
+  # file_delete refuses there.
+  defp not_tree_move(src, src_root, dest_root, true)
+       when src_root.name != "workspace" and src_root.name != dest_root.name do
+    if File.dir?(src),
+      do:
+        {:error,
+         "Moving the directory #{src} out of #{src_root.name} would delete it there, and a " <>
+           "whole directory is deleted only inside the workspace: copy it instead (then " <>
+           "delete its files one at a time if they should go)."},
+      else: :ok
+  end
+
+  defp not_tree_move(_src, _src_root, _dest_root, _move?), do: :ok
 
   defp not_inside(src, dest) do
     if String.starts_with?(dest, src <> "/"),

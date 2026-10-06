@@ -195,6 +195,34 @@ defmodule Operator.Core.FileToolsTest do
     assert File.dir?(dcim)
   end
 
+  test "move: no directory tree out of shared storage (a delete there), files and copies fine",
+       %{ctx: ctx, workspace: ws, shared: shared} do
+    camera = Path.join(shared, "DCIM/Camera")
+    File.mkdir_p!(camera)
+    File.write!(Path.join(camera, "a.jpg"), "jpg")
+
+    assert {:error, msg} = FileCopy.run(%{"from" => camera, "to" => ws, "move" => true}, ctx)
+    assert msg =~ "deleted only inside the workspace"
+    assert File.read!(Path.join(camera, "a.jpg")) == "jpg"
+
+    assert {:ok, "Copied " <> _} = FileCopy.run(%{"from" => camera, "to" => ws}, ctx)
+
+    assert {:ok, "Moved " <> _} =
+             FileCopy.run(
+               %{"from" => Path.join(camera, "a.jpg"), "to" => ws, "move" => true},
+               ctx
+             )
+
+    # inside shared storage a move is a rename
+    File.mkdir_p!(Path.join(shared, "Pictures"))
+
+    assert {:ok, "Moved " <> _} =
+             FileCopy.run(
+               %{"from" => camera, "to" => Path.join(shared, "Pictures"), "move" => true},
+               ctx
+             )
+  end
+
   test "a move across file systems that can't remove the whole source says what's left", %{
     workspace: ws
   } do
