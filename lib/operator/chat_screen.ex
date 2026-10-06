@@ -29,6 +29,13 @@ defmodule Operator.ChatScreen do
   saying where to sign in. The composer only talks to the agent: there are
   no chat commands.
 
+  `[attach]` beside the mic opens `[photo library] [take photo] [file]`:
+  the same picks the agent's tools make (`Operator.Core.Attachments`, run
+  in a task, the screen serving the phone action). What's picked waits
+  above the composer as `[x] name size` (tap to drop it) and goes with the
+  next message, which may be just the files; the line says when the
+  model will get only a picture's path (it doesn't take pictures).
+
   On Android the composer has a mic: hold it and talk (`on_press_in` /
   `on_press_out` on a plain box); on release the phone transcribes it offline
   (`MobSpeech` with the `MobWhisper` engine; the mic shows "…" meanwhile) and
@@ -54,9 +61,11 @@ defmodule Operator.ChatScreen do
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
+  alias Operator.Core.Attachments
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
   alias Operator.Core.Loop
+  alias Operator.Core.Models
   alias Operator.Core.Phone
   alias Operator.Core.Session
   alias Operator.Core.Settings
@@ -79,6 +88,8 @@ defmodule Operator.ChatScreen do
   @list_id "transcript"
   # A shorter hold of the mic is a tap: too short to have said anything.
   @min_hold_ms 300
+  # Photos per [attach] › photo library.
+  @attach_max 10
 
   def mount(params, _session, socket) do
     loop = Map.get(params, :loop) || Operator.Core.current()
@@ -107,7 +118,12 @@ defmodule Operator.ChatScreen do
        proposal: pending_proposal(),
        activated: nil,
        phone: %{},
-       foreground: true
+       foreground: true,
+       attach_menu: false,
+       # The picks being waited for (a ref each); a late one still lands.
+       attaching: MapSet.new(),
+       attachments: [],
+       images?: true
      )
      |> attach(loop)}
   end
@@ -130,6 +146,7 @@ defmodule Operator.ChatScreen do
             footer(assigns, t)
           ] ++
           approval_bar(assigns, t) ++
+          attach_rows(assigns, t) ++
           [
             composer(assigns, t)
           ]
@@ -195,6 +212,39 @@ defmodule Operator.ChatScreen do
   def handle_info({:tap, :stop}, socket) do
     Loop.stop(socket.assigns.loop)
     {:noreply, socket}
+  end
+
+  def handle_info({:tap, :attach}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :attach_menu, not socket.assigns.attach_menu)}
+
+  def handle_info({:tap, {:attach, source}}, socket) when source in [:photos, :camera, :files],
+    do: {:noreply, start_attach(socket, source)}
+
+  def handle_info({:tap, {:unattach, i}}, socket),
+    do:
+      {:noreply,
+       Mob.Socket.assign(socket, :attachments, List.delete_at(socket.assigns.attachments, i))}
+
+  def handle_info({:tap, :stop_attaching}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :attaching, MapSet.new())}
+
+  def handle_info({:attached, ref, result}, socket) do
+    socket = Mob.Socket.assign(socket, :attaching, MapSet.delete(socket.assigns.attaching, ref))
+
+    case result do
+      {:ok, files} when is_list(files) ->
+        {:noreply,
+         Mob.Socket.assign(socket,
+           attachments: socket.assigns.attachments ++ files,
+           images?: Models.images?(socket.assigns.model)
+         )}
+
+      {:ok, :cancelled} ->
+        {:noreply, socket}
+
+      {:error, text} ->
+        {:noreply, toast(socket, text)}
+    end
   end
 
   # ── dictation (the mic's press in/out → MobSpeech, whisper engine) ──
@@ -637,8 +687,13 @@ defmodule Operator.ChatScreen do
 
   defp on_event(%{type: :tool_execution_end}, socket), do: Mob.Socket.assign(socket, :detail, nil)
 
-  defp on_event(%{type: :model_change, model: model}, socket),
-    do: Mob.Socket.assign(socket, :model, model)
+  defp on_event(%{type: :model_change, model: model}, socket) do
+    socket = Mob.Socket.assign(socket, :model, model)
+
+    if socket.assigns.attachments == [],
+      do: socket,
+      else: Mob.Socket.assign(socket, :images?, Models.images?(model))
+  end
 
   defp on_event(%{type: :queue, steering: s, follow_up: f}, socket),
     do: Mob.Socket.assign(socket, :queued, length(s) + length(f))
@@ -772,24 +827,62 @@ defmodule Operator.ChatScreen do
 
   defp send_draft(socket) do
     text = String.trim(socket.assigns.draft)
+    files = socket.assigns.attachments
+    sent = [draft: "", attachments: [], following: true]
 
     cond do
-      text == "" ->
+      text == "" and files == [] ->
         {:noreply, socket}
 
+      # A pick is still being kept and scaled: don't send without its files.
+      MapSet.size(socket.assigns.attaching) > 0 ->
+        {:noreply, toast(socket, "Still attaching: send again in a moment")}
+
       socket.assigns.status == :running ->
-        :ok = Loop.steer(socket.assigns.loop, text)
-        {:noreply, Mob.Socket.assign(socket, draft: "", following: true)}
+        :ok = Loop.steer(socket.assigns.loop, text, files)
+        {:noreply, Mob.Socket.assign(socket, sent)}
 
       true ->
-        case Loop.prompt(socket.assigns.loop, text) do
+        case Loop.prompt(socket.assigns.loop, text, files) do
           :ok -> :ok
-          {:error, :running} -> Loop.steer(socket.assigns.loop, text)
+          {:error, :running} -> Loop.steer(socket.assigns.loop, text, files)
         end
 
-        {:noreply, socket |> ask_notifications() |> Mob.Socket.assign(draft: "", following: true)}
+        {:noreply, socket |> ask_notifications() |> Mob.Socket.assign(sent)}
     end
   end
+
+  # The pick runs in a task: the pickers and the camera are phone actions
+  # this screen serves (`{:phone_request, ...}`), the same ones the tools
+  # ask for, through the same `Attachments` functions.
+  defp start_attach(socket, source) do
+    screen = self()
+    ref = make_ref()
+    ctx = %{phone_host: screen, data_dir: socket.assigns.settings_dir}
+
+    Task.start(fn ->
+      result =
+        try do
+          pick(source, ctx)
+        rescue
+          e -> {:error, "Couldn't attach it: " <> Exception.message(e)}
+        catch
+          kind, reason ->
+            {:error, "Couldn't attach it: " <> Exception.format_banner(kind, reason)}
+        end
+
+      send(screen, {:attached, ref, result})
+    end)
+
+    Mob.Socket.assign(socket,
+      attach_menu: false,
+      attaching: MapSet.put(socket.assigns.attaching, ref)
+    )
+  end
+
+  defp pick(:photos, ctx), do: Attachments.pick_photos(@attach_max, ctx)
+  defp pick(:camera, ctx), do: Attachments.take_photo(ctx)
+  defp pick(:files, ctx), do: Attachments.pick_files([:any], ctx)
 
   # News that arrives while another app is in front (a QR app during a
   # handoff) stays up long enough to be seen on return.
@@ -1152,8 +1245,62 @@ defmodule Operator.ChatScreen do
           weight: 1,
           on_submit: {self(), :draft}
         )
-      ] ++ mic(a, t) ++ [UI.chip(send_label, :send, t, "user")] ++ stop
+      ] ++
+        [UI.link("attach", :attach, t, padding: 4)] ++
+        mic(a, t) ++ [UI.chip(send_label, :send, t, "user")] ++ stop
     )
+  end
+
+  # Above the composer: the [attach] list while it's open, a pick in
+  # progress, and what goes with the next message (tap a line to drop it).
+  defp attach_rows(a, t) do
+    menu =
+      if a.attach_menu,
+        do: [
+          UI.bar_row(t, [
+            UI.text("attach", t, "dim", text_size: t.text_size - 1),
+            UI.link("photo library", {:attach, :photos}, t, padding: 4),
+            UI.link("take photo", {:attach, :camera}, t, padding: 4),
+            UI.link("file", {:attach, :files}, t, padding: 4)
+          ])
+        ],
+        else: []
+
+    # Tap to stop waiting (a picker that never answers); a late pick still lands.
+    pending =
+      if MapSet.size(a.attaching) > 0,
+        do: [
+          UI.text("attaching… (tap to stop waiting)", t, "dim",
+            font: :term_italic,
+            on_tap: {self(), :stop_attaching}
+          )
+        ],
+        else: []
+
+    chips =
+      for {file, i} <- Enum.with_index(a.attachments) do
+        UI.text("[x] " <> Attachments.label(file, a.images?), t, "user",
+          on_tap: {self(), {:unattach, i}},
+          max_lines: 1,
+          accessibility_role: "button",
+          accessibility_label: "Remove #{file.name}"
+        )
+      end
+
+    case chips ++ pending do
+      [] ->
+        menu
+
+      lines ->
+        menu ++
+          [
+            %{
+              type: :column,
+              props: %{fill_width: true, padding: 6, gap: 4, background: Term.color(t, "bar")},
+              children: lines
+            }
+          ]
+    end
   end
 
   # Hold to talk: a plain box observing the finger (on_press_in / on_press_out,

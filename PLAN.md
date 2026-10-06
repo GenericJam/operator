@@ -534,6 +534,17 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    `/login`, `/logout` and `/models` are gone: the composer only talks to
    the agent. Signed out, the chat is still the root and says where to
    sign in.
+12. **Attachments** (Kevin, 2026-10-05, before the first public APK).
+   `[attach]` beside the mic opens `[photo library] [take photo] [file]`;
+   picks wait above the composer as `[x] name size` and go with the next
+   message (which may be files only). `Operator.Core.Attachments` is the one
+   implementation behind `[attach]` and the `pick_photos`, `photos_recent`,
+   `camera_photo`, `camera_snap` and `file_pick` tools: copies in the
+   workspace's `inbox/` (snaps in `photos/`), pictures scaled with their
+   EXIF, text inlined up to the output budget, PDFs as document parts.
+   Messages carry pi's content parts (an `<attachment>` text block per file,
+   then the image); a model without image input gets the path and
+   metadata only.
 
 ## iOS parity (2026-10-04)
 

@@ -381,6 +381,147 @@ defmodule Operator.ChatScreenTest do
     assert text(view) =~ "› /login anthropic"
   end
 
+  describe "[attach]" do
+    # The pick runs in a task that asks this screen (the test process) for
+    # the phone action, like a tool does; feed its request and answer in.
+    defp serve_pick(view, action, answer) do
+      assert_receive {:phone_request, _ref, _from, ^action, _args} = request
+      view = render_info(view, request)
+      assert_received {:phone_call, ^action, _}
+      view = render_info(view, answer)
+      assert_receive {:attached, _, _} = attached
+      render_info(view, attached)
+    end
+
+    test "file: picked files wait as chips, a tap drops one, the rest go with the message",
+         %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [[{:text, "a list"}]])
+      notes = Path.join(dir, "picked_notes")
+      File.write!(notes, "buy milk\n")
+      blob = Path.join(dir, "picked_blob")
+      File.write!(blob, <<0, 1, 2>>)
+
+      view = render_info(view, {:tap, :attach})
+      assert find(view, :text, text: "[photo library]") && find(view, :text, text: "[take photo]")
+
+      items = [%{path: notes, name: "notes.txt"}, %{path: blob, name: "x.bin"}]
+
+      view =
+        view
+        |> render_info({:tap, {:attach, :files}})
+        |> serve_pick(:pick_file, {:files, :picked, items})
+
+      refute find(view, :text, text: "[photo library]")
+      assert find(view, :text, text: "[x] notes.txt 9 B")
+
+      assert find(view, :text,
+               text: "[x] x.bin 3 B, not text or a picture: work with it through its path"
+             )
+
+      view = render_info(view, {:tap, {:unattach, 1}})
+      refute text(view) =~ "x.bin"
+
+      view = view |> send_text("what's on it?") |> pump(:agent_end)
+      assert assigns(view).attachments == []
+      kept = Path.join(dir, "workspace/inbox/notes.txt")
+      assert File.read!(kept) == "buy milk\n"
+
+      [%{messages: [%{content: [typed, file]}]}] = FakeLLM.requests(llm)
+      assert typed.text == "what's on it?"
+      assert file.text =~ ~s|<attachment name="notes.txt" type="text/plain" path="#{kept}">|
+      assert file.text =~ "buy milk"
+      assert text(view) =~ "› what's on it?"
+      assert text(view) =~ "› + notes.txt · 9 B"
+    end
+
+    test "photo library and camera: pictures go as image blocks, a message of files only",
+         %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [[{:text, "a cat"}]])
+      photo = Path.join(dir, "picked.png")
+      File.write!(photo, <<137, 80, 78, 71>>)
+      shot = Path.join(dir, "camera.jpg")
+      File.write!(shot, <<0xFF, 0xD8, 0xFF, 0xD9>>)
+
+      view =
+        view
+        |> render_info({:tap, {:attach, :photos}})
+        |> serve_pick(:pick_photos, {:photos, :picked, [%{path: photo, type: "image"}]})
+
+      # take photo asks for the camera first, like camera_photo
+      view = render_info(view, {:tap, {:attach, :camera}})
+      assert_receive {:phone_request, _, _, :camera_photo, _} = request
+      view = view |> render_info(request) |> render_info({:permission, :camera, :granted})
+      assert_received {:phone_call, :camera_photo, _}
+      view = render_info(view, {:camera, :photo, %{path: shot, width: 1, height: 1}})
+      assert_receive {:attached, _, _} = attached
+      view = render_info(view, attached)
+
+      assert find(view, :text, text: "[x] picked.png 4 B")
+      assert find(view, :text, text: "[x] camera.jpg 4 B")
+
+      view = view |> render_info({:tap, :send}) |> pump(:agent_end)
+      [%{messages: [%{content: parts}]}] = FakeLLM.requests(llm)
+      assert Enum.map(parts, & &1.type) == [:text, :image, :text, :image]
+      assert text(view) =~ "› + picked.png · 4 B"
+    end
+
+    test "a cancelled pick changes nothing; a failed one says why", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+
+      view =
+        view
+        |> render_info({:tap, {:attach, :files}})
+        |> serve_pick(:pick_file, {:files, :cancelled})
+
+      assert assigns(view).attachments == []
+      refute text(view) =~ "attaching…"
+
+      view = render_info(view, {:tap, {:attach, :camera}})
+      assert_receive {:phone_request, _, _, :camera_photo, _} = request
+
+      view =
+        view |> render_info(request) |> render_info({:permission, :camera, :denied})
+
+      assert_receive {:attached, _, _} = attached
+      view = render_info(view, attached)
+      assert text(view) =~ "The user didn't allow camera access"
+    end
+
+    test "a pick given up on that answers late doesn't end the wait for a newer one",
+         %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      notes = Path.join(dir, "picked_notes")
+      File.write!(notes, "buy milk\n")
+
+      view = render_info(view, {:tap, {:attach, :photos}})
+      assert_receive {:phone_request, _, _, :pick_photos, _} = photos
+      view = render_info(view, photos)
+      assert text(view) =~ "attaching…"
+
+      # the photo picker hangs: stop waiting, then pick a file instead
+      view = render_info(view, {:tap, :stop_attaching})
+      refute text(view) =~ "attaching…"
+      view = render_info(view, {:tap, {:attach, :files}})
+      assert_receive {:phone_request, _, _, :pick_file, _} = files
+      view = render_info(view, files)
+
+      # the old pick ends while the file pick is still open
+      view = render_info(view, {:photos, :cancelled})
+      assert_receive {:attached, _, {:ok, :cancelled}} = late
+      view = render_info(view, late)
+      assert text(view) =~ "attaching…"
+
+      view = send_text(view, "what's on it?")
+      assert assigns(view).draft == "what's on it?"
+
+      view = render_info(view, {:files, :picked, [%{path: notes, name: "notes.txt"}]})
+      assert_receive {:attached, _, {:ok, [_]}} = attached
+      view = render_info(view, attached)
+      refute text(view) =~ "attaching…"
+      assert find(view, :text, text: "[x] notes.txt 9 B")
+    end
+  end
+
   describe "signed out" do
     setup do
       start_supervised!(Operator.Auth)

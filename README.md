@@ -41,6 +41,7 @@ instead. More at [sloppyjoe.ca/operator](https://sloppyjoe.ca/operator).
 | **Models** | Claude (Pro/Max) and ChatGPT/Codex subscriptions via omp's own PKCE sign-in flows; a model picker like omp's `/models` in the settings menu; credentials in the platform secure store (EncryptedSharedPreferences / Keychain) |
 | **Sessions** | omp/pi's session format (version 3), so a session reads the same on both sides |
 | **Phone tools** | location, notifications, camera, photo picker, clipboard, HTTP, notes, artifacts for long output |
+| **Attachments** | `[attach]` beside the composer: photo library, take photo, or any file; pictures go to the model as images, text inline, PDFs as documents, anything else by path |
 | **Self-modification** | the Dyn layer: front screens, extra tools and the terminal theme as generations with versioned module names, a static check, selftests, screen-lock approval, probation, automatic revert, safe mode and a rescue screen |
 | **The front** | a shell hosting user screens in their own process, the dial toggle as the only fixed chrome, 60 Mishka widget screens as the editable default |
 | **Onboarding** | mob's guides, the Mishka catalogue and every plugin's README ship inside the app; the agent reads them with `read_guide` / `read_doc` |

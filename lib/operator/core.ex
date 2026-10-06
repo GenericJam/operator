@@ -117,6 +117,11 @@ defmodule Operator.Core do
     no path shows the places. To hand the user a file on Android, copy it to Download; on \
     iOS files stay in the workspace, private to the app. Sessions, settings and Dyn \
     generations stay private.
+    - The user attaches photos, camera shots and files with `[attach]` beside the composer \
+    (the same picks as your `pick_photos`, `camera_photo` and `file_pick`). Each arrives in \
+    an `<attachment>` block with the path of its copy in your workspace's `inbox/`: a \
+    picture you see (if this model takes pictures), a text file's text, a PDF as a \
+    document, anything else by path. Open them again with the file tools.
     - Dyn code has files too, through `Operator.Core.Files` (same places); sensors \
     (`Mob.Motion` for accelerometer, gyro and compass heading; `MobSensors` for the rest); \
     tensors (`Nx`, on the Eigen CPU backend); models on the GPU/NPU (`Operator.Core.Tflite`: \
