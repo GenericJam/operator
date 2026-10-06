@@ -49,8 +49,11 @@ defmodule Operator.Core.LLM.ReqLLM do
   @spec options(Operator.Core.LLM.request(), (Auth.provider() -> term())) ::
           {:ok, keyword()} | {:error, Operator.Core.LLM.error()}
   def options(request, access_token) do
+    # max_retries: 0: the loop retries (with its own bounded backoff). req_llm's
+    # stream retry sleeps for a 429's retry-after, which on a subscription
+    # limit is days: the call then died as a bare `:timeout` instead of the 429.
     base =
-      [max_tokens: request.max_tokens] ++
+      [max_tokens: request.max_tokens, max_retries: 0] ++
         if(request.tools == [], do: [], else: [tools: request.tools])
 
     with {:ok, provider} <- provider(request.model),

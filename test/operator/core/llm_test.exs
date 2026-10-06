@@ -46,6 +46,9 @@ defmodule Operator.Core.LLMTest do
                )
 
       assert opts[:max_tokens] == 99
+      # The loop owns retries: a 429 must come back as itself, not after
+      # req_llm sleeps out its retry-after.
+      assert opts[:max_retries] == 0
       refute Keyword.has_key?(opts, :tools)
 
       assert opts[:provider_options] == [
