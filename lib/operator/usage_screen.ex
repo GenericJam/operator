@@ -31,6 +31,7 @@ defmodule Operator.UsageScreen do
   def mount(params, _session, socket) do
     dir = Map.get(params, :data_dir) || Operator.Paths.data_dir()
     signed_in = Map.get_lazy(params, :signed_in, &signed_in/0)
+    :ok = Usage.subscribe()
 
     socket =
       socket
@@ -75,6 +76,8 @@ defmodule Operator.UsageScreen do
   def handle_info({:tap, :refresh}, socket),
     do: {:noreply, refresh(socket, socket.assigns.signed_in)}
 
+  def handle_info({:operator_usage, :changed}, socket), do: {:noreply, load(socket)}
+
   def handle_info({:operator_usage, provider, result}, socket) do
     note = with {:error, message} <- result, do: "usage endpoint: #{message}"
     note = if note == :ok, do: nil, else: note
@@ -91,11 +94,20 @@ defmodule Operator.UsageScreen do
     %{data_dir: dir, refresh: fun} = socket.assigns
 
     for p <- providers do
-      {:ok, _} = Task.start(fn -> send(screen, {:operator_usage, p, fun.(dir, p)}) end)
+      {:ok, _} = Task.start(fn -> send(screen, {:operator_usage, p, run(fun, dir, p)}) end)
     end
 
     fetching = Map.merge(socket.assigns.fetching, Map.new(providers, &{&1, :fetching}))
     Mob.Socket.assign(socket, :fetching, fetching)
+  end
+
+  # A refresh that raises (an unwritable data dir, an odd reply) still answers.
+  defp run(fun, dir, provider) do
+    fun.(dir, provider)
+  rescue
+    e -> {:error, Exception.message(e)}
+  catch
+    :exit, reason -> {:error, Exception.format_exit(reason)}
   end
 
   defp load(socket) do

@@ -348,37 +348,43 @@ defmodule Operator.ChatScreenTest do
     assert text(view) =~ "idle · $0.0000 · 0 tok · gpt-5-mini"
   end
 
-  test "the status line shows the model's subscription windows, updated after a call",
-       %{tmp_dir: dir} do
+  test "the status line shows the model's provider's windows as they change", %{tmp_dir: dir} do
     alias Operator.Core.Usage
     reset = System.os_time(:second) + 3600
 
-    headers = fn five, week ->
-      [
-        {"anthropic-ratelimit-unified-5h-utilization", five},
-        {"anthropic-ratelimit-unified-5h-reset", "#{reset}"},
-        {"anthropic-ratelimit-unified-7d-utilization", week},
-        {"anthropic-ratelimit-unified-7d-reset", "#{reset}"}
-      ]
-    end
+    claude = [
+      {"anthropic-ratelimit-unified-5h-utilization", "0.42"},
+      {"anthropic-ratelimit-unified-5h-reset", "#{reset}"},
+      {"anthropic-ratelimit-unified-7d-utilization", "0.18"},
+      {"anthropic-ratelimit-unified-7d-reset", "#{reset}"}
+    ]
 
-    %{view: view, loop: loop} = mount_chat(dir, [[{:text, "Hi."}]])
+    codex = [{"x-codex-primary-used-percent", "7"}, {"x-codex-primary-window-minutes", "300"}]
+
+    start_supervised!(Usage)
+    %{view: view, loop: loop} = mount_chat(dir, [])
     # no numbers yet: no figure
     assert text(view) =~ "idle · $0.0000 · 0 tok · claude-haiku-4-5"
 
-    # what the call's headers reported is read once it ends
-    :ok =
-      Usage.record(dir, model(), %{status: 200, headers: headers.("0.42", "0.18"), usage: %{}})
-
-    codex = [{"x-codex-primary-used-percent", "7"}, {"x-codex-primary-window-minutes", "300"}]
-    :ok = Usage.record(dir, "openai_codex:gpt-5-mini", %{status: 200, headers: codex, usage: %{}})
-    view = view |> send_text("hello") |> pump(:agent_end)
-    assert text(view) =~ "idle · 5h 42% · wk 18% · $0.0010 · 120 tok · claude-haiku-4-5"
+    # a model call's headers, recorded by any loop, show at once
+    :ok = Usage.record(dir, model(), %{status: 200, headers: claude, usage: %{}})
+    assert_receive {:operator_usage, :changed} = changed
+    view = render_info(view, changed)
+    assert text(view) =~ "idle · 5h 42% · wk 18% · $0.0000 · 0 tok · claude-haiku-4-5"
 
     # another model: its provider's windows
+    :ok = Usage.record(dir, "openai_codex:gpt-5-mini", %{status: 200, headers: codex, usage: %{}})
+    assert_receive {:operator_usage, :changed} = changed
+    view = render_info(view, changed)
     :ok = Loop.set_model(loop, "openai_codex:gpt-5-mini")
     view = pump(view, :model_change)
-    assert text(view) =~ "idle · 5h 7% · $0.0010 · 120 tok · gpt-5-mini"
+    assert text(view) =~ "idle · 5h 7% · $0.0000 · 0 tok · gpt-5-mini"
+
+    # a usage page refresh too
+    week = %{"7d" => %{"label" => "7 days", "used" => 55.0, "resets_at" => nil}}
+    :ok = Usage.put_endpoint(dir, :openai_codex, week, "plus")
+    assert_receive {:operator_usage, :changed} = changed
+    assert text(render_info(view, changed)) =~ "idle · 5h 7% · wk 55% · $0.0000"
   end
 
   test "new session and resume, from the menu", %{tmp_dir: dir} do

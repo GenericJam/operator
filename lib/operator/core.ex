@@ -37,6 +37,7 @@ defmodule Operator.Core do
       DynTheme,
       Operator.Core.Front,
       Operator.Core.ToolRegistry,
+      Operator.Core.Usage,
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
       Operator.Core.Current,

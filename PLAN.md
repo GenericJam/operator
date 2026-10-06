@@ -545,6 +545,20 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    Messages carry pi's content parts (an `<attachment>` text block per file,
    then the image); a model without image input gets the path and
    metadata only.
+13. **Usage** (Kevin, 2026-10-06; Moto-verified). `[menu]` › usage
+   (`Operator.UsageScreen`) shows what each subscription has left: the
+   5-hour and weekly windows (percent used, time to reset), the last 429
+   and when it resets, then requests, tokens (in / out / cache) and cost
+   for the session, today, all time and per model. The numbers come from
+   every call's response headers (Claude `anthropic-ratelimit-unified-5h/7d-*`,
+   Codex `x-codex-primary/secondary-*`, read from req_llm's stream
+   metadata) and from the OAuth usage endpoints omp uses
+   (`/api/oauth/usage`, `/backend-api/wham/usage`), asked when the page
+   opens on numbers over 5 minutes old or on `[refresh]`; they live in
+   `usage.json` (`Operator.Core.Usage`). The chat's status line shows the
+   current model's provider as `5h 42% · wk 18%` (plus `429 3d 6h` while a
+   limit holds). Counting starts with this version (old sessions aren't
+   backfilled); cost is req_llm's and reads $0 for models it has no price for.
 
 ## iOS parity (2026-10-04)
 

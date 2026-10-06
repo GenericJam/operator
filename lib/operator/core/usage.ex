@@ -36,6 +36,7 @@ defmodule Operator.Core.Usage do
   @keep_days 31
   @counters ~w(requests errors input output cacheRead cacheWrite cost)
   @message_max 300
+  @registry Operator.Core.Usage.Registry
 
   @typedoc "One model call as the adapter saw it; `usage` (req_llm's) only on success."
   @type call :: %{
@@ -45,6 +46,21 @@ defmodule Operator.Core.Usage do
           optional(:body) => term(),
           optional(:error) => String.t() | nil
         }
+
+  @doc "The registry of `subscribe/0`'s screens, under `Operator.Core`."
+  @spec child_spec(term()) :: Supervisor.child_spec()
+  def child_spec(_arg), do: Registry.child_spec(keys: :duplicate, name: @registry)
+
+  @doc """
+  Sends the caller `{:operator_usage, :changed}` after every change to the
+  store (a model call, an endpoint refresh), so the chat's status line
+  follows calls made anywhere. A no-op while `Operator.Core` isn't running.
+  """
+  @spec subscribe() :: :ok
+  def subscribe do
+    if Process.whereis(@registry), do: {:ok, _} = Registry.register(@registry, :changed, nil)
+    :ok
+  end
 
   # ── reading ──
 
@@ -390,9 +406,18 @@ defmodule Operator.Core.Usage do
   # Read, change, write under a lock (model calls of several loops, and the
   # usage page's refresh, may write at once); a failed write keeps the old file.
   defp update(dir, fun) do
-    :global.trans({__MODULE__, dir}, fn -> write(dir, fun.(load(dir))) end, [node()])
+    # Resource per data dir, requester per process: one writer at a time.
+    lock = {{__MODULE__, Path.expand(dir)}, self()}
+    :global.trans(lock, fn -> write(dir, fun.(load(dir))) end, [node()])
+    notify()
     :ok
   end
+
+  defp notify do
+    if Process.whereis(@registry), do: Registry.dispatch(@registry, :changed, &changed/1)
+  end
+
+  defp changed(entries), do: for({pid, _} <- entries, do: send(pid, {:operator_usage, :changed}))
 
   defp write(dir, state) do
     path = Path.join(dir, @file_name)

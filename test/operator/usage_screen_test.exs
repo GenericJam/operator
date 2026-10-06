@@ -116,5 +116,13 @@ defmodule Operator.UsageScreenTest do
     view = render_info(view, {:tap, :refresh})
     assert_receive {:operator_usage, :openai_codex, {:error, _}} = failed
     assert text(render_info(view, failed)) =~ "usage endpoint: HTTP 429"
+
+    # a refresh that raises still ends the "asking…"
+    raising = fn _d, _p -> raise "disk full" end
+    view = mount_usage(dir, %{signed_in: [:openai_codex], refresh: raising})
+    view = render_info(view, {:tap, :refresh})
+    assert_receive {:operator_usage, :openai_codex, {:error, _}} = crashed
+    shown = text(render_info(view, crashed))
+    assert shown =~ "usage endpoint: disk full"
   end
 end

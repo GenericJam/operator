@@ -153,6 +153,16 @@ defmodule Operator.Core.UsageTest do
       assert Map.keys(state["days"]) == ["2026-10-06"]
       assert Usage.by_model(state, :total)[@claude]["requests"] == 2
     end
+
+    test "concurrent writers don't lose each other's updates", %{tmp_dir: dir} do
+      call = %{status: 200, headers: [], usage: @usage}
+
+      1..20
+      |> Enum.map(fn _ -> Task.async(fn -> record(dir, @claude, call) end) end)
+      |> Task.await_many()
+
+      assert Usage.by_model(Usage.load(dir), :total)[@claude]["requests"] == 20
+    end
   end
 
   test "nothing recorded: an empty store, no status figure", %{tmp_dir: dir} do

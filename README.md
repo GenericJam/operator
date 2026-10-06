@@ -18,8 +18,9 @@ Operator is an Android (and, in progress, iOS) app with two sides:
   [Mishka Chelekom](https://mishka.tools) widget screens. Ask for a screen, a
   tracker, a game, a weird little tool, and the agent builds it on the phone.
   The rotary dial in the front's upper-left corner opens the terminal; there,
-  `[frontend]` goes back and `[menu]` holds sign-in, model, sessions and
-  diagnostics. `[attach]` sends photos and files with a message.
+  `[frontend]` goes back and `[menu]` holds sign-in, model, sessions, usage
+  (the subscription's 5-hour and weekly windows, tokens) and diagnostics.
+  `[attach]` sends photos and files with a message.
 
 Every change the agent makes to the app is compiled and self-tested on the
 phone, then waits for **your screen lock** (fingerprint, face or PIN). New code
@@ -129,7 +130,7 @@ mix credo --strict
 | Path | What's there |
 |---|---|
 | `lib/operator/core/` | the Core: agent loop, session, LLM adapters, tools, Dyn engine (`dyn/`), the front host, theme, voice, keep-alive |
-| `lib/operator/*_screen.ex` | chat (terminal), menu (settings), shell (front), diagnostics, rescue, QR scanner |
+| `lib/operator/*_screen.ex` | chat (terminal), menu (settings), usage, shell (front), diagnostics, rescue, QR scanner |
 | `lib/operator/auth*` | provider sign-in, token refresh, QR login transfer |
 | `lib/operator/handoff*`, `links.ex` | `operator://` links: handoff, login, update server |
 | `lib/mix/tasks/` | the Mac-side tasks (`operator.handoff`, `.login`, `.deliver.*`, `.publish`, `.docs`) |

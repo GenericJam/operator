@@ -100,6 +100,7 @@ defmodule Operator.ChatScreen do
     :ok = DynTheme.subscribe()
     if Process.whereis(Mob.Device), do: Mob.Device.subscribe(:app)
     if Process.whereis(Auth), do: :ok = Auth.subscribe()
+    :ok = Usage.subscribe()
     # A link the menu or Diagnostics received: they forward it here.
     with %{link: link} <- params, do: send(self(), {:operator_link, link})
     # Dictation's offline speech model: fetched once, then loaded in the
@@ -518,6 +519,9 @@ defmodule Operator.ChatScreen do
   def handle_info({:operator_auth, :changed}, socket),
     do: {:noreply, socket |> Mob.Socket.assign(:signed_in, signed_in?()) |> refresh()}
 
+  # A model call (from any loop) or a usage page refresh changed the numbers.
+  def handle_info({:operator_usage, :changed}, socket), do: {:noreply, load_usage(socket)}
+
   # A session file brought over from omp (scripts/session.sh push).
   def handle_info({:open_session, path}, socket) do
     case Operator.Core.open_session(path) do
@@ -629,7 +633,7 @@ defmodule Operator.ChatScreen do
     do: Mob.Socket.assign(socket, status: :running, detail: nil)
 
   defp on_event(%{type: :agent_end}, socket),
-    do: socket |> Mob.Socket.assign(status: :idle, detail: nil, stream: nil) |> load_usage()
+    do: Mob.Socket.assign(socket, status: :idle, detail: nil, stream: nil)
 
   defp on_event(%{type: :message_start, entry: %{"message" => %{"role" => "assistant"}}}, socket),
     do: socket |> Mob.Socket.assign(:detail, "thinking…") |> start_stream()
@@ -658,7 +662,6 @@ defmodule Operator.ChatScreen do
       end
 
     socket
-    |> load_usage()
     |> Mob.Socket.assign(
       stream: nil,
       totals: totals,
@@ -669,7 +672,6 @@ defmodule Operator.ChatScreen do
 
   defp on_event(%{type: :retry, delay_ms: ms}, socket) do
     socket
-    |> load_usage()
     |> cancel_flush()
     |> Mob.Socket.assign(stream: nil, detail: "retrying in #{div(ms, 1000)}s…")
     |> refresh()
@@ -1236,7 +1238,7 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  # What the last model call reported (the adapter wrote it before replying).
+  # The numbers as `Operator.Core.Usage` has them now.
   defp load_usage(socket),
     do: Mob.Socket.assign(socket, :usage, Usage.load(socket.assigns.settings_dir))
 
