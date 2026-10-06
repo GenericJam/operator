@@ -11,8 +11,9 @@ defmodule Operator.Core.ToolRunner do
   tool's task is watched by `Operator.Core.Dyn.Keeper` before it runs, so
   its crash or timeout (the loop kills it) counts against its generation.
 
-  A tool may answer with an image for the model as well as text:
-  `{:ok, {:image, mime_type, bytes, text}}` (the front's screenshot).
+  A tool may answer with pictures for the model as well as text:
+  `{:ok, {:images, [{mime_type, bytes}], text}}` (photos), or
+  `{:ok, {:image, mime_type, bytes, text}}` for one (the front's screenshot).
   """
 
   alias Operator.Core.Dyn
@@ -39,11 +40,18 @@ defmodule Operator.Core.ToolRunner do
     end)
   end
 
-  @spec to_result(term()) ::
-          {:ok, String.t() | {:image, String.t(), binary(), String.t()}} | {:error, String.t()}
-  def to_result({:ok, {:image, mime, data, text} = image})
-      when is_binary(mime) and is_binary(data) and is_binary(text),
-      do: {:ok, image}
+  @type images :: {:images, [{String.t(), binary()}], String.t()}
+
+  @spec to_result(term()) :: {:ok, String.t() | images()} | {:error, String.t()}
+  def to_result({:ok, {:image, mime, data, text}}),
+    do: to_result({:ok, {:images, [{mime, data}], text}})
+
+  def to_result({:ok, {:images, images, text} = result})
+      when is_list(images) and is_binary(text) do
+    if Enum.all?(images, &match?({mime, data} when is_binary(mime) and is_binary(data), &1)),
+      do: {:ok, result},
+      else: {:error, "tool returned malformed images"}
+  end
 
   def to_result({:ok, value}), do: {:ok, to_text(value)}
   def to_result({:error, value}), do: {:error, to_text(value)}

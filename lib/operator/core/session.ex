@@ -219,17 +219,16 @@ defmodule Operator.Core.Session do
   end
 
   @doc """
-  A tool's result. `image` (`{mime_type, bytes}`, a screenshot say) goes in
-  as pi's image content part, after the text, and on to the model.
+  A tool's result. `images` (`{mime_type, bytes}` each, a screenshot or
+  photos) go in as pi's image content parts, after the text, and on to the
+  model.
   """
-  @spec tool_result(String.t(), String.t(), String.t(), boolean(), {String.t(), binary()} | nil) ::
+  @spec tool_result(String.t(), String.t(), String.t(), boolean(), [{String.t(), binary()}]) ::
           entry()
-  def tool_result(call_id, name, text, is_error, image \\ nil) do
+  def tool_result(call_id, name, text, is_error, images \\ []) do
     images =
-      case image do
-        {mime, data} -> [%{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}]
-        nil -> []
-      end
+      for {mime, data} <- images,
+          do: %{"type" => "image", "data" => Base.encode64(data), "mimeType" => mime}
 
     %{
       "type" => "message",

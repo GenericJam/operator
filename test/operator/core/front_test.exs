@@ -390,8 +390,8 @@ defmodule Operator.Core.FrontTest do
       )
 
     assert {:ok,
-            {:image, "image/jpeg", <<0xFF, 0xD8, 0xFF>>, "Screenshot of the front, showing Home."}} =
-             Task.await(task)
+            {:images, [{"image/jpeg", <<0xFF, 0xD8, 0xFF>>}],
+             "Screenshot of the front, showing Home."}} = Task.await(task)
 
     failing = %{front_capture: fn _ -> {:error, "the screenshot failed: :no_window"} end}
     assert {:error, "the screenshot failed: :no_window"} = FrontScreenshot.run(%{}, failing)

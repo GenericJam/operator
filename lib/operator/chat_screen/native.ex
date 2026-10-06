@@ -21,7 +21,7 @@ defmodule Operator.ChatScreen.Native do
   @doc """
   Starts a phone action for a tool (`Operator.Core.Phone`); its result
   arrives as the plugin's message (`{:location, ...}`, `{:camera, ...}`,
-  `{:photos, ...}`). `:notify` schedules and has none.
+  `{:photos, ...}`, `{:files, ...}`). `:notify` schedules and has none.
   """
   @callback phone(Operator.Core.Phone.action(), map()) :: :ok | {:error, term()}
 
@@ -64,6 +64,17 @@ defmodule Operator.ChatScreen.Native do
       MobNotify.schedule(nil, id: a.id, title: a.title, body: a.body, delay_seconds: a.in_seconds)
 
   defp start_phone(:camera_photo, _args), do: MobCamera.capture_photo(nil, quality: :medium)
+
+  # Headless: the agent's own photo, scaled for the model (Claude's limit).
+  # A refusal up front arrives like the camera's own error.
+  defp start_phone(:camera_snap, a) do
+    case MobCamera.snap(facing: a.facing, flash: a.flash, max_size: 1568, quality: 80) do
+      :ok -> :ok
+      {:error, reason} -> send(self(), {:camera, :snap_error, reason})
+    end
+  end
+
+  defp start_phone(:pick_file, a), do: Mob.Files.pick(nil, types: a.types)
   defp start_phone(:pick_photos, a), do: MobPhotos.pick(nil, max: a.max, types: [:image, :video])
 
   @impl true

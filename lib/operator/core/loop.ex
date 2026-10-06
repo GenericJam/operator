@@ -716,11 +716,11 @@ defmodule Operator.Core.Loop do
     if timer, do: Process.cancel_timer(timer)
     call = s.run.batch.calls[i]
 
-    {text, is_error, image} =
+    {text, is_error, images} =
       case result do
-        {:ok, {:image, mime, data, text}} -> {text, false, {mime, data}}
-        {:ok, text} -> {text, false, nil}
-        {:error, text} -> {text, true, nil}
+        {:ok, {:images, images, text}} -> {text, false, images}
+        {:ok, text} -> {text, false, []}
+        {:error, text} -> {text, true, []}
       end
 
     # Over the output budget: head + tail for the model, the rest an artifact.
@@ -739,7 +739,7 @@ defmodule Operator.Core.Loop do
       &%{
         &1
         | running: Map.delete(&1.running, ref),
-          results: Map.put(&1.results, i, {text, is_error, image})
+          results: Map.put(&1.results, i, {text, is_error, images})
       }
     )
     |> then(&if(&1.run.stopping, do: &1, else: pump(&1)))
@@ -752,13 +752,13 @@ defmodule Operator.Core.Loop do
       Enum.reduce(0..(map_size(batch.calls) - 1), {s, []}, fn i, {acc, entries} ->
         call = batch.calls[i]
 
-        {text, is_error, image} =
+        {text, is_error, images} =
           case batch.results[i] do
-            {text, is_error} -> {text, is_error, nil}
-            {_text, _is_error, _image} = result -> result
+            {text, is_error} -> {text, is_error, []}
+            {_text, _is_error, _images} = result -> result
           end
 
-        tool_result = Session.tool_result(call["id"], call["name"], text, is_error, image)
+        tool_result = Session.tool_result(call["id"], call["name"], text, is_error, images)
         {acc, entry} = persist(acc, tool_result)
         emit(acc, %{type: :message_start, entry: entry})
         emit(acc, %{type: :message_end, entry: entry})

@@ -22,7 +22,17 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.Location,
     Operator.Core.Tools.Notify,
     Operator.Core.Tools.CameraPhoto,
+    Operator.Core.Tools.CameraSnap,
     Operator.Core.Tools.PickPhotos,
+    Operator.Core.Tools.PhotosRecent,
+    Operator.Core.Tools.Sensors,
+    # Files: the workspace, Android's shared storage, the document picker.
+    Operator.Core.Tools.FileList,
+    Operator.Core.Tools.FileRead,
+    Operator.Core.Tools.FileWrite,
+    Operator.Core.Tools.FileCopy,
+    Operator.Core.Tools.FileDelete,
+    Operator.Core.Tools.FilePick,
     # The agent's own Dyn layer; activating and reverting need the human.
     Operator.Core.Tools.DynFiles,
     Operator.Core.Tools.DynRead,

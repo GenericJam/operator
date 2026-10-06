@@ -19,8 +19,9 @@ defmodule Operator.Core.Dyn.Check do
       `defprotocol` / `defimpl`, macros (`defmacro`, `quote`, `unquote`) or
       `@on_load`;
     * no calls to, or references of: `:code`, `Code`, `Module`, `Port`,
-      `Node`, `Mob.Dist`, `MobDeliver` (the Core's own updates), `File`,
-      `Path` (v1: no file access at all),
+      `Node`, `Mob.Dist`, `MobDeliver` (the Core's own updates), `File`
+      (Dyn code's files go through `Operator.Core.Files`, inside its roots),
+      `Path.wildcard/2`,
       `:init`, `:file`, `:os.cmd`, `:erlang.halt` and the other code-loading
       and node-control functions listed in `@partial`, `System.halt/stop/cmd`,
       `Application.start/stop/put_env`, dynamic atoms (`String.to_atom`, ...);
@@ -32,12 +33,15 @@ defmodule Operator.Core.Dyn.Check do
       `:persistent_term` only to read (`put` / `erase` change VM-wide state
       and trigger a global GC);
     * Operator's own modules are off limits except `Operator.Core.Tool`
-      (the behaviour a Dyn tool implements), and so is the sign-in store's
-      NIF (`:operator_secure_store`); of Mob only the app-facing modules in
-      `@mob_allowed` (screens, UI, theming, device features), and of
-      `Mob.Screen` not the functions that start or drive screens outside the
-      front (`start_root/3`, ...); the capability plugins (`MobCamera`,
-      `MobLocation`, `MobMishka`, `MobThemes`, ...) are allowed;
+      (the behaviour a Dyn tool implements), `Operator.Core.Files` (file
+      access inside the workspace and, on Android, shared storage) and
+      `Operator.Core.Tflite` (TFLite on the phone's accelerator), and so
+      is the sign-in store's NIF (`:operator_secure_store`); of Mob only the
+      app-facing modules in `@mob_allowed` (screens, UI, theming, device
+      features), and of `Mob.Screen` not the functions that start or drive
+      screens outside the front (`start_root/3`, ...); the capability
+      plugins (`MobCamera`, `MobLocation`, `MobSensors`, `MobMishka`,
+      `MobThemes`, ...), `Nx` and `NxTfliteMob` are allowed;
     * `Process.exit/2` only on `self()`; `apply/3`, `spawn/3` and friends
       only with a module written out literally; no calls on a module held in
       a variable (`mod.fun()`); no `:"Elixir.Foo"` atoms; modules with
@@ -52,7 +56,7 @@ defmodule Operator.Core.Dyn.Check do
   @type violation :: %{file: String.t(), line: non_neg_integer() | nil, message: String.t()}
   @type target :: :dyn | :dynamic | {:elixir, String.t()} | {:erlang, atom()}
 
-  @operator_allowed ["Operator.Core.Tool"]
+  @operator_allowed ["Operator.Core.Tool", "Operator.Core.Files", "Operator.Core.Tflite"]
   # Core code the compiler injects into Dyn modules (see Compiler).
   @injected ["Operator.Core.Dyn.Keeper"]
 
@@ -79,8 +83,8 @@ defmodule Operator.Core.Dyn.Check do
     "Module" => "defines or changes modules at runtime",
     "Port" => "runs OS processes",
     "Node" => "controls distribution",
-    "File" => "touches the file system (Dyn code has no file access in v1)",
-    "Path" => "touches the file system (Dyn code has no file access in v1)",
+    "File" =>
+      "touches the file system directly (use Operator.Core.Files: the same calls, inside its roots)",
     "IEx" => "is the interactive shell",
     "Mix" => "is the build tool",
     "Mob.Dist" => "controls distribution",
@@ -128,6 +132,8 @@ defmodule Operator.Core.Dyn.Check do
     {:elixir, "List"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "Function"} => ~w(capture)a,
     {:elixir, "Process"} => [:list],
+    # Paths are plain strings; only the wildcard reads the file system.
+    {:elixir, "Path"} => [:wildcard],
     {:elixir, "Kernel"} => [],
     {:elixir, "Mob.Screen"} =>
       ~w(start_root start_link dispatch get_socket get_current_module get_nav_history
@@ -551,7 +557,9 @@ defmodule Operator.Core.Dyn.Check do
   defp classify({:elixir, "Operator." <> _ = name}) do
     if name in @operator_allowed,
       do: :ok,
-      else: {:banned, "is Operator's own code (Dyn code may only use Operator.Core.Tool)"}
+      else:
+        {:banned,
+         "is Operator's own code (Dyn code may only use Operator.Core.Tool, Operator.Core.Files and Operator.Core.Tflite)"}
   end
 
   defp classify({:elixir, "Mob." <> _ = name}) do

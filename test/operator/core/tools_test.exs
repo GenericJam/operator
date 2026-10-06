@@ -29,6 +29,7 @@ defmodule Operator.Core.ToolsTest do
     # sorted by name
     assert Enum.map(ToolRegistry.list(), & &1.name()) == [
              "camera_photo",
+             "camera_snap",
              "clipboard",
              "dyn_delete",
              "dyn_edit",
@@ -38,6 +39,12 @@ defmodule Operator.Core.ToolsTest do
              "dyn_reset",
              "dyn_status",
              "dyn_write",
+             "file_copy",
+             "file_delete",
+             "file_list",
+             "file_pick",
+             "file_read",
+             "file_write",
              "front_open",
              "front_screens",
              "front_screenshot",
@@ -45,10 +52,12 @@ defmodule Operator.Core.ToolsTest do
              "location",
              "notes",
              "notify",
+             "photos_recent",
              "pick_photos",
              "read_artifact",
              "read_doc",
-             "read_guide"
+             "read_guide",
+             "sensors"
            ]
 
     assert {:ok, Notes} = ToolRegistry.lookup("notes")
@@ -141,10 +150,11 @@ defmodule Operator.Core.ToolsTest do
     assert Clipboard.selftest() == :ok
   end
 
-  test "pick_photos: a picked item with only a path and type is described from its file",
+  test "pick_photos: the model sees each picked photo with its metadata; videos are listed",
        %{tmp_dir: dir} do
     path = Path.join(dir, "mob_pick_1.jpg")
     File.write!(path, "12345")
+    thumb = Path.join(dir, "thumb.jpg")
 
     host =
       spawn(fn ->
@@ -154,15 +164,40 @@ defmodule Operator.Core.ToolsTest do
               from,
               ref,
               {:ok,
-               [%{path: path, type: :image}, %{path: Path.join(dir, "gone.mov"), type: :video}]}
+               [%{path: path, type: :image}, %{path: Path.join(dir, "gone.mov"), type: "video"}]}
             )
         end
       end)
 
-    assert {:ok, text} = PickPhotos.run(%{"max" => 2}, %{phone_host: host})
+    thumbnail = fn ^path, opts ->
+      assert opts[:max_size] <= 1568
+      File.write!(thumb, "small")
+
+      {:ok,
+       %{
+         path: thumb,
+         width: 1568,
+         height: 1176,
+         orig_width: 4000,
+         orig_height: 3000,
+         taken_at: "2026-10-03T14:02:11-06:00",
+         latitude: 51.0447,
+         longitude: -114.0719,
+         make: "motorola",
+         model: "moto g"
+       }}
+    end
+
+    assert {:ok, {:images, [{"image/jpeg", "small"}], text}} =
+             PickPhotos.run(%{"max" => 2}, %{phone_host: host, thumbnail: thumbnail})
 
     assert text ==
-             "mob_pick_1.jpg · image · 5 bytes · #{path}\n" <>
-               "gone.mov · video · ? bytes · #{Path.join(dir, "gone.mov")}"
+             "Picked:\n" <>
+               "1. mob_pick_1.jpg · image · 5 B · #{path} · 4000×3000 · " <>
+               "taken 2026-10-03T14:02:11-06:00 · GPS 51.0447, -114.0719 · motorola moto g (shown)\n" <>
+               "2. gone.mov · video · #{Path.join(dir, "gone.mov")} (a video: not shown)"
+
+    # the scaled copy is read and removed
+    refute File.exists?(thumb)
   end
 end

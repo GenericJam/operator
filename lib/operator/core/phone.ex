@@ -1,10 +1,12 @@
 defmodule Operator.Core.Phone do
   @moduledoc """
-  Phone actions for tools (location, notifications, camera, photo picker).
-  The mob plugins behind them deliver their results, and their permission
-  dialogs, to the screen in front, so a tool can't call them itself: it
-  asks the host screen (the chat screen, which registers on mount) with
-  `request/3` and waits for the answer.
+  Phone actions for tools (location, notifications, the camera, the photo
+  and file pickers, permissions). The pickers and the system camera are
+  activities started from the screen in front, and the permission
+  dialogs answer the process that asked; the chat screen (registered on
+  mount) does both for tools: a tool asks it with `request/3` and waits
+  for the answer. `:permission` (`%{capability: atom}`) asks for one
+  permission, and answers `{:ok, :granted}` or an error the model can act on.
 
   Protocol: the tool's process sends the host
   `{:phone_request, ref, tool_pid, action, args}`; the host answers
@@ -13,7 +15,14 @@ defmodule Operator.Core.Phone do
 
   @key {__MODULE__, :host}
 
-  @type action :: :location | :notify | :camera_photo | :pick_photos
+  @type action ::
+          :location
+          | :notify
+          | :camera_photo
+          | :camera_snap
+          | :pick_photos
+          | :pick_file
+          | :permission
 
   @doc "Makes `pid` the screen that serves phone requests."
   @spec register_host(pid()) :: :ok

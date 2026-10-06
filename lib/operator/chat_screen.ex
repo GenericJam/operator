@@ -265,23 +265,11 @@ defmodule Operator.ChatScreen do
   def handle_info({:permission, :microphone, _denied}, socket),
     do: {:noreply, toast(socket, "No microphone access: allow it in Settings to dictate")}
 
+  # A tool's permission (Operator.Core.Phone): the actions waiting on it
+  # start, or hear that the user didn't allow it.
   def handle_info({:permission, capability, result}, socket)
-      when capability in [:location, :camera] do
-    action = if capability == :location, do: :location, else: :camera_photo
-
-    case socket.assigns.phone do
-      %{^action => {_ref, _from, args}} when result == :granted ->
-        :ok = Native.impl().phone(action, args)
-        {:noreply, socket}
-
-      %{^action => {ref, from, _args}} ->
-        Phone.reply(from, ref, {:error, "The user didn't allow #{capability} access."})
-        {:noreply, Mob.Socket.assign(socket, :phone, Map.delete(socket.assigns.phone, action))}
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
+      when capability in [:location, :camera, :media, :activity_recognition, :all_files],
+      do: {:noreply, permission_answered(socket, capability, result)}
 
   def handle_info({:permission, _capability, _result}, socket), do: {:noreply, socket}
 
@@ -302,7 +290,7 @@ defmodule Operator.ChatScreen do
         {:phone_request, ref, from, action, _args},
         %{assigns: %{foreground: false}} = socket
       )
-      when action in [:camera_photo, :pick_photos] do
+      when action in [:camera_photo, :camera_snap, :pick_photos, :pick_file] do
     Phone.reply(
       from,
       ref,
@@ -313,17 +301,19 @@ defmodule Operator.ChatScreen do
   end
 
   def handle_info({:phone_request, ref, from, action, args}, socket) do
+    key = phone_key(action, args)
+
     case socket.assigns.phone do
-      %{^action => {_ref, waiting, _args}} ->
+      %{^key => {_ref, waiting, _args}} ->
         if Process.alive?(waiting) do
           Phone.reply(from, ref, {:error, "Another #{action} request is still waiting."})
           {:noreply, socket}
         else
-          start_phone(socket, ref, from, action, args)
+          start_phone(socket, ref, from, key, args)
         end
 
       _ ->
-        start_phone(socket, ref, from, action, args)
+        start_phone(socket, ref, from, key, args)
     end
   end
 
@@ -339,11 +329,23 @@ defmodule Operator.ChatScreen do
   def handle_info({:camera, :cancelled}, socket),
     do: {:noreply, phone_done(socket, :camera_photo, {:ok, :cancelled})}
 
+  def handle_info({:camera, :snapped, %{} = photo}, socket),
+    do: {:noreply, phone_done(socket, :camera_snap, {:ok, photo})}
+
+  def handle_info({:camera, :snap_error, reason}, socket),
+    do: {:noreply, phone_done(socket, :camera_snap, {:error, snap_error(reason)})}
+
   def handle_info({:photos, :picked, items}, socket),
     do: {:noreply, phone_done(socket, :pick_photos, {:ok, items})}
 
   def handle_info({:photos, :cancelled}, socket),
     do: {:noreply, phone_done(socket, :pick_photos, {:ok, :cancelled})}
+
+  def handle_info({:files, :picked, items}, socket),
+    do: {:noreply, phone_done(socket, :pick_file, {:ok, items})}
+
+  def handle_info({:files, :cancelled}, socket),
+    do: {:noreply, phone_done(socket, :pick_file, {:ok, :cancelled})}
 
   # ── voice ──
 
@@ -963,9 +965,10 @@ defmodule Operator.ChatScreen do
   defp voice_hint(:important), do: "speaks when a run ends"
   defp voice_hint(:everything), do: "speaks every reply"
 
-  # Location and camera ask for their permission first (the answer starts
-  # the action, `{:permission, ...}` above); a notification is scheduled at
-  # once and answered with its id.
+  # Location and the camera ask for their permission first (the answer
+  # starts the action, `{:permission, ...}` above); `:permission` asks for
+  # one and answers with it; a notification is scheduled at once and
+  # answered with its id; the pickers open.
   defp start_phone(socket, ref, from, :notify, args) do
     id = "operator-#{System.unique_integer([:positive])}"
 
@@ -979,18 +982,77 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
-  defp start_phone(socket, ref, from, action, args) do
+  defp start_phone(socket, ref, from, key, args) do
     socket =
-      Mob.Socket.assign(socket, :phone, Map.put(socket.assigns.phone, action, {ref, from, args}))
+      Mob.Socket.assign(socket, :phone, Map.put(socket.assigns.phone, key, {ref, from, args}))
 
-    case action do
-      :location -> Native.impl().request_permission(:location)
-      :camera_photo -> Native.impl().request_permission(:camera)
-      :pick_photos -> Native.impl().phone(:pick_photos, args)
+    case key do
+      action when action in [:pick_photos, :pick_file] -> Native.impl().phone(action, args)
+      _ -> Native.impl().request_permission(needs(key))
     end
 
     {:noreply, socket}
   end
+
+  # Each tool request waits under its key; a `:permission` request under
+  # the capability it asks for, so two can wait at once.
+  defp phone_key(:permission, %{capability: capability}), do: {:permission, capability}
+  defp phone_key(action, _args), do: action
+
+  defp needs(:location), do: :location
+  defp needs(action) when action in [:camera_photo, :camera_snap], do: :camera
+  defp needs({:permission, capability}), do: capability
+  defp needs(_action), do: nil
+
+  defp permission_answered(socket, capability, result) do
+    socket.assigns.phone
+    |> Enum.filter(fn {key, _} -> needs(key) == capability end)
+    |> Enum.reduce(socket, fn
+      {{:permission, _} = key, _}, acc when result == :granted ->
+        phone_done(acc, key, {:ok, :granted})
+
+      {key, {_ref, _from, args}}, acc when result == :granted ->
+        :ok = Native.impl().phone(key, args)
+        acc
+
+      {key, _}, acc ->
+        phone_done(acc, key, {:error, denied(capability)})
+    end)
+  end
+
+  @doc false
+  # What the model hears when a permission isn't granted: the dialog may
+  # have been dismissed (or never seen), so it can ask the user and retry.
+  @spec denied(atom()) :: String.t()
+  def denied(:all_files),
+    do:
+      "All files access is off for Operator. Its Settings page was opened: ask the user to " <>
+        "switch on \"Allow access to manage all files\" for Operator, come back to the app, " <>
+        "then call the tool again."
+
+  def denied(capability) do
+    "The user didn't allow #{permission_name(capability)} (they refused, or the prompt was " <>
+      "dismissed or never seen). Ask them to tap Allow when it shows and call the tool again; " <>
+      "if no prompt appears, they need to allow it in Settings › Apps › Operator › Permissions."
+  end
+
+  defp permission_name(:camera), do: "camera access"
+  defp permission_name(:location), do: "location access"
+  defp permission_name(:media), do: "access to their photos"
+  defp permission_name(:activity_recognition), do: "physical activity (motion) access"
+  defp permission_name(other), do: "#{other} access"
+
+  defp snap_error(:no_camera), do: "This phone has no camera on that side (or it's a simulator)."
+  defp snap_error(:permission), do: denied(:camera)
+
+  defp snap_error(:busy),
+    do: "The camera is busy (another app or capture is using it); try again."
+
+  defp snap_error(:background),
+    do:
+      "Operator isn't on screen, and Android won't open the camera for it; ask the user to open it."
+
+  defp snap_error(reason), do: "The camera failed: #{inspect(reason)}"
 
   defp phone_done(socket, action, result) do
     case Map.pop(socket.assigns.phone, action) do

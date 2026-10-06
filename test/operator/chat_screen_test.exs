@@ -701,14 +701,17 @@ defmodule Operator.ChatScreenTest do
       view = render_info(view, {:location, fix})
       assert_received {:phone_reply, ^ref, {:ok, ^fix}}
 
-      # done: a new request is served again; a denial answers with an error
+      # done: a new request is served again; a denial tells the model what
+      # the user can do (the prompt may just have been dismissed)
       ref3 = make_ref()
 
       view
       |> render_info({:phone_request, ref3, self(), :location, %{}})
       |> render_info({:permission, :location, :denied})
 
-      assert_received {:phone_reply, ^ref3, {:error, "The user didn't allow location access."}}
+      assert_received {:phone_reply, ^ref3, {:error, text}}
+      assert text =~ "The user didn't allow location access"
+      assert text =~ "call the tool again"
     end
 
     test "notify is answered with its id at once; photos and camera relay the plugin", %{
@@ -752,6 +755,77 @@ defmodule Operator.ChatScreenTest do
 
       assert_received {:phone_reply, ^ref, {:error, "Operator isn't on screen" <> _}}
       refute_received {:requested_permission, :camera}
+    end
+
+    test "camera_snap: camera permission, then the snap; its errors reach the tool", %{
+      tmp_dir: dir
+    } do
+      %{view: view} = mount_chat(dir, [])
+      ref = make_ref()
+      args = %{facing: :back, flash: :off}
+
+      view = render_info(view, {:phone_request, ref, self(), :camera_snap, args})
+      assert_received {:requested_permission, :camera}
+      refute_received {:phone_call, :camera_snap, _}
+
+      view = render_info(view, {:permission, :camera, :granted})
+      assert_received {:phone_call, :camera_snap, ^args}
+
+      photo = %{path: "/tmp/s.jpg", width: 1568, height: 1176, facing: :back}
+      view = render_info(view, {:camera, :snapped, photo})
+      assert_received {:phone_reply, ^ref, {:ok, ^photo}}
+
+      ref = make_ref()
+
+      view
+      |> render_info({:phone_request, ref, self(), :camera_snap, args})
+      |> render_info({:permission, :camera, :granted})
+      |> render_info({:camera, :snap_error, :no_camera})
+
+      assert_received {:phone_reply, ^ref, {:error, "This phone has no camera" <> _}}
+    end
+
+    test "permission requests: one per capability at a time, answered granted or denied", %{
+      tmp_dir: dir
+    } do
+      %{view: view} = mount_chat(dir, [])
+      [r1, r2, r3] = [make_ref(), make_ref(), make_ref()]
+
+      view =
+        view
+        |> render_info({:phone_request, r1, self(), :permission, %{capability: :all_files}})
+        |> render_info({:phone_request, r2, self(), :permission, %{capability: :media}})
+        |> render_info({:phone_request, r3, self(), :permission, %{capability: :media}})
+
+      assert_received {:requested_permission, :all_files}
+      assert_received {:requested_permission, :media}
+      assert_received {:phone_reply, ^r3, {:error, "Another permission request" <> _}}
+
+      view = render_info(view, {:permission, :media, :granted})
+      assert_received {:phone_reply, ^r2, {:ok, :granted}}
+      refute_received {:phone_reply, ^r1, _}
+
+      render_info(view, {:permission, :all_files, :denied})
+      assert_received {:phone_reply, ^r1, {:error, "All files access is off" <> _}}
+    end
+
+    test "pick_file opens the document picker and relays what was picked", %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [])
+      ref = make_ref()
+
+      view = render_info(view, {:phone_request, ref, self(), :pick_file, %{types: [:any]}})
+      assert_received {:phone_call, :pick_file, %{types: [:any]}}
+      items = [%{path: "/tmp/a.pdf", name: "a.pdf", mime: "application/pdf", size: 3}]
+      view = render_info(view, {:files, :picked, items})
+      assert_received {:phone_reply, ^ref, {:ok, ^items}}
+
+      ref = make_ref()
+
+      view
+      |> render_info({:phone_request, ref, self(), :pick_file, %{types: [:any]}})
+      |> render_info({:files, :cancelled})
+
+      assert_received {:phone_reply, ^ref, {:ok, :cancelled}}
     end
   end
 

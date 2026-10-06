@@ -57,8 +57,8 @@ defmodule Operator.Core.Dyn.CheckTest do
       {"Mob.Dist.ensure_started([])", "Mob.Dist"},
       {"Node.connect(:x@y)", "Node"},
       {":init.stop()", ":init"},
-      {~s|File.read("/data")|, "File"},
-      {~s|Path.join("a", "b")|, "Path"},
+      {~s|File.read("/data")|, "Operator.Core.Files"},
+      {~s|Path.wildcard("/data/*")|, "Path.wildcard"},
       {"Process.exit(pid, :kill)", "exit/2 may only exit self()"},
       {"pid |> Process.exit(:kill)", "exit/2 may only exit self()"},
       {"apply(mod, :halt, [])", "module held in a variable"},
@@ -160,6 +160,46 @@ defmodule Operator.Core.Dyn.CheckTest do
     """
 
     assert {:ok, _} = Check.run(%{"probe.ex" => source})
+  end
+
+  test "front screens and tools get the sensors, files in the roots, Nx, TFLite and the GPU" do
+    source = """
+    defmodule Operator.Dyn.Probe do
+      use Mob.Screen
+
+      @glsl "#version 300 es\\nprecision highp float;\\nin vec2 v_uv;\\nout vec4 frag_color;\\nvoid main() { frag_color = vec4(v_uv, 0.5, 1.0); }"
+
+      def mount(_params, _session, socket) do
+        socket = Mob.Motion.start(socket, sensors: [:accelerometer, :magnetometer])
+        :ok = MobSensors.read(:pressure)
+        {:ok, Mob.Socket.assign(socket, :sum, Nx.tensor([1.0, 2.0]) |> Nx.sum() |> Nx.to_number())}
+      end
+
+      def render(assigns) do
+        ~MOB\"\"\"
+        <Column>
+          <GpuView id={:waves} width={200} height={200} shader={%{android: @glsl}} uniforms={[1.0]} />
+          <Text text={inspect(@sum)} />
+        </Column>
+        \"\"\"
+      end
+
+      def handle_info({:tap, :save}, socket) do
+        :ok = Operator.Core.Files.write(Path.join("notes", "today.txt"), "hi")
+        {:ok, model} = Operator.Core.Files.read("models/tiny.tflite")
+        {:ok, handle, _delegate} = Operator.Core.Tflite.load(model)
+        _ = NxTfliteMob.call(handle, [<<0::32>>])
+        {:noreply, Mob.Permissions.request(socket, :all_files)}
+      end
+
+      def handle_info(_message, socket), do: {:noreply, socket}
+    end
+    """
+
+    assert {:ok, _} = Check.run(%{"probe.ex" => source})
+
+    # the rest of Operator stays out of reach
+    assert violation(~s|Operator.Core.Session.open("x", nil)|) =~ "Operator's own code"
   end
 
   test "sees through aliases, imports, delegation and ~MOB templates" do

@@ -87,8 +87,8 @@ defmodule Operator.Core do
 
     ## This environment
 
-    - You run inside Operator, an Android app written in Elixir with mob: the phone's own \
-    BEAM, one scheduler, so long computations slow everything, the UI included.
+    - You run inside Operator, an app (Android and iOS) written in Elixir with mob: the \
+    phone's own BEAM, one scheduler, so long computations slow everything, the UI included.
     - No shell, Mix, Hex or package installs. You can't add dependencies, plugins, native \
     code or Android permissions: those need a native build on the user's Mac. Say so rather \
     than work around it. The internet is reachable (`http_get`; `Req` in your code).
@@ -99,13 +99,27 @@ defmodule Operator.Core do
     probation, reverting itself if it crashes.
     - The app has a front (the screens you build with the user) and a back (this terminal); \
     the logo in the upper left corner toggles between them.
-    - Phone tools: `location`, `camera_photo`, `pick_photos`, `clipboard`, `notify`, \
-    `http_get`, `notes` (the user's notes file). Permissions are asked at first use, by your \
-    tools or a screen; the user may refuse. A long tool output is cut; `read_artifact` reads \
-    the rest.
-    - Data stays in the app's private directory (sessions, notes, settings, Dyn generations). \
-    Dyn code has no file access: a screen keeps state in its assigns and small values in \
-    `Mob.State`.
+    - Phone tools: `camera_snap` (you take a photo yourself, no one touches the phone, and \
+    see it), `camera_photo` (the user takes it), `photos_recent` (look at the newest photos), \
+    `pick_photos` (the user picks; you see them, with when and where they were taken), \
+    `sensors` (motion, compass, barometer, light, proximity, steps, battery, every sensor the \
+    phone has), `location`, `clipboard`, `notify`, `http_get`, `notes` (the user's notes \
+    file). Permissions are asked at first use, by your tools or a screen; the user may \
+    refuse, or miss the prompt: say what to allow and try again. A long tool output is cut; \
+    `read_artifact` reads the rest.
+    - Files: `file_list`, `file_read` (text, or a picture you see), `file_write`, \
+    `file_copy`, `file_delete`, `file_pick` (the user picks a document from any app). They \
+    work in your workspace and, on Android, the phone's shared storage (Download, DCIM, \
+    Documents, ...: the user switches on All files access the first time); `file_list` with \
+    no path shows the places. To hand the user a file: copy it to Download on Android; on \
+    iOS the workspace is in the Files app (On My iPhone › Operator). Sessions, settings and \
+    Dyn generations stay private.
+    - Dyn code has files too, through `Operator.Core.Files` (same places); sensors \
+    (`Mob.Motion` for accelerometer, gyro and compass heading; `MobSensors` for the rest); \
+    tensors (`Nx`, on the Eigen CPU backend); models on the GPU/NPU (`Operator.Core.Tflite`: \
+    NNAPI on Android, Core ML on iOS, a bundled MobileNet); and the GPU itself (`<GpuView>`: \
+    a fragment shader, GLSL ES 3.0 on Android, Metal on iOS, \
+    `shader: %{android: glsl, ios: msl}`). Small state goes in `Mob.State`.
 
     """ <>
       Dyn.agent_guide() <>
