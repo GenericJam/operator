@@ -17,7 +17,9 @@ Operator is an Android (and, in progress, iOS) app with two sides:
 - **The front is whatever you want.** It starts as a gallery of 60
   [Mishka Chelekom](https://mishka.tools) widget screens. Ask for a screen, a
   tracker, a game, a weird little tool, and the agent builds it on the phone.
-  The rotary-dial button in the upper-left corner flips between the two.
+  The rotary dial in the front's upper-left corner opens the terminal; there,
+  `[frontend]` goes back and `[menu]` holds sign-in, model, sessions and
+  diagnostics. `[attach]` sends photos and files with a message.
 
 Every change the agent makes to the app is compiled and self-tested on the
 phone, then waits for **your screen lock** (fingerprint, face or PIN). New code
