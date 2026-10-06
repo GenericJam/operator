@@ -210,8 +210,9 @@ defmodule Operator.Core.Library.Pages do
     """
     ## The component library
 
-    The front's library (menu › components) has a worked page per widget below. `dyn_read` \
-    its file before you use a widget; `dyn_copy` it to start a screen from it.
+    The front's library (menu › components) has a worked page per widget below. A line \
+    shows the widget's tag and key props; `dyn_read` its file for the events it sends and \
+    its helpers, `dyn_copy` it to start a screen from it.
     """ <> components_section(components, shape) <> phone_section(phone)
   end
 
