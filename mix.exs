@@ -25,7 +25,7 @@ defmodule Operator.MixProject do
   defp deps do
     [
       {:mob, "~> 0.9.12"},
-      {:mob_dev, "~> 0.7.15", only: :dev, runtime: false},
+      {:mob_dev, "~> 0.7.16", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,
       # tool calling) and req_llm (provider clients; Anthropic, OpenAI Codex).
