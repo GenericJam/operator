@@ -98,6 +98,15 @@ defmodule Operator.Core.Dyn.CheckTest do
       {":operator_secure_store.get(\"anthropic\")", "sign-ins"},
       {"Operator.Core.Settings.put_daily_cap(100)", "Operator's own code"},
       {"Operator.Auth.status()", "Operator's own code"},
+      # Files' file-tool side takes a caller's roots: a forged ctx escapes them.
+      {~s|Operator.Core.Files.workspace(%{data_dir: "/data"})|,
+       "Operator.Core.Files.workspace/1, which Dyn code may not"},
+      {~s|Operator.Core.Files.resolve("x", :write, ctx)|,
+       "Operator.Core.Files.resolve/3, which Dyn code may not"},
+      {"Operator.Core.Files.roots(ctx)", "Operator.Core.Files.roots/1, which Dyn code may not"},
+      {~s|Operator.Core.Files.real_path("/data")|, "Operator.Core.Files.real_path/1"},
+      {"&Operator.Core.Files.resolve/3", "Operator.Core.Files.resolve/3"},
+      {"f = Operator.Core.Files", "as a value"},
       # operator:// links are the terminal's (sign-ins, handoffs, updates).
       {"Mob.Link.register(self())", "app-facing"},
       # A wake handler runs later, unchecked: it's checked as a call now.

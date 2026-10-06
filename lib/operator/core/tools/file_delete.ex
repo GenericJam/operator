@@ -1,5 +1,10 @@
 defmodule Operator.Core.Tools.FileDelete do
-  @moduledoc "Core tool: delete a file, or a directory with everything in it."
+  @moduledoc """
+  Core tool: delete a file or an empty directory; a whole directory tree
+  only inside the workspace. In shared storage (the user's photos and
+  downloads) a recursive delete is refused, so text the agent read can't
+  steer it into wiping DCIM in one call.
+  """
   @behaviour Operator.Core.Tool
 
   alias Operator.Core.Files
@@ -11,7 +16,8 @@ defmodule Operator.Core.Tools.FileDelete do
   @impl true
   def description,
     do:
-      "Delete a file, or a directory and everything in it (only with `recursive`: true). " <>
+      "Delete a file or an empty directory. A directory with everything in it (`recursive`: " <>
+        "true) only inside your workspace; in shared storage delete the files one at a time. " <>
         "There is no undo: say what you're deleting first if the user didn't name it."
 
   @impl true
@@ -34,20 +40,38 @@ defmodule Operator.Core.Tools.FileDelete do
         target == Files.real_path(root.path) ->
           {:error, "#{target} is the #{root.name} root itself; delete what's inside instead."}
 
-        File.dir?(target) and args["recursive"] != true ->
+        not File.dir?(target) ->
+          delete_file(target)
+
+        args["recursive"] != true ->
+          delete_dir(target)
+
+        root.name != "workspace" ->
           {:error,
-           "#{target} is a directory: pass recursive: true to delete it and its contents."}
+           "#{target} is a directory in #{root.name}, and a whole directory is deleted only " <>
+             "inside the workspace: delete its files one at a time (then the empty directory)."}
 
         true ->
-          delete(target)
+          delete_tree(target)
       end
     end
   end
 
   def run(_args, _ctx), do: {:error, "file_delete needs a path."}
 
-  defp delete(target) do
-    if File.dir?(target), do: delete_tree(target), else: delete_file(target)
+  defp delete_dir(target) do
+    case File.rmdir(target) do
+      :ok ->
+        {:ok, "Deleted #{target}."}
+
+      {:error, reason} when reason in [:eexist, :enotempty] ->
+        {:error,
+         "#{target} is a directory with things in it: pass recursive: true to delete it and " <>
+           "its contents (workspace only)."}
+
+      {:error, reason} ->
+        {:error, FileTool.posix(reason, target)}
+    end
   end
 
   defp delete_tree(target) do

@@ -144,7 +144,11 @@ defmodule Operator.Core.Dyn.Check do
          list_to_existing_atom suspend_process resume_process trace trace_pattern
          trace_delivered trace_info system_monitor system_profile processes)a,
     {:erlang, :os} => ~w(cmd putenv unsetenv set_signal)a,
-    {:erlang, :persistent_term} => ~w(put erase)a
+    {:erlang, :persistent_term} => ~w(put erase)a,
+    # The file tools' side: these take a caller's roots (a forged ctx would
+    # put the workspace, and its mkdir, anywhere); Dyn code gets the calls
+    # that check against the real roots.
+    {:elixir, "Operator.Core.Files"} => ~w(roots workspace resolve needs_access? real_path)a
   }
 
   # `{module, function, arity}` taking a module + function as data (index 0, 1).
@@ -556,7 +560,7 @@ defmodule Operator.Core.Dyn.Check do
 
   defp classify({:elixir, "Operator." <> _ = name}) do
     if name in @operator_allowed,
-      do: :ok,
+      do: Map.get(@partial, {:elixir, name}) |> partial(),
       else:
         {:banned,
          "is Operator's own code (Dyn code may only use Operator.Core.Tool, Operator.Core.Files and Operator.Core.Tflite)"}
@@ -565,7 +569,7 @@ defmodule Operator.Core.Dyn.Check do
   defp classify({:elixir, "Mob." <> _ = name}) do
     cond do
       why = banned_elixir(name) -> {:banned, why}
-      name in @mob_allowed -> Map.get(@partial, {:elixir, name}) |> mob_partial()
+      name in @mob_allowed -> Map.get(@partial, {:elixir, name}) |> partial()
       name in @mob_themes -> :ok
       true -> {:banned, "is not one of Mob's app-facing modules"}
     end
@@ -587,8 +591,8 @@ defmodule Operator.Core.Dyn.Check do
     end
   end
 
-  defp mob_partial(nil), do: :ok
-  defp mob_partial(banned), do: {:partial, banned}
+  defp partial(nil), do: :ok
+  defp partial(banned), do: {:partial, banned}
 
   defp banned_elixir(name) do
     Enum.find_value(@banned_elixir, fn {banned, why} ->
@@ -752,9 +756,9 @@ defmodule Operator.Core.Dyn.Check do
 
   defp beam_call({:elixir, name}, fun) do
     cond do
+      fun in Map.get(@partial, {:elixir, name}, []) -> "Dyn code may not call"
       String.starts_with?(name, "Operator.") -> nil
       why = banned_elixir(name) -> why
-      fun in Map.get(@partial, {:elixir, name}, []) -> "Dyn code may not call"
       true -> nil
     end
   end

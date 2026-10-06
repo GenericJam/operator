@@ -1,8 +1,8 @@
 defmodule Operator.Core.Tools.FileCopy do
   @moduledoc """
   Core tool: copy or move a file or directory between the places files may
-  be used: how the agent hands a file out (to Download on Android; on iOS
-  the workspace itself is in the Files app) or brings one in.
+  be used: how the agent hands a file out (to Download on Android) or
+  brings one in.
   """
   @behaviour Operator.Core.Tool
 
@@ -15,10 +15,9 @@ defmodule Operator.Core.Tools.FileCopy do
   @impl true
   def description,
     do:
-      "Copy (or with `move`: move) a file or directory. To give the user a file: on Android " <>
+      "Copy (or with `move`: move) a file or directory. To give the user a file on Android, " <>
         "copy it to the shared storage's Download (or Documents, Pictures) where their apps " <>
-        "find it; on iOS your workspace is already in the Files app (On My iPhone › Operator). " <>
-        "Won't overwrite unless `overwrite` is true."
+        "find it. Won't overwrite unless `overwrite` is true."
 
   @impl true
   def parameter_schema do
@@ -83,18 +82,10 @@ defmodule Operator.Core.Tools.FileCopy do
 
   defp transfer(src, dest, true) do
     case File.rename(src, dest) do
-      :ok ->
-        :ok
-
+      :ok -> :ok
       # Across file systems (the app's own storage and shared storage).
-      {:error, :exdev} ->
-        with :ok <- transfer(src, dest, false) do
-          {:ok, _} = File.rm_rf(src)
-          :ok
-        end
-
-      {:error, reason} ->
-        {:error, FileTool.posix(reason, src)}
+      {:error, :exdev} -> move_across(src, dest)
+      {:error, reason} -> {:error, FileTool.posix(reason, src)}
     end
   end
 
@@ -102,6 +93,26 @@ defmodule Operator.Core.Tools.FileCopy do
     case File.cp_r(src, dest) do
       {:ok, _} -> :ok
       {:error, reason, path} -> {:error, FileTool.posix(reason, path)}
+    end
+  end
+
+  @doc false
+  # A move as a copy, then removing the source. The copy is whole either
+  # way; when part of the source can't be removed the model hears so (a
+  # retry would only find the copy already there).
+  @spec move_across(Path.t(), Path.t()) :: :ok | {:error, String.t()}
+  def move_across(src, dest) do
+    with :ok <- transfer(src, dest, false) do
+      case File.rm_rf(src) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason, at} ->
+          {:error,
+           "Copied #{src} to #{dest}, but the source was only partly removed " <>
+             "(#{FileTool.posix(reason, at)}): the copy is complete; what's left of #{src} " <>
+             "is still there."}
+      end
     end
   end
 end

@@ -4,14 +4,11 @@ defmodule Operator.Core.Files do
   tools) may read and write: a few roots, and nothing outside them.
 
     * `workspace`: `<data dir>/workspace`, Operator's own, always there.
-      On iOS the data dir is the app's Documents, which the Files app shows
-      (`UIFileSharingEnabled`), so the workspace is in Files under
-      On My iPhone › Operator › workspace.
     * `shared` (Android): the phone's shared storage, `/storage/emulated/0`
       (Download, DCIM, Documents, Pictures, ...). It needs "All files
       access" (MANAGE_EXTERNAL_STORAGE), which the user switches on in
-      Settings the first time it's needed (`needs_access?/1`; a screen asks
-      with `Mob.Permissions.request(socket, :all_files)`).
+      Settings the first time it's needed (a screen asks with
+      `Mob.Permissions.request(socket, :all_files)`).
 
   The rest of the data dir (sessions, Dyn generations, settings) is not a
   root: Dyn code can't read the store it's kept in. A relative path is
@@ -19,8 +16,10 @@ defmodule Operator.Core.Files do
   check, so neither leads out of a root.
 
   Dyn code may not call `File` itself; `read/1`, `write/2`, `ls/1`,
-  `stat/1`, `mkdir_p/1` and `rm/1` here are its file access, the same
-  calls checked against the roots.
+  `stat/1`, `mkdir_p/1`, `rm/1` and `expand/1` here are its file access,
+  the same calls checked against the roots. The file tools' side
+  (`roots/1`, `workspace/1`, `resolve/3`, ...) takes a caller's ctx and
+  is off limits to Dyn code (`Operator.Core.Dyn.Check`).
 
   `ctx[:file_roots]` replaces the roots (tests); otherwise the workspace is
   under `ctx[:data_dir]` or `Operator.Paths.data_dir/0`.
@@ -37,7 +36,7 @@ defmodule Operator.Core.Files do
 
   @shared "/storage/emulated/0"
 
-  @doc "The roots on this phone."
+  @doc false
   @spec roots(map()) :: [root()]
   def roots(ctx \\ %{}) do
     Map.get_lazy(ctx, :file_roots, fn -> default_roots(ctx) end)
@@ -57,13 +56,9 @@ defmodule Operator.Core.Files do
   end
 
   defp workspace_about do
-    case Term.platform() do
-      :ios ->
-        "Operator's own files; the Files app shows them (On My iPhone › Operator › workspace)"
-
-      _ ->
-        "Operator's own files (private to the app; copy to shared storage to hand one out)"
-    end
+    if Term.platform() == :android,
+      do: "Operator's own files (private to the app; copy to shared storage to hand one out)",
+      else: "Operator's own files (private to the app)"
   end
 
   defp shared_root do
@@ -83,7 +78,8 @@ defmodule Operator.Core.Files do
     end
   end
 
-  @doc "The workspace dir (created)."
+  @doc false
+  # The workspace dir (created).
   @spec workspace(map()) :: Path.t()
   def workspace(ctx \\ %{}) do
     %{path: path} = Enum.find(roots(ctx), &(&1.name == "workspace"))
@@ -91,10 +87,9 @@ defmodule Operator.Core.Files do
     path
   end
 
-  @doc """
-  The absolute path for `path` and the root it's in, if `mode` (`:read` or
-  `:write`) is allowed there.
-  """
+  @doc false
+  # The absolute path for `path` and the root it's in, if `mode` (`:read`
+  # or `:write`) is allowed there.
   @spec resolve(String.t(), :read | :write, map()) ::
           {:ok, Path.t(), root()} | {:error, String.t()}
   def resolve(path, mode, ctx \\ %{})
@@ -121,7 +116,8 @@ defmodule Operator.Core.Files do
 
   def resolve(_path, _mode, _ctx), do: {:error, "No path given."}
 
-  @doc "Whether using `root` needs the user's All files access (Android's shared storage)."
+  @doc false
+  # Whether using `root` needs the user's All files access (Android's shared storage).
   @spec needs_access?(root()) :: boolean()
   def needs_access?(%{name: "shared"}), do: true
   def needs_access?(_root), do: false

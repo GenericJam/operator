@@ -2012,8 +2012,17 @@ object MobBridge {
         allFilesWaiting.add(pid)
         if (allFilesWaiting.size > 1) return  // the page is already open
         val activity = activityRef?.get()?.takeUnless { it.isFinishing || it.isDestroyed }
-        val opened = activity != null && try {
-            allFilesLeftApp = false
+        val state = (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.currentState
+            ?: androidx.lifecycle.Lifecycle.State.DESTROYED
+        // Stopped means Operator is in the background (the agent runs on under
+        // keep-alive): Android blocks the page there without an error, so answer
+        // now. Paused but started is Operator still on screen under a dialog.
+        if (activity == null || !state.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            answerAllFiles()
+            return
+        }
+        allFilesLeftApp = false
+        val opened = try {
             activity.startActivity(android.content.Intent(
                 android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                 Uri.parse("package:${activity.packageName}")))
@@ -2027,10 +2036,11 @@ object MobBridge {
                 false
             }
         }
-        // The next onResume is the return from the page. Set here as well as in
-        // onActivityPaused: Operator may already be paused (another permission
-        // dialog over it) when the page opens, and then no new onPause comes.
-        if (opened) allFilesLeftApp = true else answerAllFiles()
+        // Resumed: the page's onPause marks that Operator left. Already paused
+        // (another permission dialog over it): no new onPause comes, so the next
+        // onResume is the return from the page.
+        if (!opened) answerAllFiles()
+        else if (!state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) allFilesLeftApp = true
     }
 
     private fun answerAllFiles() {
@@ -2082,7 +2092,7 @@ object MobBridge {
                         ?.replace(Regex("[/\\\\\\u0000]"), "_")
                         ?.takeUnless { it.isBlank() || it == "." || it == ".." }
                         ?: "file_$i"
-                    val tmp = File(activity.cacheDir, "mob_file_${System.currentTimeMillis()}_$name")
+                    val tmp = File(activity.cacheDir, "mob_file_${System.currentTimeMillis()}_${i}_$name")
                     activity.contentResolver.openInputStream(uri)?.use { it.copyTo(tmp.outputStream()) }
                     val size = tmp.length()
                     val mime = activity.contentResolver.getType(uri) ?: "application/octet-stream"

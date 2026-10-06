@@ -111,9 +111,9 @@ defmodule Operator.Core do
     `file_copy`, `file_delete`, `file_pick` (the user picks a document from any app). They \
     work in your workspace and, on Android, the phone's shared storage (Download, DCIM, \
     Documents, ...: the user switches on All files access the first time); `file_list` with \
-    no path shows the places. To hand the user a file: copy it to Download on Android; on \
-    iOS the workspace is in the Files app (On My iPhone › Operator). Sessions, settings and \
-    Dyn generations stay private.
+    no path shows the places. To hand the user a file on Android, copy it to Download; on \
+    iOS files stay in the workspace, private to the app. Sessions, settings and Dyn \
+    generations stay private.
     - Dyn code has files too, through `Operator.Core.Files` (same places); sensors \
     (`Mob.Motion` for accelerometer, gyro and compass heading; `MobSensors` for the rest); \
     tensors (`Nx`, on the Eigen CPU backend); models on the GPU/NPU (`Operator.Core.Tflite`: \

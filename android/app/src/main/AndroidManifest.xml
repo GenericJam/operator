@@ -42,7 +42,11 @@
     <!-- Shared storage for the agent's file tools (Operator.Core.Files):
          "All files access", switched on in Settings at first use (Android
          11+; personal use, never for a store build); the plain storage pair
-         below Android 11. -->
+         below Android 11, with requestLegacyExternalStorage on the
+         application element so Android 10 gives direct paths instead of
+         scoped storage. (Don't write the tag's name in angle brackets in a
+         comment above it: mob_dev puts its managed permission block before
+         the first one it finds.) -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
@@ -120,6 +124,7 @@
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:networkSecurityConfig="@xml/network_security_config"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/AppTheme">
 
         <!-- Main activity. singleTask: an operator:// link opened from another

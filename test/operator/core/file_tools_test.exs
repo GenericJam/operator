@@ -159,7 +159,11 @@ defmodule Operator.Core.FileToolsTest do
              FileCopy.run(%{"from" => download, "to" => Path.join(download, "inner")}, ctx)
   end
 
-  test "delete: files, directories only when recursive, never a root", %{ctx: ctx, workspace: ws} do
+  test "delete: files, empty directories, whole trees only in the workspace, never a root", %{
+    ctx: ctx,
+    workspace: ws,
+    shared: shared
+  } do
     File.mkdir_p!(Path.join(ws, "d/e"))
     File.write!(Path.join(ws, "d/e/f.txt"), "x")
 
@@ -171,8 +175,42 @@ defmodule Operator.Core.FileToolsTest do
 
     assert {:error, msg} = FileDelete.run(%{"path" => ws, "recursive" => true}, ctx)
     assert msg =~ "#{ws} is the workspace root itself"
-
     assert File.dir?(ws)
+
+    # shared storage (the user's photos): no tree at once, a file at a time
+    camera = Path.join(shared, "DCIM/Camera")
+    File.mkdir_p!(camera)
+    File.write!(Path.join(camera, "a.jpg"), "jpg")
+    dcim = Path.join(shared, "DCIM")
+
+    for path <- [dcim, camera] do
+      assert {:error, msg} = FileDelete.run(%{"path" => path, "recursive" => true}, ctx)
+      assert msg =~ "deleted only inside the workspace"
+    end
+
+    assert File.read!(Path.join(camera, "a.jpg")) == "jpg"
+    assert {:ok, _} = FileDelete.run(%{"path" => Path.join(camera, "a.jpg")}, ctx)
+    assert {:ok, _} = FileDelete.run(%{"path" => camera}, ctx)
+    refute File.exists?(camera)
+    assert File.dir?(dcim)
+  end
+
+  test "a move across file systems that can't remove the whole source says what's left", %{
+    workspace: ws
+  } do
+    [src, dest] = [Path.join(ws, "src"), Path.join(ws, "dest")]
+    File.mkdir_p!(Path.join(src, "locked"))
+    File.write!(Path.join(src, "locked/a.txt"), "a")
+    File.chmod!(Path.join(src, "locked"), 0o500)
+
+    on_exit(fn ->
+      for d <- [src, dest], do: File.chmod(Path.join(d, "locked"), 0o700)
+    end)
+
+    assert {:error, msg} = FileCopy.move_across(src, dest)
+    assert msg =~ "Copied #{src} to #{dest}"
+    assert msg =~ "only partly removed"
+    assert File.read!(Path.join(dest, "locked/a.txt")) == "a"
   end
 
   test "file_pick copies picked files into the inbox without clobbering", %{
