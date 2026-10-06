@@ -1,7 +1,8 @@
 defmodule Operator.Dyn.Showcase.GalleryScreen do
   @moduledoc """
-  The gallery index, Operator's default front: every component grouped by
-  category (`Operator.Dyn.Showcase`). Tapping one opens its screen.
+  The component library's index (`Operator.Dyn.Showcase`): every entry
+  grouped by category; tapping one opens its page. Reached from the
+  welcome screen and from the terminal's `[menu]` › components.
   """
   use Mob.Screen
 
@@ -19,8 +20,14 @@ defmodule Operator.Dyn.Showcase.GalleryScreen do
       [
         Kit.top_bar(ThemeBar.bar()),
         Kit.gap(16),
-        Kit.page_header("🧩  Components", "#{count} component#{if count == 1, do: "", else: "s"}")
-      ] ++ Enum.flat_map(groups, &category_block/1) ++ [Kit.gap(24)]
+        Kit.page_header(
+          "🧩  Component library",
+          "#{count} entr#{if count == 1, do: "y", else: "ies"}: open one to try it, " <>
+            "then \"use this\" to hand it to the agent"
+        )
+      ] ++
+        Enum.flat_map(groups, &category_block/1) ++
+        [Kit.gap(16), Kit.back_button(), Kit.gap(24)]
 
     %{
       type: :scroll,
@@ -39,6 +46,7 @@ defmodule Operator.Dyn.Showcase.GalleryScreen do
   end
 
   def handle_info({:tap, {:set_theme, key}}, socket), do: {:noreply, ThemeBar.set(key, socket)}
+  def handle_info({:tap, :back}, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
 
   def handle_info({:tap, {:open, slug}}, socket) do
     case Showcase.get(slug) do

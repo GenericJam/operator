@@ -136,6 +136,35 @@ defmodule Operator.Dyn.Showcase.Kit do
     }
   end
 
+  @doc """
+  "Use this": hands the library entry `slug` to the agent, as a draft in
+  the terminal's composer (`{:tap, {:use_this, slug}}`, handled by
+  `Operator.Dyn.Showcase.use_this/1`).
+  """
+  def use_this_button(slug) do
+    %{
+      type: :button,
+      props: %{
+        text: "Use this →",
+        background: :primary,
+        text_color: :on_primary,
+        text_size: :lg,
+        padding: :space_sm,
+        on_tap: {self(), {:use_this, slug}}
+      },
+      children: []
+    }
+  end
+
+  @doc "The foot of a library page: back, and use this."
+  def page_actions(slug) do
+    %{
+      type: :row,
+      props: %{fill_width: true},
+      children: [back_button(), %{type: :spacer, props: %{weight: 1}, children: []}, use_this_button(slug)]
+    }
+  end
+
   @doc "A section heading (larger than `section_label`) with an optional subtitle."
   def section_header(title, subtitle \\ nil) do
     header = %{

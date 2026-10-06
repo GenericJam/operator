@@ -2,13 +2,14 @@ defmodule Operator.Dyn.Showcase.Page do
   @moduledoc """
   The page every component screen draws (the generated app's
   `ComponentScreen`, one function per screen here): the theme bar, a header,
-  each example (title, description, live preview, code), the props table
-  and a back button, with the component's overlay (a drawer's panel, a
-  dialog) over the whole page. `handle_info/4` routes the screen's events to
-  its `handle/2` (taps, submits, focus) and `handle_change/3` (values,
-  drags).
+  "use this" (`Operator.Dyn.Showcase.use_this/1`: the component goes to the
+  agent), each example (title, description, live preview, code), the props
+  table, back, with the component's overlay (a drawer's panel, a dialog)
+  over the whole page. `handle_info/4` routes the screen's events to its
+  `handle/2` (taps, submits, focus) and `handle_change/3` (values, drags).
   """
 
+  alias Operator.Dyn.Showcase
   alias Operator.Dyn.Showcase.Kit
   alias Operator.Dyn.ThemeBar
 
@@ -25,6 +26,8 @@ defmodule Operator.Dyn.Showcase.Page do
               Kit.top_bar(ThemeBar.bar()),
               Kit.gap(16),
               Kit.page_header(entry.name, Map.get(entry, :description)),
+              Kit.gap(12),
+              Kit.use_this_button(entry.slug),
               Kit.gap(20)
             ] ++
               Enum.flat_map(examples, fn ex ->
@@ -34,7 +37,7 @@ defmodule Operator.Dyn.Showcase.Page do
                 ]
               end) ++
               props_section(props) ++
-              [Kit.gap(8), Kit.back_button()]
+              [Kit.gap(8), Kit.page_actions(entry.slug)]
         }
       ]
     }
@@ -55,6 +58,11 @@ defmodule Operator.Dyn.Showcase.Page do
     do: ThemeBar.set(key, socket)
 
   def handle_info({:tap, :back}, socket, _handle, _change), do: Mob.Socket.pop_screen(socket)
+
+  def handle_info({:tap, {:use_this, slug}}, socket, _handle, _change) do
+    _ = Showcase.use_this(slug)
+    socket
+  end
   def handle_info({:tap, tag}, socket, handle, _change), do: handle.(tag, socket)
   # A submit (return key) carries no payload: routed like a tap.
   def handle_info({:submit, tag}, socket, handle, _change), do: handle.(tag, socket)

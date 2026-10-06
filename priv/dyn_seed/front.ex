@@ -6,6 +6,6 @@ defmodule Operator.Dyn.Front do
   or `{:text, "☎"}`, a short glyph).
   """
 
-  def start, do: Operator.Dyn.Showcase.GalleryScreen
+  def start, do: Operator.Dyn.WelcomeScreen
   def toggle, do: :dial
 end

@@ -16,6 +16,7 @@ defmodule Operator.ShellScreen do
   use Mob.Screen
 
   alias Operator.Core.Front
+  alias Operator.Core.Phone
   alias Operator.Toggle
 
   @zero %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
@@ -39,6 +40,15 @@ defmodule Operator.ShellScreen do
   def handle_info({:tap, :operator_toggle}, socket) do
     :ok = Front.hide()
     {:noreply, Mob.Socket.pop_screen(socket)}
+  end
+
+  # The front screen asked for the terminal (Operator.Core.Terminal), with a
+  # draft for the composer: the chat (Phone's host) gets it, unsent.
+  def handle_info({:operator_front_terminal, draft}, socket) do
+    :ok = Front.hide()
+    chat = Phone.host()
+    if chat && draft != "", do: send(chat, {:operator_draft, draft})
+    {:noreply, Mob.Socket.pop_to(socket, Operator.ChatScreen)}
   end
 
   # An operator:// link scanned while the front shows: the chat handles it.

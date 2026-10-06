@@ -80,10 +80,10 @@ defmodule Operator.Core.Dyn.SeedTest do
     assert Seed.start() == :ignore
     assert Dyn.seed(Seed.sources(), Seed.rationale()) == {:error, :seeded}
 
-    # The front switches to the default front's start screen, the gallery.
+    # The front switches to the default front's start screen, the welcome.
     assert_receive {:operator_front, %{view: {:tree, tree}}}, 5_000
-    assert Mob.ScreenCase.text(tree) =~ "60 components"
-    assert %{stack: ["Showcase.GalleryScreen"], view: :running} = Front.status()
+    assert Mob.ScreenCase.text(tree) =~ "Component library"
+    assert %{stack: ["WelcomeScreen"], view: :running} = Front.status()
     assert Front.toggle() == :dial
   end
 

@@ -8,7 +8,11 @@ defmodule Operator.MenuScreen do
     * `:main`: every setting at a glance, each line opening its page or
       acting at once: the provider sign-ins, the model, a new session,
       resuming a past one, the renderer (`md:native` / `md:term`,
-      `Operator.Core.Term.put_renderer/1`) and `Operator.DiagnosticsScreen`.
+      `Operator.Core.Term.put_renderer/1`), the component library and
+      `Operator.DiagnosticsScreen`. The library is a front screen
+      (`Operator.Dyn.Showcase.GalleryScreen`, from the Dyn seed): the menu
+      opens it in the front, over the front's own screens
+      (`Operator.Core.Front.open/3` with `push: true`).
     * `:accounts`: per provider, sign in in the browser (`Operator.Auth.Login`,
       with a field for the `code#state` Anthropic's page shows when it doesn't
       redirect back) or sign out (`Operator.Auth.delete/1`, after a confirm),
@@ -29,6 +33,8 @@ defmodule Operator.MenuScreen do
 
   alias Operator.Auth
   alias Operator.Auth.Login
+  alias Operator.Core.Dyn.Seed
+  alias Operator.Core.Front
   alias Operator.Core.Loop
   alias Operator.Core.Models
   alias Operator.Core.Session
@@ -38,6 +44,7 @@ defmodule Operator.MenuScreen do
 
   @pages [:main, :accounts, :model, :sessions]
   @max_sessions 50
+  @library "Showcase.GalleryScreen"
 
   def mount(params, _session, socket) do
     page = Map.get(params, :page, :main)
@@ -108,6 +115,15 @@ defmodule Operator.MenuScreen do
     Term.put_renderer(if Term.renderer() == :native, do: :term, else: :native)
     send(socket.assigns.chat, {:operator_menu, :renderer})
     {:noreply, socket}
+  end
+
+  # The component library is a front screen (the terminal never runs Dyn
+  # code), so it opens in the front, over the front's own screens.
+  def handle_info({:tap, :components}, socket) do
+    case Front.open(@library, push: true) do
+      {:ok, _} -> {:noreply, Toggle.to_front(socket)}
+      {:error, _} -> {:noreply, note(socket, library_missing())}
+    end
   end
 
   # ── model ──
@@ -228,6 +244,14 @@ defmodule Operator.MenuScreen do
 
   defp note(socket, text), do: Mob.Socket.assign(socket, :note, text)
 
+  defp library_missing do
+    if Seed.running?(),
+      do: "The front is still being prepared (about half a minute); try again shortly.",
+      else:
+        "The current front has no component library (#{@library}). Diagnostics › Rescue " <>
+          "can go back to the default front's generation, or ask the agent to restore it."
+  end
+
   defp paste_error(:no_login_started),
     do: "Tap sign in first, then paste the code its page shows."
 
@@ -265,6 +289,7 @@ defmodule Operator.MenuScreen do
           UI.heading("display", t),
           UI.item("renderer: md:#{renderer}", "tap for md:#{other}", :toggle_renderer, t),
           UI.line(renderer_hint(renderer), t, "dim", text_size: t.text_size - 1),
+          UI.item("components", "the component library, in the front", :components, t),
           UI.heading("diagnostics", t),
           UI.item("diagnostics", "updates, spend, dyn", :diagnostics, t)
         ]

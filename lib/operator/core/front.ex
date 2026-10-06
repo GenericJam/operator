@@ -85,11 +85,25 @@ defmodule Operator.Core.Front do
 
   @doc """
   Switches the front to the screen `name`: a name `screens/1` lists, the
-  full module name, or a unique last part of one (`"Slider"`).
+  full module name, or a unique last part of one (`"Slider"`). With
+  `push: true` it goes on top of the screens open now (back returns to
+  them), as the terminal's `[menu]` › components opens the library;
+  otherwise it replaces them.
   """
-  @spec open(String.t(), GenServer.server()) ::
+  @spec open(String.t(), keyword(), GenServer.server()) ::
           {:ok, String.t()} | {:error, :unknown_screen | {:ambiguous, [String.t()]}}
-  def open(name, server \\ __MODULE__), do: GenServer.call(server, {:open, name}, 10_000)
+  def open(name, opts \\ [], server \\ __MODULE__),
+    do: GenServer.call(server, {:open, name, Keyword.get(opts, :push, false)}, 10_000)
+
+  @doc """
+  The front screen on display (`host`, the caller) asks for the terminal,
+  with `draft` for the composer (`Operator.Core.Terminal`): every
+  subscriber gets `{:operator_front_terminal, draft}`. Refused from any
+  other process, or while the front isn't showing.
+  """
+  @spec to_terminal(pid(), String.t(), GenServer.server()) :: :ok | {:error, :not_in_front}
+  def to_terminal(host, draft, server \\ __MODULE__),
+    do: GenServer.call(server, {:to_terminal, host, draft}, 10_000)
 
   @doc "The current generation's front screens, by name."
   @spec screens(GenServer.server()) :: [String.t()]
@@ -218,18 +232,28 @@ defmodule Operator.Core.Front do
 
   def handle_call(:hide, _from, s), do: {:reply, :ok, hide_front(s)}
 
-  def handle_call({:open, name}, _from, s) do
+  def handle_call({:open, name, push?}, _from, s) do
     s = sync(s)
 
     case resolve(name, s.screens) do
       {:ok, found} ->
-        s = %{s | stack: [found]} |> save_stack() |> restart_host()
+        stack = if push?, do: [found | List.delete(open_stack(s), found)], else: [found]
+        s = %{s | stack: stack} |> save_stack() |> restart_host()
         {:reply, {:ok, found}, s}
 
       error ->
         {:reply, error, s}
     end
   end
+
+  def handle_call({:to_terminal, host, draft}, _from, %{host: host, visible: true} = s)
+      when is_pid(host) do
+    for pid <- Map.keys(s.subs), do: send(pid, {:operator_front_terminal, draft})
+    {:reply, :ok, s}
+  end
+
+  def handle_call({:to_terminal, _pid, _draft}, _from, s),
+    do: {:reply, {:error, :not_in_front}, s}
 
   def handle_call(:screens, _from, s) do
     s = sync(s)
@@ -321,6 +345,14 @@ defmodule Operator.Core.Front do
         # Blank until the new host's first view: not the last one's error or
         # tree (whose taps went to a process that's gone).
         broadcast(%{s | host: pid, mon: mon, view: {:note, ""}})
+    end
+  end
+
+  # The names open now: the saved ones that still exist, else the start screen.
+  defp open_stack(s) do
+    case Enum.filter(s.stack, &Map.has_key?(s.screens, &1)) do
+      [] -> if s.start, do: [s.start], else: []
+      names -> names
     end
   end
 

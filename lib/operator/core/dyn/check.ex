@@ -34,8 +34,10 @@ defmodule Operator.Core.Dyn.Check do
       and trigger a global GC);
     * Operator's own modules are off limits except `Operator.Core.Tool`
       (the behaviour a Dyn tool implements), `Operator.Core.Files` (file
-      access inside the workspace and, on Android, shared storage) and
-      `Operator.Core.Tflite` (TFLite on the phone's accelerator), and so
+      access inside the workspace and, on Android, shared storage),
+      `Operator.Core.Tflite` (TFLite on the phone's accelerator) and
+      `Operator.Core.Terminal` (the front screen on display shows the
+      terminal, with an unsent draft), and so
       is the sign-in store's NIF (`:operator_secure_store`); of Mob only the
       app-facing modules in `@mob_allowed` (screens, UI, theming, device
       features), and of `Mob.Screen` not the functions that start or drive
@@ -56,7 +58,12 @@ defmodule Operator.Core.Dyn.Check do
   @type violation :: %{file: String.t(), line: non_neg_integer() | nil, message: String.t()}
   @type target :: :dyn | :dynamic | {:elixir, String.t()} | {:erlang, atom()}
 
-  @operator_allowed ["Operator.Core.Tool", "Operator.Core.Files", "Operator.Core.Tflite"]
+  @operator_allowed [
+    "Operator.Core.Tool",
+    "Operator.Core.Files",
+    "Operator.Core.Tflite",
+    "Operator.Core.Terminal"
+  ]
   # Core code the compiler injects into Dyn modules (see Compiler).
   @injected ["Operator.Core.Dyn.Keeper"]
 
