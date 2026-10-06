@@ -259,6 +259,68 @@ defmodule Operator.Core.FrontTest do
     assert text(overlay) == "☎"
   end
 
+  @asker """
+  defmodule Operator.Dyn.Asker do
+    use Mob.Screen
+
+    def mount(_params, _session, socket), do: {:ok, Mob.Socket.assign(socket, :said, "asker")}
+    def render(assigns), do: %{type: :text, props: %{text: assigns.said}, children: []}
+
+    def handle_info({:tap, :ask}, socket) do
+      result = Operator.Core.Terminal.draft("Use the Slider component in ")
+      {:noreply, Mob.Socket.assign(socket, :said, "asked \#{inspect(result)}")}
+    end
+
+    def handle_info(_message, socket), do: {:noreply, socket}
+  end
+  """
+
+  test "the front screen on display may open the terminal with a draft; nothing else may",
+       %{settings: settings} do
+    activate!(files(%{"asker.ex" => @asker}))
+    start_front(settings)
+    _ = Front.subscribe()
+    {:ok, _} = Front.open("Asker")
+    # This process stands in for the chat (Operator.Core.Phone's host).
+    :ok = Operator.Core.Phone.register_host(self())
+
+    view = mount_screen(Operator.ShellScreen)
+    asker = await_view("asker")
+    view = render_info(view, {:operator_front, asker})
+    # Not from another process, like a Dyn tool or this test.
+    assert Operator.Core.Terminal.draft("x") == {:error, :not_in_front}
+
+    _ = render_info(view, {:tap, :ask})
+    await_view("asked :ok")
+    assert_receive {:operator_front_terminal, "Use the Slider component in " = draft}
+
+    view = render_info(view, {:operator_front_terminal, draft})
+    assert navigated_to(view) == Operator.ChatScreen
+    assert_receive {:operator_draft, ^draft}
+    refute Front.status().visible
+
+    # The front no longer shows: the same screen is refused.
+    send(asker.host, {:tap, :ask})
+    await_view("asked {:error, :not_in_front}")
+  end
+
+  test "open with push goes over the open screens, without repeating one",
+       %{settings: settings} do
+    activate!(files())
+    start_front(settings)
+    _ = Front.subscribe()
+    _ = Front.show(@env)
+    await_view("home 0")
+
+    assert {:ok, "Second"} = Front.open("Second", push: true)
+    await_view("second 0")
+    assert %{stack: ["Second", "Home"]} = Front.status()
+
+    assert {:ok, "Home"} = Front.open("Home", push: true)
+    assert %{stack: ["Home", "Second"]} = Front.status()
+    assert Settings.front_stack(settings) == ["Home", "Second"]
+  end
+
   test "the open screens are reopened at the next launch; gone ones fall back to the start",
        %{settings: settings} do
     activate!(files())

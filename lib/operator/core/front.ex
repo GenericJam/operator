@@ -302,10 +302,15 @@ defmodule Operator.Core.Front do
     end
   end
 
-  # The default front was just installed: it opens on its start screen (the
-  # gallery), whatever showed before.
-  def handle_info({:operator_dyn, %{type: :activated, seed: true}}, s),
-    do: {:noreply, %{s | stack: []} |> save_stack() |> sync() |> restart_if_running()}
+  # The seed was just installed or updated: when that changed the start
+  # screen (a first install, or a seed with a new default), the front opens
+  # on it, whatever showed before; otherwise it stays where it was.
+  def handle_info({:operator_dyn, %{type: :activated, seed: true}}, s) do
+    old = s.start
+    s = sync(s)
+    s = if s.start != old, do: save_stack(%{s | stack: []}), else: s
+    {:noreply, restart_if_running(s)}
+  end
 
   def handle_info({:operator_dyn, %{type: type}}, s)
       when type in [:activated, :reverted, :safe_mode],
@@ -385,8 +390,8 @@ defmodule Operator.Core.Front do
           "for the new version on the phone (about half a minute). The terminal works meanwhile."
 
       Seed.running?() ->
-        "Preparing the default front (the widget gallery). The first launch compiles it " <>
-          "on the phone, which takes about half a minute."
+        "Preparing the default front (the welcome screen and the component library). " <>
+          "It compiles on the phone, which takes about half a minute."
 
       not_loaded?(s) ->
         "Generation #{s.gen} didn't load this launch, so there's no front. Diagnostics says " <>

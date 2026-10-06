@@ -102,6 +102,29 @@ defmodule Operator.MenuScreenTest do
       assert_receive {:operator_auth, :changed} = changed
       assert view |> render_info(changed) |> text() =~ "c@example.com"
     end
+
+    test "components opens the library in the front, over its screens", %{tmp_dir: dir} do
+      Operator.Test.Dyn.purge_all()
+      on_exit(&Operator.Test.Dyn.purge_all/0)
+      Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn"))
+      Operator.Test.Dyn.activate!(%{"home.ex" => Operator.Test.Dyn.screen("Home", "home")})
+      settings = Path.join(dir, "settings")
+      File.mkdir_p!(settings)
+      start_supervised!({Operator.Core.Front, dir: settings})
+      %{view: view} = mount_menu(dir, :main)
+      assert text(view) =~ "components"
+
+      # Not in this front: the menu says so and stays.
+      view = render_info(view, {:tap, :components})
+      assert nav(view) == nil
+      assert text(view) =~ "no component library"
+
+      library = Operator.Test.Dyn.screen("Showcase.GalleryScreen", "library")
+      Operator.Test.Dyn.activate!(Map.put(Operator.Core.Dyn.staged(), "lib.ex", library))
+
+      assert view |> render_info({:tap, :components}) |> navigated_to() == Operator.ShellScreen
+      assert %{stack: ["Showcase.GalleryScreen", "Home"]} = Operator.Core.Front.status()
+    end
   end
 
   describe "accounts" do
