@@ -88,9 +88,16 @@ defmodule Operator.Core.LLM.ReqLLM do
 
   defp http_failure(_reason, meta), do: {meta[:status], meta[:headers] || [], nil}
 
-  # Usage bookkeeping never fails or slows a call beyond a small file write.
+  # Usage bookkeeping runs beside the call (it may wait on the store's lock)
+  # and never fails it; the screens hear of it from `Usage.subscribe/0`.
   defp record(model, call) do
-    Usage.record(Operator.Paths.data_dir(), model, call)
+    dir = Operator.Paths.data_dir()
+    {:ok, _} = Task.start(fn -> record(dir, model, call) end)
+    :ok
+  end
+
+  defp record(dir, model, call) do
+    Usage.record(dir, model, call)
   rescue
     e -> Logger.warning("[usage] couldn't record a model call: #{Exception.message(e)}")
   end
