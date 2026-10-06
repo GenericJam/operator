@@ -294,7 +294,10 @@ defmodule Operator.MenuScreenTest do
       assert_receive {:DOWN, ^ref, :process, _, :killed}
 
       view = render_info(view, {:tap, {:pick_model, "anthropic:claude-sonnet-4-5"}})
-      assert text(view) =~ "That session isn't running any more"
+
+      assert text(view) =~
+               "That session isn't running any more: start a new session or resume one."
+
       assert nav(view) == nil
     end
   end

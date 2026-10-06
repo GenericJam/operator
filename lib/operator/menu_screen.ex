@@ -223,7 +223,7 @@ defmodule Operator.MenuScreen do
     end
   catch
     :exit, _ ->
-      note(socket, "That session isn't running any more: go back and open the menu again.")
+      note(socket, "That session isn't running any more: start a new session or resume one.")
   end
 
   defp note(socket, text), do: Mob.Socket.assign(socket, :note, text)

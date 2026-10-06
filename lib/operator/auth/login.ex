@@ -135,10 +135,13 @@ defmodule Operator.Auth.Login do
     end
   end
 
-  def handle_call({:pending, _notify}, _from, %{flow: nil} = s), do: {:reply, nil, s}
-
-  def handle_call({:pending, notify}, _from, %{flow: flow} = s),
-    do: {:reply, flow.provider, %{s | flow: %{flow | notify: notify}}}
+  # The flow waiting for the browser, and an exchange already running, both
+  # report to the new page.
+  def handle_call({:pending, notify}, _from, s) do
+    flow = s.flow && %{s.flow | notify: notify}
+    worker = with {pid, ref, f} <- s.worker, do: {pid, ref, %{f | notify: notify}}
+    {:reply, flow && flow.provider, %{s | flow: flow, worker: worker}}
+  end
 
   def handle_call({:paste, _provider, _input}, _from, %{flow: nil} = s),
     do: {:reply, {:error, :no_login_started}, s}
