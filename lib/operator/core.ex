@@ -22,6 +22,7 @@ defmodule Operator.Core do
   alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
   alias Operator.Core.Front
+  alias Operator.Core.Library
 
   @default_model "anthropic:claude-haiku-4-5"
 
@@ -138,7 +139,9 @@ defmodule Operator.Core do
       DynTheme.agent_guide() <>
       "\n" <>
       Docs.agent_guide() <>
-      "\n" <> Front.agent_guide() <> "\n" <> Docs.guide_index()
+      "\n" <>
+      Front.agent_guide() <>
+      "\n" <> Library.catalogue() <> "\n" <> Docs.guide_index()
   end
 end
 

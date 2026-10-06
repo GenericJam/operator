@@ -169,12 +169,14 @@ defmodule Operator.Core.Front do
     `front_open` switches the front to a screen (when asked, or when a screen has no way to \
     it), `front_screenshot` shows you the front: look at it after a change is active.
 
-    The default front is the widget gallery: `Operator.Dyn.Showcase.GalleryScreen` lists most \
-    Mishka widgets, each with its own screen `Operator.Dyn.Showcase.Components.<Name>` \
-    (`showcase/components/<name>.ex`, named in the `mishka` guide; also `showcase/page.ex`, \
-    `showcase/kit.ex`, `theme_bar.ex`): worked examples, `dyn_read` one before you use its widget. \
-    `Operator.Dyn.Front.start/0` is the screen the front opens on. Reverting to the seed's \
-    generation (Diagnostics → Rescue) restores the defaults.
+    `Operator.Dyn.Front.start/0` is the screen the front opens on: by default \
+    `Operator.Dyn.WelcomeScreen`, which links to the terminal and to the component library \
+    (`Operator.Dyn.Showcase.GalleryScreen`, listed below). A front screen may call \
+    `Operator.Core.Terminal.open()` to show the terminal, or `Operator.Core.Terminal.draft(text)` \
+    to show it with `text` added to the composer, unsent (only from the screen on display): \
+    that is how the welcome screen links to you, and how a library page's "use this" hands \
+    you its widget. To build from a library page, `dyn_copy` it rather than writing it out \
+    again. Reverting to the seed's generation (Diagnostics → Rescue) restores the defaults.
 
     A front screen is a Dyn screen (Building with mob, above) with these differences: \
     `push_screen`, `pop_screen` and `reset_to` go between front screens only, and Android's \
