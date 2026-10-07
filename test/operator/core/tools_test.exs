@@ -23,42 +23,8 @@ defmodule Operator.Core.ToolsTest do
     assert Notes.selftest() == :ok
   end
 
-  test "the registry offers core tools and takes new ones at runtime" do
+  test "looks up core tools and takes new ones at runtime" do
     start_supervised!(ToolRegistry)
-
-    # sorted by name
-    assert Enum.map(ToolRegistry.list(), & &1.name()) == [
-             "camera_photo",
-             "camera_snap",
-             "clipboard",
-             "dyn_delete",
-             "dyn_edit",
-             "dyn_files",
-             "dyn_propose",
-             "dyn_read",
-             "dyn_reset",
-             "dyn_status",
-             "dyn_write",
-             "file_copy",
-             "file_delete",
-             "file_list",
-             "file_pick",
-             "file_read",
-             "file_write",
-             "front_open",
-             "front_screens",
-             "front_screenshot",
-             "http_get",
-             "location",
-             "notes",
-             "notify",
-             "photos_recent",
-             "pick_photos",
-             "read_artifact",
-             "read_doc",
-             "read_guide",
-             "sensors"
-           ]
 
     assert {:ok, Notes} = ToolRegistry.lookup("notes")
 

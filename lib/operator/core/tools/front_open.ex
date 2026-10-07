@@ -38,7 +38,7 @@ defmodule Operator.Core.Tools.FrontOpen do
 
   @impl true
   def run(%{"screen" => screen}, ctx) when is_binary(screen) do
-    case Front.open(screen, Map.get(ctx, :front, Front)) do
+    case Front.open(screen, [], Map.get(ctx, :front, Front)) do
       {:ok, name} ->
         {:ok,
          "The front shows #{name} now; the user sees it when they switch to the front " <>

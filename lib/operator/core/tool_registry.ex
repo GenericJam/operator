@@ -38,6 +38,7 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.DynRead,
     Operator.Core.Tools.DynWrite,
     Operator.Core.Tools.DynEdit,
+    Operator.Core.Tools.DynCopy,
     Operator.Core.Tools.DynDelete,
     Operator.Core.Tools.DynReset,
     Operator.Core.Tools.DynPropose,

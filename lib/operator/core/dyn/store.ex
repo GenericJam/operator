@@ -15,7 +15,11 @@ defmodule Operator.Core.Dyn.Store do
                                the last one that reached stable) and `stable`
       log.jsonl                crash, revert and safe-mode reports
       seed                     the generation the seed (the default front,
-                               `Operator.Core.Dyn.Seed`) was installed as
+                               `Operator.Core.Dyn.Seed`) was last installed as
+      seed.json                what that install was built from: each seed
+                               file's sha256 as shipped (`files`), and the
+                               digest of a newer seed that was rejected
+                               (`rejected`), so it isn't retried every launch
 
   Everything that decides what runs (`current`, manifests, `boot.json`) is
   written to a temp file and renamed over the old one, so a crash mid-write
@@ -63,6 +67,39 @@ defmodule Operator.Core.Dyn.Store do
   @spec put_seed(Path.t(), pos_integer()) :: :ok | {:error, term()}
   def put_seed(root, n) when is_integer(n) and n > 0,
     do: write_atomic(Path.join(root, "seed"), Integer.to_string(n))
+
+  @doc """
+  The seed's record (`seed.json`): `files`, each seed file's sha256 as it
+  shipped in the install's seed (nil when an older app installed it and
+  didn't record them), and `rejected`, the digest of a seed whose install
+  failed its check, compile or selftests.
+  """
+  @spec seed_files(Path.t()) :: %{
+          files: %{String.t() => String.t()} | nil,
+          rejected: String.t() | nil
+        }
+  def seed_files(root) do
+    with {:ok, json} <- File.read(Path.join(root, "seed.json")),
+         {:ok, %{} = map} <- Jason.decode(json) do
+      files = map["files"]
+      rejected = map["rejected"]
+
+      %{
+        files: if(is_map(files), do: files),
+        rejected: if(is_binary(rejected), do: rejected)
+      }
+    else
+      _ -> %{files: nil, rejected: nil}
+    end
+  end
+
+  @spec put_seed_files(Path.t(), %{String.t() => String.t()} | nil, String.t() | nil) ::
+          :ok | {:error, term()}
+  def put_seed_files(root, files, rejected) do
+    File.mkdir_p!(root)
+    json = Jason.encode!(%{files: files, rejected: rejected})
+    write_atomic(Path.join(root, "seed.json"), json)
+  end
 
   # ── generations ──
 

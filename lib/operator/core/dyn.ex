@@ -151,21 +151,25 @@ defmodule Operator.Core.Dyn do
   end
 
   @doc """
-  Installs the seed (`Operator.Core.Dyn.Seed`, the default front) once per
-  install: `sources` over the current generation's (whose files win on a
-  shared path) are checked, compiled and selftested like a proposal, then
-  made current and proven by `Operator.Core.Dyn.Keeper.install_seed/3`
-  with no approval, because the seed ships with the Core. Waits (an error,
-  retried next launch) in safe mode or while a proposal is pending.
+  Installs the seed (`Operator.Core.Dyn.Seed`, the default front) or a
+  newer one: `merge` gets the current generation's sources and returns the
+  full source set to install (`Operator.Core.Dyn.Seed.merge/3` keeps the
+  user's edits). It is checked, compiled and selftested like a proposal,
+  then made current and proven by `Operator.Core.Dyn.Keeper.install_seed/3`
+  with no approval, because the seed ships with the Core and the merge
+  only replaces seed files nobody changed. Waits (an error, retried next
+  launch) in safe mode or while a proposal is pending; `{:error,
+  :no_changes}` when the merge changes nothing.
   """
-  @spec seed(%{String.t() => String.t()}, String.t(), atom()) ::
+  @spec seed((%{String.t() => String.t()} -> %{String.t() => String.t()}), String.t(), atom()) ::
           {:ok, pos_integer()}
-          | {:error, :seeded | :safe_mode | :proposal_pending | :not_running | rejection()}
-  def seed(sources, rationale, keeper \\ @keeper) do
+          | {:error, :no_changes | :safe_mode | :proposal_pending | :not_running | rejection()}
+  def seed(merge, rationale, keeper \\ @keeper) when is_function(merge, 1) do
     with {:ok, config} <- Registry.config(keeper),
          status = status(keeper),
-         :ok <- seedable(config.dir, status) do
+         :ok <- seedable(status) do
       base = Store.sources(config.dir, status.generation)
+      staged = merge.(base)
       info = %{parent: status.generation, rationale: rationale, finish: &install(keeper, &1, &2)}
       # In the background, nobody waiting: as long as a rebuild may take.
       config = %{
@@ -173,14 +177,14 @@ defmodule Operator.Core.Dyn do
         | build: Keyword.put(config.build, :compile_timeout_ms, config.rebuild_timeout_ms)
       }
 
-      with {:ok, proposal} <- check(config, info, base, Map.merge(sources, base)),
+      with :ok <- if(staged == base, do: {:error, :no_changes}, else: :ok),
+           {:ok, proposal} <- check(config, info, base, staged),
            do: {:ok, proposal.n}
     end
   end
 
-  defp seedable(dir, status) do
+  defp seedable(status) do
     cond do
-      Store.seed(dir) -> {:error, :seeded}
       status.mode != :normal -> {:error, :safe_mode}
       status.pending -> {:error, :proposal_pending}
       true -> :ok

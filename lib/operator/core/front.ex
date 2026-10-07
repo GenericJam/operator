@@ -85,11 +85,25 @@ defmodule Operator.Core.Front do
 
   @doc """
   Switches the front to the screen `name`: a name `screens/1` lists, the
-  full module name, or a unique last part of one (`"Slider"`).
+  full module name, or a unique last part of one (`"Slider"`). With
+  `push: true` it goes on top of the screens open now (back returns to
+  them), as the terminal's `[menu]` › components opens the library;
+  otherwise it replaces them.
   """
-  @spec open(String.t(), GenServer.server()) ::
+  @spec open(String.t(), keyword(), GenServer.server()) ::
           {:ok, String.t()} | {:error, :unknown_screen | {:ambiguous, [String.t()]}}
-  def open(name, server \\ __MODULE__), do: GenServer.call(server, {:open, name}, 10_000)
+  def open(name, opts \\ [], server \\ __MODULE__),
+    do: GenServer.call(server, {:open, name, Keyword.get(opts, :push, false)}, 10_000)
+
+  @doc """
+  The front screen on display (`host`, the caller) asks for the terminal,
+  with `draft` for the composer (`Operator.Core.Terminal`): every
+  subscriber gets `{:operator_front_terminal, draft}`. Refused from any
+  other process, or while the front isn't showing.
+  """
+  @spec to_terminal(pid(), String.t(), GenServer.server()) :: :ok | {:error, :not_in_front}
+  def to_terminal(host, draft, server \\ __MODULE__),
+    do: GenServer.call(server, {:to_terminal, host, draft}, 10_000)
 
   @doc "The current generation's front screens, by name."
   @spec screens(GenServer.server()) :: [String.t()]
@@ -155,12 +169,14 @@ defmodule Operator.Core.Front do
     `front_open` switches the front to a screen (when asked, or when a screen has no way to \
     it), `front_screenshot` shows you the front: look at it after a change is active.
 
-    The default front is the widget gallery: `Operator.Dyn.Showcase.GalleryScreen` lists most \
-    Mishka widgets, each with its own screen `Operator.Dyn.Showcase.Components.<Name>` \
-    (`showcase/components/<name>.ex`, named in the `mishka` guide; also `showcase/page.ex`, \
-    `showcase/kit.ex`, `theme_bar.ex`): worked examples, `dyn_read` one before you use its widget. \
-    `Operator.Dyn.Front.start/0` is the screen the front opens on. Reverting to the seed's \
-    generation (Diagnostics → Rescue) restores the defaults.
+    `Operator.Dyn.Front.start/0` is the screen the front opens on: by default \
+    `Operator.Dyn.WelcomeScreen`, which links to the terminal and to the component library \
+    (`Operator.Dyn.Showcase.GalleryScreen`, listed below). A front screen may call \
+    `Operator.Core.Terminal.open()` to show the terminal, or `Operator.Core.Terminal.draft(text)` \
+    to show it with `text` added to the composer, unsent (only from the screen on display): \
+    that is how the welcome screen links to you, and how a library page's "use this" hands \
+    you its widget. To build from a library page, `dyn_copy` it rather than writing it out \
+    again. Reverting to the seed's generation (Diagnostics → Rescue) restores the defaults.
 
     A front screen is a Dyn screen (Building with mob, above) with these differences: \
     `push_screen`, `pop_screen` and `reset_to` go between front screens only, and Android's \
@@ -218,18 +234,28 @@ defmodule Operator.Core.Front do
 
   def handle_call(:hide, _from, s), do: {:reply, :ok, hide_front(s)}
 
-  def handle_call({:open, name}, _from, s) do
+  def handle_call({:open, name, push?}, _from, s) do
     s = sync(s)
 
     case resolve(name, s.screens) do
       {:ok, found} ->
-        s = %{s | stack: [found]} |> save_stack() |> restart_host()
+        stack = if push?, do: [found | List.delete(open_stack(s), found)], else: [found]
+        s = %{s | stack: stack} |> save_stack() |> restart_host()
         {:reply, {:ok, found}, s}
 
       error ->
         {:reply, error, s}
     end
   end
+
+  def handle_call({:to_terminal, host, draft}, _from, %{host: host, visible: true} = s)
+      when is_pid(host) do
+    for pid <- Map.keys(s.subs), do: send(pid, {:operator_front_terminal, draft})
+    {:reply, :ok, s}
+  end
+
+  def handle_call({:to_terminal, _pid, _draft}, _from, s),
+    do: {:reply, {:error, :not_in_front}, s}
 
   def handle_call(:screens, _from, s) do
     s = sync(s)
@@ -278,10 +304,15 @@ defmodule Operator.Core.Front do
     end
   end
 
-  # The default front was just installed: it opens on its start screen (the
-  # gallery), whatever showed before.
-  def handle_info({:operator_dyn, %{type: :activated, seed: true}}, s),
-    do: {:noreply, %{s | stack: []} |> save_stack() |> sync() |> restart_if_running()}
+  # The seed was just installed or updated: when that changed the start
+  # screen (a first install, or a seed with a new default), the front opens
+  # on it, whatever showed before; otherwise it stays where it was.
+  def handle_info({:operator_dyn, %{type: :activated, seed: true}}, s) do
+    old = s.start
+    s = sync(s)
+    s = if s.start != old, do: save_stack(%{s | stack: []}), else: s
+    {:noreply, restart_if_running(s)}
+  end
 
   def handle_info({:operator_dyn, %{type: type}}, s)
       when type in [:activated, :reverted, :safe_mode],
@@ -324,6 +355,14 @@ defmodule Operator.Core.Front do
     end
   end
 
+  # The names open now: the saved ones that still exist, else the start screen.
+  defp open_stack(s) do
+    case Enum.filter(s.stack, &Map.has_key?(s.screens, &1)) do
+      [] -> if s.start, do: [s.start], else: []
+      names -> names
+    end
+  end
+
   # The saved names that still exist, else the start screen.
   defp stack_modules(s) do
     case for(name <- s.stack, {:ok, mod} <- [Map.fetch(s.screens, name)], do: {mod, %{}}) do
@@ -353,8 +392,8 @@ defmodule Operator.Core.Front do
           "for the new version on the phone (about half a minute). The terminal works meanwhile."
 
       Seed.running?() ->
-        "Preparing the default front (the widget gallery). The first launch compiles it " <>
-          "on the phone, which takes about half a minute."
+        "Preparing the default front (the welcome screen and the component library). " <>
+          "It compiles on the phone, which takes about half a minute."
 
       not_loaded?(s) ->
         "Generation #{s.gen} didn't load this launch, so there's no front. Diagnostics says " <>

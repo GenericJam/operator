@@ -14,12 +14,16 @@ Operator is an Android (and, in progress, iOS) app with two sides:
   going. It signs in to your own Claude Pro/Max or ChatGPT subscription on
   the phone, takes photos, reads your location, looks things up, and writes
   Elixir. Hold the mic to talk: speech is transcribed on the phone, offline.
-- **The front is whatever you want.** It starts as a gallery of 60
-  [Mishka Chelekom](https://mishka.tools) widget screens. Ask for a screen, a
-  tracker, a game, a weird little tool, and the agent builds it on the phone.
-  The rotary dial in the front's upper-left corner opens the terminal; there,
-  `[frontend]` goes back and `[menu]` holds sign-in, model, sessions, usage
-  (the subscription's 5-hour and weekly windows, tokens) and diagnostics.
+- **The front is whatever you want.** It opens on a welcome screen with two
+  ways on: the terminal and the **component library**, 60
+  [Mishka Chelekom](https://mishka.tools) widget pages plus working widgets
+  for the phone's capabilities (camera, microphone, location, sensors, QR,
+  Bluetooth, NFC, MIDI, ...). Ask for a screen, a tracker, a game, a weird
+  little tool, and the agent builds it on the phone; "use this" on a library
+  page hands that widget to the agent. The rotary dial in the front's
+  upper-left corner opens the terminal; there, `[frontend]` goes back and
+  `[menu]` holds sign-in, model, sessions, usage (the subscription's 5-hour
+  and weekly windows, tokens), the component library and diagnostics.
   `[attach]` sends photos and files with a message.
 
 Every change the agent makes to the app is compiled and self-tested on the
@@ -54,8 +58,8 @@ in with your own Claude or ChatGPT subscription.
 | **Phone tools** | location, notifications, camera, photo picker, clipboard, HTTP, notes, artifacts for long output |
 | **Attachments** | `[attach]` beside the composer: photo library, take photo, or any file; pictures go to the model as images, text inline, PDFs as documents, anything else by path |
 | **Self-modification** | the Dyn layer: front screens, extra tools and the terminal theme as generations with versioned module names, a static check, selftests, screen-lock approval, probation, automatic revert, safe mode and a rescue screen |
-| **The front** | a shell hosting user screens in their own process, the dial toggle as the only fixed chrome, 60 Mishka widget screens as the editable default |
-| **Onboarding** | mob's guides, the Mishka catalogue and every plugin's README ship inside the app; the agent reads them with `read_guide` / `read_doc` |
+| **The front** | a shell hosting user screens in their own process, the dial toggle as the only fixed chrome; the editable default is a welcome screen and the component library (Mishka widgets, a date picker, phone capability widgets), updated by app updates without touching your edits |
+| **Onboarding** | mob's guides, the Mishka catalogue and every plugin's README ship inside the app; the agent reads them with `read_guide` / `read_doc`, and its instructions carry a compact catalogue of the library generated from the library's sources; `dyn_copy` starts a screen from a library page |
 | **Voice** | hold-to-talk dictation with on-device Whisper ([mob_speech](https://hex.pm/packages/mob_speech) + [mob_whisper](https://hex.pm/packages/mob_whisper)); spoken updates when a run ends |
 | **Background** | keeps a run going with the screen off (Android foreground service; iOS audio-session keep-alive) |
 | **Plugins** | camera, photos, location, scanner, notify, Bluetooth, biometric, video, screencast, touch, wake, themes, Mishka, and more on the way, all available to front screens |
@@ -134,7 +138,7 @@ mix credo --strict
 | `lib/operator/auth*` | provider sign-in, token refresh, QR login transfer |
 | `lib/operator/handoff*`, `links.ex` | `operator://` links: handoff, login, update server |
 | `lib/mix/tasks/` | the Mac-side tasks (`operator.handoff`, `.login`, `.deliver.*`, `.publish`, `.docs`) |
-| `priv/dyn_seed/` | the default front (Mishka gallery), installed as the first generation |
+| `priv/dyn_seed/` | the default front (welcome screen, component library: `showcase/components/` Mishka pages, `showcase/phone/` capability widgets), installed as a generation; a newer seed is merged in on update, user edits kept |
 | `priv/docs/` | the docs bundled for the phone agent (`mix operator.docs` refreshes them) |
 | `android/`, `ios/` | the native apps: approval prompt, Markdown view, secure store, deep links |
 | `docs/DESIGN.md` | why it's built this way: Core vs Dyn, generations, the safety pipeline |

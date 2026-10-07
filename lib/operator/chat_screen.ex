@@ -211,6 +211,18 @@ defmodule Operator.ChatScreen do
   def handle_info({:submit, :draft}, socket), do: send_draft(socket)
   def handle_info({:tap, :send}, socket), do: send_draft(socket)
 
+  # A front screen's "use this" (Operator.Core.Terminal): text for the
+  # draft, after anything typed, never sent.
+  def handle_info({:operator_draft, text}, socket) when is_binary(text) do
+    draft =
+      case String.trim_trailing(socket.assigns.draft) do
+        "" -> text
+        typed -> typed <> " " <> text
+      end
+
+    {:noreply, Mob.Socket.assign(socket, :draft, draft)}
+  end
+
   def handle_info({:tap, :stop}, socket) do
     Loop.stop(socket.assigns.loop)
     {:noreply, socket}
