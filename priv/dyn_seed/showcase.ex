@@ -102,7 +102,15 @@ defmodule Operator.Dyn.Showcase do
 
   # Phone widgets: location, sensors, files, notifications, feedback, sharing.
   defp system do
-    []
+    [
+      widget(P.Location.entry(), P.Location),
+      widget(P.Sensors.entry(), P.Sensors),
+      widget(P.FilePicker.entry(), P.FilePicker),
+      widget(P.Notification.entry(), P.Notification),
+      widget(P.Haptics.entry(), P.Haptics),
+      widget(P.Share.entry(), P.Share),
+      widget(P.Clipboard.entry(), P.Clipboard)
+    ]
   end
 
   # Phone widgets: Bluetooth, NFC, MIDI.
