@@ -92,7 +92,12 @@ defmodule Operator.Dyn.Showcase do
 
   # Phone widgets: camera, microphone, scanner, 3D, models.
   defp media do
-    []
+    [
+      widget(P.AudioRecorder.entry(), P.AudioRecorder),
+      widget(P.Camera.entry(), P.Camera),
+      widget(P.QrScanner.entry(), P.QrScanner),
+      widget(P.TfliteClassify.entry(), P.TfliteClassify)
+    ]
   end
 
   # Phone widgets: location, sensors, files, notifications, feedback, sharing.
