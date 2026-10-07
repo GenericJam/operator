@@ -7,7 +7,9 @@ defmodule Operator.Core.FrontTest do
 
   alias Operator.Core.Dyn
   alias Operator.Core.Front
+  alias Operator.Core.Phone
   alias Operator.Core.Settings
+  alias Operator.Core.Terminal
   alias Operator.Core.ToolRunner
   alias Operator.Core.Tools.FrontOpen
   alias Operator.Core.Tools.FrontScreens
@@ -282,13 +284,13 @@ defmodule Operator.Core.FrontTest do
     _ = Front.subscribe()
     {:ok, _} = Front.open("Asker")
     # This process stands in for the chat (Operator.Core.Phone's host).
-    :ok = Operator.Core.Phone.register_host(self())
+    :ok = Phone.register_host(self())
 
     view = mount_screen(Operator.ShellScreen)
     asker = await_view("asker")
     view = render_info(view, {:operator_front, asker})
     # Not from another process, like a Dyn tool or this test.
-    assert Operator.Core.Terminal.draft("x") == {:error, :not_in_front}
+    assert Terminal.draft("x") == {:error, :not_in_front}
 
     _ = render_info(view, {:tap, :ask})
     await_view("asked :ok")

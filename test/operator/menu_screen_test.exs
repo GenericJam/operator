@@ -6,6 +6,8 @@ defmodule Operator.MenuScreenTest do
   import Operator.Test.LoopHelpers
 
   alias Operator.Auth
+  alias Operator.Core.Dyn
+  alias Operator.Core.Front
   alias Operator.Core.Loop
   alias Operator.Core.Models
   alias Operator.Core.Session
@@ -125,10 +127,10 @@ defmodule Operator.MenuScreenTest do
       assert text(view) =~ "no component library"
 
       library = Operator.Test.Dyn.screen("Showcase.GalleryScreen", "library")
-      Operator.Test.Dyn.activate!(Map.put(Operator.Core.Dyn.staged(), "lib.ex", library))
+      Operator.Test.Dyn.activate!(Map.put(Dyn.staged(), "lib.ex", library))
 
       assert view |> render_info({:tap, :components}) |> navigated_to() == Operator.ShellScreen
-      assert %{stack: ["Showcase.GalleryScreen", "Home"]} = Operator.Core.Front.status()
+      assert %{stack: ["Showcase.GalleryScreen", "Home"]} = Front.status()
     end
   end
 

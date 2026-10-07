@@ -177,10 +177,14 @@ defmodule Operator.Core.Dyn do
         | build: Keyword.put(config.build, :compile_timeout_ms, config.rebuild_timeout_ms)
       }
 
-      with :ok <- if(staged == base, do: {:error, :no_changes}, else: :ok),
-           {:ok, proposal} <- check(config, info, base, staged),
-           do: {:ok, proposal.n}
+      seed_proposal(config, info, base, staged)
     end
+  end
+
+  defp seed_proposal(config, info, base, staged) do
+    with :ok <- if(staged == base, do: {:error, :no_changes}, else: :ok),
+         {:ok, proposal} <- check(config, info, base, staged),
+         do: {:ok, proposal.n}
   end
 
   defp seedable(status) do

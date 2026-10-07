@@ -139,7 +139,7 @@ defmodule Operator.Core.Dyn.Seed do
          {:ok, %{dir: dir}} <- Registry.config(keeper),
          need when need != :none <- needed(dir, digests),
          %{mode: :normal, pending: nil} <- Dyn.status(keeper) do
-      shipped = with {:update, shipped} <- need, do: shipped, else: (_ -> %{})
+      shipped = if match?({:update, _}, need), do: elem(need, 1), else: %{}
       job = %{keeper: keeper, dir: dir, sources: sources, digests: digests, shipped: shipped}
       # Registered before it starts, so running?/0 says so from now on.
       {:ok, pid} = Task.start(fn -> receive(do: (:go -> install(job, notify))) end)
