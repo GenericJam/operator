@@ -16,9 +16,15 @@ defmodule Operator.App do
   @impl Mob.App
   def on_start do
     # Dist first, so a boot step that fails can still be inspected over rpc.
-    # No :cookie: the node takes the per-app cookie mob_dev writes to
-    # $MOB_BEAMS_DIR/mob_dist_cookie (MobDev.DistCookie on the host side).
-    Mob.Dist.ensure_started(node: :"operator_android@127.0.0.1")
+    # Operator.Cluster starts it in the saved mode, after Mob.Dist's delay:
+    # the cluster (TLS on the Wi-Fi address) when it is on, otherwise the
+    # development link (Mob.Dist, loopback only; no :cookie: the node takes
+    # the per-app cookie mob_dev writes to $MOB_BEAMS_DIR/mob_dist_cookie).
+    {:ok, _} =
+      Supervisor.start_link([{Operator.Cluster, dev_node: :"operator_android@127.0.0.1"}],
+        strategy: :one_for_one,
+        name: Operator.Cluster.Supervisor
+      )
 
     # DNS, CA certs, the agent stack, the repo, the provider sign-ins, the
     # Core and the current Dyn generation (Operator.Boot, timed).
