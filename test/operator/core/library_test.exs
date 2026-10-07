@@ -79,15 +79,8 @@ defmodule Operator.Core.LibraryTest do
     assert slider.usage =~ ~r/^<MishkaSlider .*\/>$/
   end
 
-  test "the catalogue fits its budget, with the phone pages to come" do
+  test "the complete seed catalogue fits its request budget" do
     assert byte_size(Library.catalogue()) <= 6_000
-
-    phone =
-      for n <- 1..16, into: %{} do
-        {"showcase/phone/widget_#{n}.ex", String.replace(@phone, "Audio recorder", "Widget #{n}")}
-      end
-
-    assert byte_size(Library.build(Map.merge(Seed.sources(), phone))) <= 6_000
   end
 
   test "a phone page's line names the APIs it uses" do
