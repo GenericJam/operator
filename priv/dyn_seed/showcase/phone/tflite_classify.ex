@@ -7,11 +7,11 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
   The photo comes from the camera (`MobCamera.capture_photo/2`, after the
   `:camera` permission) or the gallery (`MobPhotos.pick/2`, no
   permission). The work runs in a `Task` (the screen stays responsive, and
-  gives up after `@timeout_ms`): a small thumbnail of the photo
-  (`MobPhotos.thumbnail/2`), kept in the workspace (`Operator.Core.Files.keep/1`)
-  to read its bytes, decoded (`TfliteClassify.Jpeg`), center-cropped and
-  scaled to the model's 128×128 input in [-1, 1], then the model is loaded,
-  run and released. The 1001 class names are in `TfliteClassify.Labels`.
+  reports after `@timeout_ms` if the native call is still finishing): the
+  capability result is kept while this screen owns it, a small thumbnail
+  (`Operator.Core.Files.thumbnail/2`) is decoded (`TfliteClassify.Jpeg`),
+  center-cropped and scaled to the model's 128×128 input in [-1, 1], then the
+  model is loaded, run and released on every normal or error path.
   """
   use Mob.Screen
 
@@ -24,6 +24,7 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
 
   @side 128
   @timeout_ms 30_000
+  @cleanup_grace_ms 1_000
 
   def entry,
     do: %{
@@ -42,6 +43,7 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
        permission: :unknown,
        photo: nil,
        task: nil,
+       timed_out: false,
        result: nil,
        status: "Take or pick a photo to classify."
      )}
@@ -180,18 +182,38 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
   defp widget({ref, answer}, %{assigns: %{task: %Task{ref: ref}}} = socket) do
     Process.demonitor(ref, [:flush])
 
-    case answer do
-      {:ok, result} ->
-        Mob.Socket.assign(socket, task: nil, result: result, status: "Done.")
+    if socket.assigns.timed_out do
+      Mob.Socket.assign(socket,
+        task: nil,
+        timed_out: false,
+        status: "The late result was cleaned up."
+      )
+    else
+      case answer do
+        {:ok, result} ->
+          Mob.Socket.assign(socket, task: nil, result: result, status: "Done.")
 
-      {:error, why} ->
-        Mob.Socket.assign(socket, task: nil, status: "Couldn't classify it: #{why}")
+        {:error, why} ->
+          Mob.Socket.assign(socket, task: nil, status: "Couldn't classify it: #{why}")
+      end
     end
   end
 
-  defp widget({:timeout, ref}, %{assigns: %{task: %Task{ref: ref} = task}} = socket) do
+  defp widget({:timeout, ref}, %{assigns: %{task: %Task{ref: ref}}} = socket) do
+    Process.send_after(self(), {:stop_timed_out_task, ref}, @cleanup_grace_ms)
+
+    Mob.Socket.assign(socket,
+      timed_out: true,
+      status: "Gave up after #{div(@timeout_ms, 1000)} s; stopping inference."
+    )
+  end
+
+  defp widget(
+         {:stop_timed_out_task, ref},
+         %{assigns: %{task: %Task{ref: ref} = task}} = socket
+       ) do
     _ = Task.shutdown(task, :brutal_kill)
-    Mob.Socket.assign(socket, task: nil, status: "Gave up after #{div(@timeout_ms, 1000)} s.")
+    Mob.Socket.assign(socket, task: nil, timed_out: false, status: "Inference stopped.")
   end
 
   defp widget(_message, socket), do: socket
@@ -206,9 +228,23 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
   # One classification at a time, in a Task that can't take the screen
   # down with it (it answers {:error, why} instead of raising).
   defp classify(%{assigns: %{task: nil}} = socket, path) do
-    task = Task.async(fn -> safely(fn -> run(path) end) end)
-    Process.send_after(self(), {:timeout, task.ref}, @timeout_ms)
-    Mob.Socket.assign(socket, task: task, photo: path, result: nil, status: "Classifying…")
+    case Files.keep(path) do
+      {:ok, kept} ->
+        _ = remove_photo(socket.assigns.photo)
+        task = Task.async(fn -> safely(fn -> run(kept) end) end)
+        Process.send_after(self(), {:timeout, task.ref}, @timeout_ms)
+
+        Mob.Socket.assign(socket,
+          task: task,
+          timed_out: false,
+          photo: kept,
+          result: nil,
+          status: "Classifying…"
+        )
+
+      {:error, why} ->
+        Mob.Socket.assign(socket, :status, "Couldn't keep the photo: #{why}")
+    end
   end
 
   defp classify(socket, _path), do: socket
@@ -220,19 +256,29 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
 
     with {:ok, input} <- decoded,
          {load_us, {:ok, model, delegate}} <-
-           :timer.tc(fn -> Tflite.load(Tflite.bundled_model_bytes()) end),
-         {run_us, outputs} <- :timer.tc(fn -> Tflite.run(model, [input]) end) do
-      :ok = Tflite.release(model)
+           :timer.tc(fn -> Tflite.load(Tflite.bundled_model_bytes()) end) do
+      try do
+        {run_us, outputs} = :timer.tc(fn -> Tflite.run(model, [input]) end)
 
-      with {:ok, [scores | _]} <- outputs do
-        {:ok,
-         %{
-           top: top(scores, 3),
-           delegate: delegate,
-           decode_ms: div(decode_us, 1000),
-           load_ms: div(load_us, 1000),
-           run_ms: div(run_us, 1000)
-         }}
+        case outputs do
+          {:ok, [scores | _]} ->
+            {:ok,
+             %{
+               top: top(scores, 3),
+               delegate: delegate,
+               decode_ms: div(decode_us, 1000),
+               load_ms: div(load_us, 1000),
+               run_ms: div(run_us, 1000)
+             }}
+
+          {:error, why} ->
+            {:error, why}
+
+          other ->
+            {:error, "unexpected inference result: #{inspect(other, limit: 5)}"}
+        end
+      after
+        :ok = Tflite.release(model)
       end
     else
       {_us, {:error, why}} -> {:error, why}
@@ -244,10 +290,7 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
   # input), its JPEG decoded, the center square scaled to 128×128, values
   # in [-1, 1], as f32 bytes.
   defp pixels(path) do
-    with {:ok, %{path: thumb}} <- MobPhotos.thumbnail(path, max_size: 2 * @side, quality: 95),
-         {:ok, kept} <- Files.keep(thumb),
-         {:ok, bytes} <- Files.read(kept),
-         _ <- Files.rm(kept),
+    with {:ok, bytes} <- Files.thumbnail(path, max_size: 2 * @side, quality: 95),
          {:ok, %{width: w, height: h, rgb: rgb}} <- Jpeg.decode(bytes) do
       side = min(w, h)
 
@@ -296,6 +339,17 @@ defmodule Operator.Dyn.Showcase.Phone.TfliteClassify do
     e ->
       {:error, Exception.message(e)}
   end
+
+  def terminate(_reason, socket) do
+    # A killed task drops its Nx/TFLite NIF resources, whose destructors free
+    # the model even when the native inference call never returned to `after`.
+    if socket.assigns.task, do: Task.shutdown(socket.assigns.task, :brutal_kill)
+    remove_photo(socket.assigns.photo)
+    :ok
+  end
+
+  defp remove_photo(nil), do: :ok
+  defp remove_photo(path), do: Files.rm(path)
 
   # A native call; where the NIF isn't there the screen says so instead of crashing.
   defp native(socket, call) do

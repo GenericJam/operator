@@ -122,6 +122,18 @@ defmodule Operator.Dyn.Showcase.Phone.AudioRecorder do
     end
   end
 
+  def terminate(_reason, %{assigns: %{state: :recording}} = socket) do
+    _ = native(socket, &Mob.Audio.stop_recording/1)
+    :ok
+  end
+
+  def terminate(_reason, %{assigns: %{state: :playing}} = socket) do
+    _ = native(socket, &Mob.Audio.stop_playback/1)
+    :ok
+  end
+
+  def terminate(_reason, _socket), do: :ok
+
   # ── the permission ──
 
   defp widget({:tap, :ask}, socket) do
@@ -142,10 +154,14 @@ defmodule Operator.Dyn.Showcase.Phone.AudioRecorder do
   defp widget({:tap, :record}, socket) do
     case native(socket, &Mob.Audio.start_recording(&1, format: :aac)) do
       {:ok, socket} ->
-        Process.send_after(self(), :tick, 1_000)
+        # Each recording ticks under its own id: a tick left over from a
+        # recording stopped and restarted within the second is ignored.
+        run = System.unique_integer([:positive])
+        Process.send_after(self(), {:tick, run}, 1_000)
 
         Mob.Socket.assign(socket,
           state: :recording,
+          run: run,
           seconds: 0,
           kept: nil,
           status: "Recording… 0 s"
@@ -156,17 +172,17 @@ defmodule Operator.Dyn.Showcase.Phone.AudioRecorder do
     end
   end
 
-  # One tick a second, only while recording; at @max_seconds it stops.
-  defp widget(:tick, %{assigns: %{state: :recording, seconds: s}} = socket) do
+  # One tick a second, only while this recording runs; at @max_seconds it stops.
+  defp widget({:tick, run}, %{assigns: %{state: :recording, run: run, seconds: s}} = socket) do
     if s + 1 >= @max_seconds do
       stop(socket)
     else
-      Process.send_after(self(), :tick, 1_000)
+      Process.send_after(self(), {:tick, run}, 1_000)
       Mob.Socket.assign(socket, seconds: s + 1, status: "Recording… #{s + 1} s")
     end
   end
 
-  defp widget(:tick, socket), do: socket
+  defp widget({:tick, _run}, socket), do: socket
   defp widget({:tap, :stop}, socket), do: stop(socket)
 
   defp widget({:audio, :recorded, %{path: path} = rec}, socket) do

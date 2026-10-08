@@ -29,9 +29,10 @@ defmodule Operator.Core.Dyn.Seed do
   selftest; if it fails (an edited file relies on something the new seed
   changed), nothing changes and that seed is recorded as rejected, so it
   isn't retried every launch; the next app update with a different seed
-  tries again. Installs made before the record existed use the seed
-  generation's own sources as the shipped ones (the first install has
-  nothing to merge with, so they are the seed as shipped).
+  tries again. Installs made before the record existed (Operator 1.0.x)
+  shipped the 1.0 seed, whose digests are recorded in
+  `priv/dyn_seed_1_0.sha256`: the seed generation's own sources can't stand
+  in for them, since that install merged the user's files into it.
   """
 
   alias Operator.Core.Dyn
@@ -52,6 +53,16 @@ defmodule Operator.Core.Dyn.Seed do
   @digests Map.new(@sources, fn {path, source} ->
              {path, :sha256 |> :crypto.hash(source) |> Base.encode16(case: :lower)}
            end)
+  # credo:disable-for-next-line
+  @legacy_file Path.expand("../../../../priv/dyn_seed_1_0.sha256", __DIR__)
+  @external_resource @legacy_file
+  @legacy_digests @legacy_file
+                  |> File.read!()
+                  |> String.split("\n", trim: true)
+                  |> Map.new(fn line ->
+                    [digest, path] = String.split(line, "  ", parts: 2)
+                    {path, digest}
+                  end)
   @rationale "The default front: the welcome screen and the component library (the seed)"
 
   @spec sources() :: %{String.t() => String.t()}
@@ -80,9 +91,9 @@ defmodule Operator.Core.Dyn.Seed do
       nil ->
         :install
 
-      n ->
+      _n ->
         record = Store.seed_files(dir)
-        shipped = record.files || dir |> Store.sources(n) |> Map.new(&digest/1)
+        shipped = record.files || @legacy_digests
 
         cond do
           shipped == digests -> :none

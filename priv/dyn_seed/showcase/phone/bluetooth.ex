@@ -111,6 +111,11 @@ defmodule Operator.Dyn.Showcase.Phone.Bluetooth do
     end
   end
 
+  def terminate(_reason, socket) do
+    _ = stop_scan(socket)
+    :ok
+  end
+
   # iOS asks for Bluetooth itself on the first scan; Android needs the
   # permission first (asked every time until granted: a denial still answers).
   defp bluetooth({:tap, :scan}, %{assigns: %{platform: :ios}} = socket), do: start_scan(socket)

@@ -40,9 +40,8 @@ defmodule Mix.Tasks.Operator.HandoffTest do
     new
   end
 
-  # Runs the task, pressing Enter at every prompt. Without EQRCode (a :dev
-  # dependency) each code is printed as text. Returns those links and the
-  # prompts shown.
+  # Runs the task, pressing Enter at every prompt. Mix.Operator.QR prints text
+  # in MIX_ENV=test so these behavior tests can inspect each exact link.
   defp run_task(args) do
     for _ <- 1..10, do: send(self(), {:mix_shell_input, :prompt, "\n"})
     capture_io(fn -> HandoffTask.run(args) end)

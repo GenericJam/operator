@@ -9,7 +9,8 @@ defmodule Operator.MenuScreen do
       acting at once: the provider sign-ins, the model, a new session,
       resuming a past one, the renderer (`md:native` / `md:term`,
       `Operator.Core.Term.put_renderer/1`), the subscription usage
-      (`Operator.UsageScreen`), the component library and
+      (`Operator.UsageScreen`), the local TLS cluster
+      (`Operator.ClusterScreen`), the component library and
       `Operator.DiagnosticsScreen`. The library is a front screen
       (`Operator.Dyn.Showcase.GalleryScreen`, from the Dyn seed): the menu
       opens it in the front, over the front's own screens
@@ -99,6 +100,9 @@ defmodule Operator.MenuScreen do
     params = Map.take(socket.assigns, [:model, :path])
     {:noreply, Mob.Socket.push_screen(socket, Operator.UsageScreen, params)}
   end
+
+  def handle_info({:tap, :cluster}, socket),
+    do: {:noreply, Mob.Socket.push_screen(socket, Operator.ClusterScreen)}
 
   def handle_info({:tap, :scan_qr}, socket),
     do: {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen)}
@@ -295,8 +299,9 @@ defmodule Operator.MenuScreen do
           UI.heading("display", t),
           UI.item("renderer: md:#{renderer}", "tap for md:#{other}", :toggle_renderer, t),
           UI.line(renderer_hint(renderer), t, "dim", text_size: t.text_size - 1),
-          UI.heading("usage", t),
+          UI.heading("usage and devices", t),
           UI.item("usage", "5h / weekly, tokens", :usage, t),
+          UI.item("cluster", "pair Operators over local TLS", :cluster, t),
           UI.item("components", "the component library, in the front", :components, t),
           UI.heading("diagnostics", t),
           UI.item("diagnostics", "updates, spend, dyn", :diagnostics, t)

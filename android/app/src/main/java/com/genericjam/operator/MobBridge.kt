@@ -5015,6 +5015,14 @@ private fun MobTextField(node: MobNode, modifier: Modifier) {
                     if (caretAtEnd) field = field.copy(selection = TextRange(field.text.length))
                     focusHandle?.let { MobBridge.nativeSendFocus(it) }
                 } else {
+                    // Replacing a focused field is the BEAM's explicit IME
+                    // flush. Send the current TextFieldValue before blur;
+                    // mailbox ordering makes the final composition visible
+                    // without an arbitrary timer.
+                    changeHandle?.let {
+                        sync.sent(field.text)
+                        MobBridge.nativeSendChangeStr(it, field.text)
+                    }
                     blurHandle?.let { MobBridge.nativeSendBlur(it) }
                 }
             },

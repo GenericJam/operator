@@ -8,10 +8,13 @@ defmodule Operator.Dyn.Showcase.Phone.Camera do
   outside the app and needs no permission. Results come to `handle_info/2`:
   `{:camera, :photo, %{path:, width:, height:}}`, `{:camera, :cancelled}`,
   `{:photos, :picked, items}`, `{:photos, :cancelled}`. The paths are
-  temporary files; an `:image` node shows a local path as it is.
+  temporary files (the camera reuses its own before the next capture), so
+  a photo is kept in the workspace (`Operator.Core.Files.keep/1`) before it
+  is listed; an `:image` node shows a local path as it is.
   """
   use Mob.Screen
 
+  alias Operator.Core.Files
   alias Operator.Dyn.Showcase.Kit
   alias Operator.Dyn.Showcase.Phone
 
@@ -131,8 +134,14 @@ defmodule Operator.Dyn.Showcase.Phone.Camera do
     do: Mob.Socket.assign(socket, permission: :denied, status: "No camera, no photo.")
 
   defp widget({:camera, :photo, %{path: path} = shot}, socket) do
-    p = %{from: "Camera", path: path, width: shot[:width], height: shot[:height], size: nil}
-    Mob.Socket.assign(socket, photos: [p | socket.assigns.photos], status: "Photo taken.")
+    case Files.keep(path) do
+      {:ok, kept} ->
+        p = %{from: "Camera", path: kept, width: shot[:width], height: shot[:height], size: nil}
+        Mob.Socket.assign(socket, photos: [p | socket.assigns.photos], status: "Photo taken.")
+
+      {:error, why} ->
+        Mob.Socket.assign(socket, status: why)
+    end
   end
 
   defp widget({:camera, :cancelled}, socket),

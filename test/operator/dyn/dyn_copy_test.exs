@@ -19,6 +19,7 @@ defmodule Operator.Core.Tools.DynCopyTest do
     def state, do: %State{}
     def other, do: {Recorder, Operator.Dyn.Showcase.Phone.Rec_old, :"Operator.Dyn.Showcase.Phone.Rec2"}
     def me, do: Operator.Dyn.Showcase.Phone.Rec.state()
+    def root, do: Elixir.Operator.Dyn.Showcase.Phone.Rec.state()
   end
 
   defmodule Operator.Dyn.Showcase.Phone.Rec.State do
@@ -59,6 +60,7 @@ defmodule Operator.Core.Tools.DynCopyTest do
              def state, do: %State{}
              def other, do: {Recorder, Operator.Dyn.Showcase.Phone.Rec_old, :"Operator.Dyn.Showcase.Phone.Rec2"}
              def me, do: Operator.Dyn.Memo.state()
+             def root, do: Elixir.Operator.Dyn.Memo.state()
            end
 
            defmodule Operator.Dyn.Memo.State do
@@ -73,7 +75,7 @@ defmodule Operator.Core.Tools.DynCopyTest do
   test "the reply numbers the copy's lines as dyn_read does" do
     assert {:ok, text} = DynCopy.run(%{"from" => "showcase/phone/rec.ex", "to" => "memo.ex"}, %{})
     assert text =~ ~r/^ 1\| defmodule Operator\.Dyn\.Memo do$/m
-    assert text =~ ~r/^14\| $/m
+    assert text =~ ~r/^15\| $/m
   end
 
   test "a long file is shown in part, with where to read on" do
@@ -104,6 +106,32 @@ defmodule Operator.Core.Tools.DynCopyTest do
 
     assert text =~ "memo.ex already exists"
     assert Dyn.stage_read("memo.ex", Dyn.Keeper) == {:ok, "mine"}
+  end
+
+  test "concurrent copies cannot replace the winner" do
+    results =
+      1..8
+      |> Task.async_stream(
+        fn _ -> DynCopy.run(%{"from" => "showcase/phone/rec.ex", "to" => "memo.ex"}, %{}) end,
+        ordered: false
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &match?({:error, "memo.ex already exists" <> _}, &1)) == 7
+
+    assert {:ok, "defmodule Operator.Dyn.Memo do\n" <> _} =
+             Dyn.stage_read("memo.ex", Dyn.Keeper)
+  end
+
+  test "reading the source module does not intern source-controlled identifiers" do
+    identifier = "copy_probe_#{System.unique_integer([:positive])}"
+    source = "defmodule Operator.Dyn.AtomSafe do\n  def #{identifier}, do: :ok\nend\n"
+    :ok = Dyn.stage_put("atom_safe.ex", source, Dyn.Keeper)
+
+    assert_raise ArgumentError, fn -> String.to_existing_atom(identifier) end
+    assert {:ok, _} = DynCopy.run(%{"from" => "atom_safe.ex", "to" => "atom_copy.ex"}, %{})
+    assert_raise ArgumentError, fn -> String.to_existing_atom(identifier) end
   end
 
   test "refuses an unknown `from`" do

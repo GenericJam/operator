@@ -63,6 +63,8 @@ defmodule Operator.Cluster.Tls do
     :ets.delete(@table, :window)
     :ets.match_delete(@table, {{:pending, :_}, :_})
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @doc "Is the pairing window open?"
@@ -90,8 +92,14 @@ defmodule Operator.Cluster.Tls do
           {:valid, atom()} | {:fail, term()} | {:unknown, atom()}
   def verify(_cert, {:extension, _}, role), do: {:unknown, role}
 
-  def verify(cert, _event, role) do
-    fingerprint = cert |> :public_key.pkix_encode(:OTPCertificate, :otp) |> Identity.fingerprint()
+  # These identities are deliberately self-signed: pinning the exact
+  # certificate fingerprint is the trust decision.
+  def verify(cert, event, role)
+      when event in [:valid, :valid_peer, {:bad_cert, :selfsigned_peer}] do
+    fingerprint =
+      :OTPCertificate
+      |> :public_key.pkix_encode(cert, :otp)
+      |> Identity.fingerprint()
 
     case lookup({:pin, fingerprint}) do
       [{_, :pinned}] ->
@@ -110,6 +118,9 @@ defmodule Operator.Cluster.Tls do
         end
     end
   end
+
+  def verify(_cert, {:bad_cert, reason}, _role), do: {:fail, reason}
+  def verify(_cert, event, _role), do: {:fail, {:unsupported_certificate_event, event}}
 
   defp refuse(fingerprint, why) do
     Logger.warning("[cluster] refused peer #{short(fingerprint)}: #{why}")

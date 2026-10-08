@@ -81,6 +81,9 @@ defmodule Operator.Core.Dyn.CheckTest do
       {":erlang.system_monitor(pid, [:busy_port])", ":erlang.system_monitor"},
       {":erlang.system_profile(pid, [:runnable_procs])", ":erlang.system_profile"},
       {":seq_trace.set_token(:label, 1)", ":seq_trace"},
+      {"send(:mob_screen, {:files, :picked, []})", ":mob_screen is the router"},
+      {"Process.send(:mob_screen, {:files, :picked, []}, [])", ":mob_screen is the router"},
+      {"Process.send_after(:mob_screen, {:camera, :photo, %{}}, 1)", ":mob_screen is the router"},
       {":dbg.tracer()", ":dbg"},
       {":erts_debug.df(:m)", ":erts_debug"},
       {":erts_internal.purge_module(:m, :prepare)", ":erts_internal"},
@@ -107,6 +110,8 @@ defmodule Operator.Core.Dyn.CheckTest do
       {~s|Operator.Core.Files.real_path("/data")|, "Operator.Core.Files.real_path/1"},
       {"&Operator.Core.Files.resolve/3", "Operator.Core.Files.resolve/3"},
       {"f = Operator.Core.Files", "as a value"},
+      {"Operator.Core.Files.grant_capability({:files, :picked, []})",
+       "Operator.Core.Files.grant_capability/1"},
       # operator:// links are the terminal's (sign-ins, handoffs, updates).
       {"Mob.Link.register(self())", "app-facing"},
       # A wake handler runs later, unchecked: it's checked as a call now.

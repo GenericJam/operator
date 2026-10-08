@@ -10,6 +10,8 @@ defmodule Operator.Links do
       `mix operator.handoff` (`Operator.Handoff`).
     * `operator://deliver?endpoint=…&key=…`: the Mac's update server, from
       `mix operator.deliver.qr` (`Operator.Deliver`).
+    * `operator://cluster?…`: a short-lived TLS cluster invite
+      (`Operator.Cluster.Invite`).
 
   A link the app is opened with (Android `MainActivity`, iOS `SceneDelegate`;
   the `operator` scheme is declared by `url_schemes` in `mob.exs`) reaches
@@ -20,6 +22,7 @@ defmodule Operator.Links do
   """
 
   alias Operator.Auth.Transfer
+  alias Operator.Cluster.Invite
   alias Operator.Core.Session
   alias Operator.Deliver
   alias Operator.Handoff
@@ -30,8 +33,8 @@ defmodule Operator.Links do
           | {:handoff_part, pos_integer(), pos_integer()}
           | {:handoff, Handoff.t(), pid()}
           | {:deliver, String.t()}
+          | {:cluster, Invite.t()}
           | {:error, String.t()}
-
   @doc """
   Acts on a scanned link:
 
@@ -40,16 +43,25 @@ defmodule Operator.Links do
     * a handoff part: kept in `Operator.Handoff.Inbox`, `{:handoff_part,
       received, total}` until the set is complete; the last part starts a
       new session that opens with the handoff (`Operator.Handoff.framed/1`
-      as its first user message, sent with the next prompt; nothing goes to
-      the model before that) and returns `{:handoff, handoff, loop}`;
+      as its first user message);
     * an update-server link: `{:deliver, endpoint}` when its address is
       usable and it is for this build's key (`Operator.Deliver.parse/1`);
       nothing is saved until the user confirms it in
       `Operator.LoginScanScreen`;
+    * a cluster invite: `{:cluster, invite}` after its syntax and bounds
+      have been checked; joining still requires the system screen lock;
     * anything else: `{:error, sentence}` to show.
   """
   @spec handle(String.t()) :: result()
   def handle(link) when is_binary(link) do
+    case Invite.parse(link) do
+      {:ok, invite} -> {:cluster, invite}
+      {:error, message} -> {:error, message}
+      :not_cluster -> deliver_or_other(link)
+    end
+  end
+
+  defp deliver_or_other(link) do
     case params(link, "deliver") do
       {:ok, params} -> deliver(Deliver.parse(params))
       :error -> handoff_or_login(link)

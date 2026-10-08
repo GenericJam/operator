@@ -99,6 +99,11 @@ defmodule Operator.Dyn.Showcase.Phone.Nfc do
     end
   end
 
+  def terminate(_reason, socket) do
+    _ = stop(socket, "Stopped.")
+    :ok
+  end
+
   defp nfc({:tap, :read}, socket) do
     ref = make_ref()
     Process.send_after(self(), {:read_timeout, ref}, @read_ms)

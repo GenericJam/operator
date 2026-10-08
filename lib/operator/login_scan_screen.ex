@@ -37,7 +37,8 @@ defmodule Operator.LoginScanScreen do
         line:
           "On the Mac, in the operator checkout: mix operator.login anthropic (or openai) " <>
             "to sign in, mix operator.handoff to carry on from omp, " <>
-            "mix operator.deliver.qr for code updates."
+            "mix operator.deliver.qr for code updates. " <>
+            "Cluster invites are accepted on the cluster screen."
       )
 
     case params do
@@ -157,6 +158,9 @@ defmodule Operator.LoginScanScreen do
 
       {:deliver, endpoint} ->
         confirm_step(socket, endpoint)
+
+      {:cluster, invite} ->
+        Mob.Socket.push_screen(socket, Operator.ClusterScreen, %{invite: invite})
 
       {:error, text} ->
         line(socket, text)

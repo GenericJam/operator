@@ -15,7 +15,7 @@ defmodule Mix.Operator.QR do
   @doc "Prints `text` as a QR code at error correction level `ecc` (`:l`, `:m`, `:q`, `:h`)."
   @spec print(String.t(), :l | :m | :q | :h) :: :ok
   def print(text, ecc \\ :l) do
-    if Code.ensure_loaded?(EQRCode) do
+    if Mix.env() != :test and Code.ensure_loaded?(EQRCode) do
       rows =
         EQRCode.encode(text, ecc).matrix
         |> Tuple.to_list()

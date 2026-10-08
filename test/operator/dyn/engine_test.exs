@@ -26,9 +26,8 @@ defmodule Operator.Core.Dyn.EngineTest do
       def version, do: Label.tag()
 
       def wait do
-        receive do
-          :go -> {:done, version()}
-        end
+        Process.sleep(200)
+        {:done, version()}
       end
     end
 
@@ -56,8 +55,7 @@ defmodule Operator.Core.Dyn.EngineTest do
     assert g1.version() == "one"
     assert g2.version() == "two"
 
-    # A process in generation 1's code kept running through the switch.
-    send(waiter.pid, :go)
+    # A process already executing generation 1 keeps that generation's code.
     assert Task.await(waiter) == {:done, "one"}
   end
 

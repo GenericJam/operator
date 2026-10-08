@@ -131,6 +131,11 @@ defmodule Operator.Dyn.Showcase.Phone.Midi do
     end
   end
 
+  def terminate(_reason, socket) do
+    _ = close(socket)
+    :ok
+  end
+
   defp midi(refresh, socket) when refresh in [:refresh, {:tap, :refresh}], do: list(socket)
 
   # iOS reports plugging and unplugging; the list is asked for again.

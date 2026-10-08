@@ -92,6 +92,7 @@ defmodule Operator.ChatScreen do
   @stick_retry_ms 150
   @attach_stick_ms 300
   @toast_ms 1_500
+  @ime_commit_ms 100
   @window 300
   @max_native 200
   @proposal_diff_lines 200
@@ -131,7 +132,13 @@ defmodule Operator.ChatScreen do
     {:ok,
      socket
      |> Mob.Socket.assign(window: @window, draft: "", toast: nil, signed_in: signed_in?())
-     |> Mob.Socket.assign(composing: false, slide: nil, field_gen: 0)
+     |> Mob.Socket.assign(
+       composing: false,
+       slide: nil,
+       field_gen: 0,
+       retiring_field: nil,
+       pending_send: nil
+     )
      |> Mob.Socket.assign(
        settings_dir: settings_dir,
        voice: Settings.voice(settings_dir),
@@ -235,11 +242,25 @@ defmodule Operator.ChatScreen do
 
   # ── composer ──
 
-  def handle_info({:change, :draft, value}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :draft, value)}
+  def handle_info({:change, {:draft, gen}, value}, socket) do
+    a = socket.assigns
 
-  # Focusing the closed field opens the composer around it.
-  def handle_info({:focus, :draft}, %{assigns: %{composing: false}} = socket) do
+    if gen in [a.field_gen, a.retiring_field, a.pending_send] do
+      retiring = if gen == a.field_gen, do: nil, else: a.retiring_field
+      {:noreply, Mob.Socket.assign(socket, draft: value, retiring_field: retiring)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Focusing the closed field opens the composer around it. The generation in
+  # the event prevents a late native event from a replaced field reopening it.
+  def handle_info(
+        {:focus, {:draft, gen}},
+        %{assigns: %{field_gen: gen, composing: false, pending_send: nil}} = socket
+      ) do
+    socket = Mob.Socket.assign(socket, :retiring_field, nil)
+
     if ios?() do
       {:noreply, socket |> Mob.Socket.assign(composing: true, slide: nil) |> restick()}
     else
@@ -247,6 +268,25 @@ defmodule Operator.ChatScreen do
       {:noreply, Mob.Socket.assign(socket, composing: true, slide: 0)}
     end
   end
+
+  def handle_info({:focus, {:draft, _gen}}, socket), do: {:noreply, socket}
+
+  # Replacing a focused field commits any active IME composition. Native sends
+  # the final change before blur; blur sends immediately, with a timer fallback.
+  def handle_info({:blur, {:draft, gen}}, %{assigns: %{pending_send: gen}} = socket),
+    do: finish_pending_send(socket, gen)
+
+  def handle_info({:blur, {:draft, gen}}, %{assigns: %{retiring_field: gen}} = socket),
+    do: {:noreply, Mob.Socket.assign(socket, :retiring_field, nil)}
+
+  def handle_info({:blur, {:draft, _gen}}, socket), do: {:noreply, socket}
+
+  def handle_info({:commit_send, gen}, socket), do: finish_pending_send(socket, gen)
+
+  def handle_info({:retire_field, gen}, %{assigns: %{retiring_field: gen}} = socket),
+    do: {:noreply, Mob.Socket.assign(socket, :retiring_field, nil)}
+
+  def handle_info({:retire_field, _gen}, socket), do: {:noreply, socket}
 
   # One chain of frames: a late one from an earlier opening doesn't match.
   def handle_info({:composer_slide, step}, %{assigns: %{composing: true, slide: s}} = socket)
@@ -262,9 +302,14 @@ defmodule Operator.ChatScreen do
   # Closed (or sent) before it finished sliding.
   def handle_info({:composer_slide, _step}, socket), do: {:noreply, socket}
 
-  def handle_info({:focus, :draft}, socket), do: {:noreply, socket}
+  def handle_info({:tap, :hide_composer}, socket), do: {:noreply, retire_composer(socket)}
 
-  def handle_info({:tap, :hide_composer}, socket), do: {:noreply, close_composer(socket)}
+  def handle_info({:tap, :send}, %{assigns: %{pending_send: pending}} = socket)
+      when not is_nil(pending),
+      do: {:noreply, socket}
+
+  def handle_info({:tap, :send}, %{assigns: %{composing: true}} = socket),
+    do: begin_pending_send(socket)
 
   def handle_info({:tap, :send}, socket), do: send_draft(socket)
 
@@ -626,6 +671,9 @@ defmodule Operator.ChatScreen do
       {:deliver, endpoint} ->
         {:noreply, Mob.Socket.push_screen(socket, Operator.LoginScanScreen, %{deliver: endpoint})}
 
+      {:cluster, invite} ->
+        {:noreply, Mob.Socket.push_screen(socket, Operator.ClusterScreen, %{invite: invite})}
+
       {:error, text} ->
         {:noreply, lasting_toast(socket, text)}
     end
@@ -900,6 +948,62 @@ defmodule Operator.ChatScreen do
     }
   end
 
+  defp begin_pending_send(socket) do
+    gen = socket.assigns.field_gen
+    Process.send_after(self(), {:commit_send, gen}, @ime_commit_ms)
+
+    {:noreply,
+     socket
+     |> Mob.Socket.assign(
+       composing: false,
+       slide: nil,
+       field_gen: gen + 1,
+       retiring_field: nil,
+       pending_send: gen,
+       attach_menu: false
+     )
+     |> restick()}
+  end
+
+  defp finish_pending_send(%{assigns: %{pending_send: gen}} = socket, gen) do
+    socket = Mob.Socket.assign(socket, :pending_send, nil)
+
+    cond do
+      String.trim(socket.assigns.draft) == "" and socket.assigns.attachments == [] ->
+        {:noreply, socket |> Mob.Socket.assign(composing: true, slide: nil) |> restick()}
+
+      MapSet.size(socket.assigns.attaching) > 0 ->
+        {:noreply,
+         socket
+         |> Mob.Socket.assign(composing: true, slide: nil)
+         |> toast("Still attaching: send again in a moment")}
+
+      true ->
+        send_draft(socket)
+    end
+  end
+
+  defp finish_pending_send(socket, _gen), do: {:noreply, socket}
+
+  # Hiding keeps the draft, including the native field's final composition.
+  # Accept that retiring field only until its blur (or this short fallback).
+  defp retire_composer(%{assigns: %{composing: true}} = socket) do
+    gen = socket.assigns.field_gen
+    Process.send_after(self(), {:retire_field, gen}, @ime_commit_ms)
+
+    socket
+    |> Mob.Socket.assign(
+      composing: false,
+      slide: nil,
+      field_gen: gen + 1,
+      retiring_field: gen,
+      attach_menu: false
+    )
+    |> restick()
+  end
+
+  defp retire_composer(socket), do: socket
+
   defp send_draft(socket) do
     text = String.trim(socket.assigns.draft)
     files = socket.assigns.attachments
@@ -927,20 +1031,28 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  # Back to the full transcript; the draft stays. A new field (its id) drops
-  # the focus, and the keyboard with it.
+  # Back to the full transcript after sending. The field generation was
+  # already advanced to flush the IME; any late event from it is ignored.
   defp close_composer(%{assigns: %{composing: true}} = socket) do
     socket
     |> Mob.Socket.assign(
       composing: false,
       slide: nil,
       field_gen: socket.assigns.field_gen + 1,
+      retiring_field: nil,
+      pending_send: nil,
       attach_menu: false
     )
     |> restick()
   end
 
-  defp close_composer(socket), do: socket
+  defp close_composer(socket) do
+    Mob.Socket.assign(socket,
+      field_gen: socket.assigns.field_gen + 1,
+      retiring_field: nil,
+      pending_send: nil
+    )
+  end
 
   # The transcript changed height: a following list goes back to its end.
   defp restick(socket) do
@@ -1363,7 +1475,14 @@ defmodule Operator.ChatScreen do
   # field (`field_gen`), which takes the focus and the keyboard away.
   defp composer(a, t) do
     placeholder = if a.status == :running, do: "› steer the agent…", else: "› ask Operator…"
-    field_props = [id: "draft-#{a.field_gen}", on_focus: {self(), :draft}]
+    tag = {:draft, a.field_gen}
+
+    field_props = [
+      id: "draft-#{a.field_gen}",
+      on_focus: {self(), tag},
+      on_blur: {self(), tag},
+      disabled: not is_nil(a.pending_send)
+    ]
 
     if a.composing do
       {flex, lines} =
@@ -1384,7 +1503,7 @@ defmodule Operator.ChatScreen do
           UI.field(
             a.draft,
             placeholder,
-            :draft,
+            tag,
             t,
             field_props ++ [weight: 1, underline: false] ++ lines
           )
@@ -1396,7 +1515,7 @@ defmodule Operator.ChatScreen do
         UI.field(
           a.draft,
           placeholder,
-          :draft,
+          tag,
           t,
           field_props ++ [weight: 1, lines: @closed_lines]
         )

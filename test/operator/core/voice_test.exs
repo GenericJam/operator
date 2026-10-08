@@ -1,5 +1,5 @@
 defmodule Operator.Core.VoiceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import Operator.Test.LoopHelpers, only: [collect: 0]
   import Operator.Test.ObserverHelpers

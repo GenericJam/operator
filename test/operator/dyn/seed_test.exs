@@ -213,15 +213,29 @@ defmodule Operator.Core.Dyn.SeedTest do
       assert Seed.start(Dyn.Keeper, fn -> :ok end, @new) == :ignore
     end
 
-    test "an install that recorded nothing uses its seed generation's sources",
+    test "an install that recorded nothing keeps the user's files it merged in",
          %{tmp_dir: dir} do
       dyn = Path.join(dir, "dyn")
       start_keeper(dyn)
+      # The user's own files before the first seed, one at a seed path.
+      front = """
+      defmodule Operator.Dyn.Front do
+        def start, do: Operator.Dyn.Notes
+      end
+      """
+
+      notes = screen("Notes", "my notes")
+      activate!(%{"front.ex" => front, "notes.ex" => notes})
       install(Dyn.Keeper, @old)
-      # As an older app left it: the seed's generation, no record of its files.
+      # As a 1.0 app left it: no record of the seed's files, and the user's
+      # merged into the seed's generation (theirs winning at a seed path).
       File.rm!(Path.join(dyn, "seed.json"))
-      assert {:update, shipped} = Seed.needed(dyn, digests(@new))
-      assert shipped == digests(@old)
+
+      install(Dyn.Keeper, @new)
+      sources = Dyn.sources(Store.seed(dyn))
+      assert sources["front.ex"] == front
+      assert sources["notes.ex"] == notes
+      assert sources["welcome.ex"] == @new["welcome.ex"]
     end
   end
 

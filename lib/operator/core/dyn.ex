@@ -98,6 +98,14 @@ defmodule Operator.Core.Dyn do
     with {:ok, %{dir: dir}} <- Registry.config(keeper), do: Store.stage_put(dir, path, source)
   end
 
+  @doc "Creates `path` in staging without replacing an existing source."
+  @spec stage_create(String.t(), String.t(), atom()) ::
+          :ok | {:error, :bad_path | :exists | :not_running | File.posix()}
+  def stage_create(path, source, keeper \\ @keeper) do
+    with {:ok, %{dir: dir}} <- Registry.config(keeper),
+         do: Store.stage_create(dir, path, source)
+  end
+
   @spec stage_delete(String.t(), atom()) :: :ok | {:error, :bad_path | :not_running}
   def stage_delete(path, keeper \\ @keeper) do
     with {:ok, %{dir: dir}} <- Registry.config(keeper), do: Store.stage_delete(dir, path)

@@ -500,6 +500,13 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    to do: Kevin approves it with the screen lock, then check it's shown,
    survives a relaunch, and reverts.
 
+   Copy speed (2026-10-07, host, the current 86-file seed plus one
+   `dyn_copy`-style new screen, compile step only): before 78b3ebd (reused
+   files recompiled from source) 3.33 s for a Slider copy and 3.33 s for a
+   Date Picker copy; after it (the parent's binaries renamed) 0.21 s each,
+   86 files reused in both. Device time not re-measured: the Moto was
+   disconnected.
+
    Deferred (personal-use scope, Kevin 2026-10-03): no max_heap_size on the
    front Host (an out-of-memory front takes the app down; safe mode is the
    backstop); a cold-start `operator://` link can race the front push;

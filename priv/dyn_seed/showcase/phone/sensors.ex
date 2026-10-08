@@ -131,6 +131,11 @@ defmodule Operator.Dyn.Showcase.Phone.Sensors do
     end
   end
 
+  def terminate(_reason, socket) do
+    _ = stop(socket, "Stopped.")
+    :ok
+  end
+
   defp widget({:tap, :toggle}, %{assigns: %{running: true}} = socket),
     do: stop(socket, "Stopped.")
 

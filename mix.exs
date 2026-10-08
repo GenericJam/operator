@@ -4,7 +4,7 @@ defmodule Operator.MixProject do
   def project do
     [
       app: :operator,
-      version: "1.0.1",
+      version: "1.1.0",
       elixir: "~> 1.18",
       start_permanent: false,
       deps: deps(),
@@ -23,8 +23,16 @@ defmodule Operator.MixProject do
   end
 
   defp deps do
+    mob =
+      case System.get_env("MOB_PATH") do
+        nil -> {:mob, "~> 0.9.13"}
+        path -> {:mob, path: path, override: true}
+      end
+
     [
-      {:mob, "~> 0.9.12"},
+      mob,
+      # The cluster screen renders its short-lived phone-to-phone invite.
+      {:eqrcode, "~> 0.2"},
       {:mob_dev, "~> 0.7.16", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,

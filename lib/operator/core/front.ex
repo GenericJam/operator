@@ -203,6 +203,7 @@ defmodule Operator.Core.Front do
       subs: %{},
       host: nil,
       mon: nil,
+      capability_key: nil,
       stack: [],
       gen: nil,
       start: nil,
@@ -217,19 +218,19 @@ defmodule Operator.Core.Front do
   end
 
   @impl true
-  def handle_call({:subscribe, pid}, _from, s) do
+  def handle_call({:subscribe, pid}, {caller, _tag}, s) when pid == caller do
     subs =
       if Map.has_key?(s.subs, pid), do: s.subs, else: Map.put(s.subs, pid, Process.monitor(pid))
 
-    {:reply, snapshot(s), %{s | subs: subs}}
+    {:reply, snapshot(s, caller), %{s | subs: subs}}
   end
 
-  def handle_call({:show, env}, _from, s) do
+  def handle_call({:show, env}, {caller, _tag}, s) do
     if s.theme, do: Mob.Theme.set(s.theme)
     s = %{s | visible: true, env: env} |> sync()
     if s.host, do: Host.put_env(s.host, env)
     s = if s.host, do: s, else: start_host(s)
-    {:reply, snapshot(s), s}
+    {:reply, snapshot(s, caller), s}
   end
 
   def handle_call(:hide, _from, s), do: {:reply, :ok, hide_front(s)}
@@ -288,7 +289,15 @@ defmodule Operator.Core.Front do
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{mon: ref} = s) do
     Logger.warning("[front] the front screen stopped: #{inspect(reason, limit: 10)}")
-    {:noreply, broadcast(%{s | host: nil, mon: nil, view: {:error, crash_text(reason)}})}
+
+    {:noreply,
+     broadcast(%{
+       s
+       | host: nil,
+         mon: nil,
+         capability_key: nil,
+         view: {:error, crash_text(reason)}
+     })}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, s) do
@@ -337,8 +346,8 @@ defmodule Operator.Core.Front do
     Process.demonitor(s.mon, [:flush])
     # An orderly stop, not a crash of the front's generation.
     Dyn.Keeper.unwatch(s.keeper, s.host)
-    Process.exit(s.host, :kill)
-    %{s | host: nil, mon: nil}
+    _ = Host.stop(s.host)
+    %{s | host: nil, mon: nil, capability_key: nil}
   end
 
   defp start_host(s) do
@@ -348,10 +357,19 @@ defmodule Operator.Core.Front do
 
       stack ->
         screens = s.screens |> Map.values() |> MapSet.new()
-        {pid, mon} = Host.start(self(), stack, env(s), &MapSet.member?(screens, &1))
+
+        {pid, mon, capability_key} =
+          Host.start(self(), stack, env(s), &MapSet.member?(screens, &1))
+
         # Blank until the new host's first view: not the last one's error or
         # tree (whose taps went to a process that's gone).
-        broadcast(%{s | host: pid, mon: mon, view: {:note, ""}})
+        broadcast(%{
+          s
+          | host: pid,
+            mon: mon,
+            capability_key: capability_key,
+            view: {:note, ""}
+        })
     end
   end
 
@@ -531,8 +549,10 @@ defmodule Operator.Core.Front do
 
   defp snapshot(s), do: %{view: s.view, host: s.host}
 
+  defp snapshot(s, _pid), do: Map.put(snapshot(s), :capability_key, s.capability_key)
+
   defp broadcast(s) do
-    for pid <- Map.keys(s.subs), do: send(pid, {:operator_front, snapshot(s)})
+    for pid <- Map.keys(s.subs), do: send(pid, {:operator_front, snapshot(s, pid)})
     s
   end
 end

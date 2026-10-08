@@ -26,16 +26,19 @@ defmodule Operator.Cluster do
 
   ## Pairing and membership
 
-  `invite/0` opens a pairing window (#{5} minutes) and returns the link
-  (`Operator.Cluster.Invite`) the screen shows as a QR. The other side
-  confirms it with the screen lock, then `join/1`: it pins the inviter,
-  takes its cookie, turns the cluster on and connects. The inviter lets the
-  unpinned certificate through only because the window is open, and pins it
-  once the peer has passed the cookie and said (`hello`) which fingerprint
-  is its own. Members tell each other the peers they pinned (introduced
-  trust: every member can already run code on every other one) and
-  revocations (`forget/1`), which are never undone by gossip. `reset/0`
-  forgets everything and makes a new cookie.
+  `invite/0` opens a pairing window (#{5} minutes) with a fresh secret and
+  returns the link (`Operator.Cluster.Invite`) the screen shows as a QR.
+  The other side confirms it with the screen lock, then `join/1`: it pins
+  the inviter, takes its cookie, turns the cluster on and connects. The
+  inviter lets the unpinned certificate through only because the window is
+  open, and pins it once the peer has passed the cookie and said (`hello`)
+  which fingerprint is its own, with that window's secret: the cookie alone
+  doesn't bring back a forgotten member. Members tell each other the peers
+  they pinned (introduced trust: every member can already run code on every
+  other one) and revocations (`forget/1`), which are never undone by
+  gossip. At most #{32} members and #{64} identities (members and
+  revocations) are kept. `reset/0` forgets everything and makes a new
+  cookie.
 
   State: `<data dir>/cluster/cluster.json` (on/off, peers; no secret), the
   cookie and the key in the secure store.
@@ -58,6 +61,8 @@ defmodule Operator.Cluster do
   @window_ms 5 * 60_000
   @reconnect_ms 30_000
   @start_delay_ms 3_000
+  @max_peers 32
+  @max_identities 64
   @cookie_account "cluster_cookie"
   @dev_node :"operator_android@127.0.0.1"
   @pg_scope :operator_cluster
@@ -208,6 +213,8 @@ defmodule Operator.Cluster do
       address: nil,
       fingerprint: nil,
       window_until: nil,
+      window_secret: nil,
+      join_secret: nil,
       error: nil,
       subscribers: MapSet.new(),
       dev_node: Keyword.get(opts, :dev_node, @dev_node),
@@ -245,8 +252,13 @@ defmodule Operator.Cluster do
   def handle_call(:invite, _from, %{running: false} = s), do: {:reply, {:error, :not_running}, s}
 
   def handle_call(:invite, _from, s) do
-    {:ok, cookie} = cookie()
+    # A fresh cookie per invite, given to every member connected now: an
+    # earlier QR (and the cookie in it) can't open distribution in this or
+    # a later window. A member offline meanwhile rejoins with a new invite.
+    {:ok, cookie} = rotate_cookie(s)
+    broadcast({:cookie, cookie})
     until = System.monotonic_time(:millisecond) + @window_ms
+    secret = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
     :ok = Tls.open_window(until)
     Process.send_after(self(), :window_check, @window_ms + 100)
 
@@ -255,38 +267,39 @@ defmodule Operator.Cluster do
         node: Atom.to_string(s.node),
         fingerprint: s.fingerprint,
         cookie: cookie,
+        secret: secret,
         port: @port
       })
 
-    {:reply, {:ok, link}, changed(%{s | window_until: until})}
+    {:reply, {:ok, link}, changed(%{s | window_until: until, window_secret: secret})}
   end
 
   def handle_call(:close_pairing, _from, s), do: {:reply, :ok, changed(close_window(s))}
 
   def handle_call({:join, invite}, _from, s) do
-    with :ok <- put_cookie(invite.cookie),
-         :ok <- same_port(invite.port) do
+    with :ok <- admissible_invite(s, invite),
+         :ok <- same_port(invite.port),
+         :ok <- adopt_cookie(s, invite) do
       s = pin(s, invite.fingerprint, invite.node)
-      s = %{s | enabled: true}
+      s = %{s | enabled: true, join_secret: invite.secret}
+      Process.send_after(self(), {:join_expired, invite.secret}, @window_ms)
       save(s)
-
-      case if(s.running, do: {:ok, s}, else: start_cluster(s)) do
-        {:ok, s} ->
-          Node.set_cookie(String.to_atom(invite.cookie))
-          connect_async(String.to_atom(invite.node))
-          {:reply, :ok, changed(s)}
-
-        {:error, reason, s} ->
-          {:reply, {:error, reason}, changed(s)}
-      end
+      complete_join(s, invite)
     else
       {:error, _} = error -> {:reply, error, s}
     end
   end
 
+  # The forgotten peer kept the cookie, which would still get it through
+  # distribution's handshake (and with that, everything) while any later
+  # pairing window is open: the cookie is replaced, here and on every member
+  # reachable now. A member offline meanwhile rejoins with a new invite.
   def handle_call({:forget, fingerprint}, _from, s) do
     s = revoke(s, fingerprint)
     broadcast({:revoke, fingerprint})
+
+    with {:ok, cookie} <- rotate_cookie(s), do: broadcast({:cookie, cookie})
+
     {:reply, :ok, changed(s)}
   end
 
@@ -306,10 +319,22 @@ defmodule Operator.Cluster do
     {:reply, :ok, %{s | subscribers: MapSet.put(s.subscribers, pid)}}
   end
 
+  defp complete_join(s, invite) do
+    case if(s.running, do: {:ok, s}, else: start_cluster(s)) do
+      {:ok, s} ->
+        Node.set_cookie(String.to_atom(invite.cookie))
+        connect_async(String.to_atom(invite.node))
+        {:reply, :ok, changed(s)}
+
+      {:error, reason, s} ->
+        {:reply, {:error, reason}, changed(s)}
+    end
+  end
+
   # A peer says who it is and whom it trusts (after nodeup, both ways).
   @impl true
-  def handle_cast({:hello, node, fingerprint, peers}, s) when is_atom(node) do
-    {:noreply, changed(hello(s, node, fingerprint, peers))}
+  def handle_cast({:hello, node, fingerprint, peers, secret}, s) when is_atom(node) do
+    {:noreply, changed(hello(s, node, fingerprint, peers, secret))}
   end
 
   def handle_cast({:pins, from, peers}, s) when is_atom(from) do
@@ -322,6 +347,13 @@ defmodule Operator.Cluster do
       else: {:noreply, s}
   end
 
+  def handle_cast({:cookie, from, cookie}, s) when is_atom(from) and is_binary(cookie) do
+    if member?(s, from) and Regex.match?(~r/\A[A-Za-z0-9_-]{16,128}\z/, cookie),
+      do: take_cookie(s, cookie)
+
+    {:noreply, s}
+  end
+
   def handle_cast(_other, s), do: {:noreply, s}
 
   @impl true
@@ -330,8 +362,15 @@ defmodule Operator.Cluster do
       {:ok, s} ->
         {:noreply, changed(s)}
 
+      # Only another launch fixes this one.
+      {:error, :restart_needed, s} ->
+        start_dev_link(s)
+        {:noreply, changed(s)}
+
+      # No Wi-Fi yet, or it failed this time: try again while still enabled.
       {:error, _reason, s} ->
         start_dev_link(s)
+        Process.send_after(self(), :boot_dist, @reconnect_ms)
         {:noreply, changed(s)}
     end
   end
@@ -342,7 +381,8 @@ defmodule Operator.Cluster do
   end
 
   def handle_info({:nodeup, node, _info}, %{running: true} = s) do
-    GenServer.cast({__MODULE__, node}, {:hello, Node.self(), s.fingerprint, wire_peers(s)})
+    hello = {:hello, Node.self(), s.fingerprint, wire_peers(s), s.join_secret}
+    GenServer.cast({__MODULE__, node}, hello)
     {:noreply, changed(s)}
   end
 
@@ -365,6 +405,9 @@ defmodule Operator.Cluster do
       do: {:noreply, changed(close_window(s))},
       else: {:noreply, s}
   end
+
+  def handle_info({:join_expired, secret}, %{join_secret: secret} = s),
+    do: {:noreply, %{s | join_secret: nil}}
 
   def handle_info({:DOWN, _ref, :process, pid, _}, s),
     do: {:noreply, %{s | subscribers: MapSet.delete(s.subscribers, pid)}}
@@ -469,7 +512,8 @@ defmodule Operator.Cluster do
 
   # ── pinning ──
 
-  defp hello(s, node, fingerprint, peers) when is_binary(fingerprint) and is_list(peers) do
+  defp hello(s, node, fingerprint, peers, secret)
+       when is_binary(fingerprint) and is_list(peers) do
     cond do
       revoked?(s, fingerprint) ->
         Node.disconnect(node)
@@ -478,29 +522,53 @@ defmodule Operator.Cluster do
       pinned?(s, fingerprint) ->
         s |> rename(fingerprint, Atom.to_string(node)) |> merge(peers)
 
-      Tls.take_pending(fingerprint) ->
-        Logger.info("[cluster] paired with #{node}")
-        s = pin(s, fingerprint, Atom.to_string(node))
-        broadcast_pins(s)
-        merge(s, peers)
+      window_secret?(s, secret) and Tls.take_pending(fingerprint) ->
+        admit(s, node, fingerprint, peers)
 
       true ->
-        # Connected without a pinned or pending certificate: not ours.
+        # Connected without a pinned certificate, or a pending one without
+        # this window's secret: not ours.
         Node.disconnect(node)
         s
     end
   end
 
-  defp hello(s, _node, _fingerprint, _peers), do: s
+  defp hello(s, _node, _fingerprint, _peers, _secret), do: s
+
+  defp admit(s, node, fingerprint, peers) do
+    s = pin(s, fingerprint, Atom.to_string(node))
+
+    if pinned?(s, fingerprint) do
+      Logger.info("[cluster] paired with #{node}")
+      broadcast_pins(s)
+      merge(s, peers)
+    else
+      Logger.warning("[cluster] refused #{node}: the cluster is full")
+      Node.disconnect(node)
+      s
+    end
+  end
+
+  defp window_secret?(%{window_secret: expected}, secret)
+       when is_binary(expected) and is_binary(secret) and
+              byte_size(expected) == byte_size(secret),
+       do: :crypto.hash_equals(expected, secret)
+
+  defp window_secret?(_s, _secret), do: false
 
   defp member?(s, node),
     do: Enum.any?(s.peers, &(&1.node == Atom.to_string(node) and not &1.revoked))
 
-  # Peers a member introduces; never resurrects a revoked one.
+  # Peers a member introduces; never resurrects a revoked one. Revocations of
+  # identities this node never knew are kept while there's room.
   defp merge(s, peers) when is_list(peers) do
     Enum.reduce(peers, s, fn
       %{fingerprint: fp, node: node, revoked: true}, acc when is_binary(fp) and is_binary(node) ->
-        if fp == acc.fingerprint, do: acc, else: revoke(acc, fp, node)
+        cond do
+          fp == acc.fingerprint -> acc
+          known?(acc, fp) or length(acc.peers) < @max_identities -> revoke(acc, fp, node)
+          true -> acc
+        end
 
       %{fingerprint: fp, node: node}, acc when is_binary(fp) and is_binary(node) ->
         if fp == acc.fingerprint or known?(acc, fp), do: acc, else: pin(acc, fp, node)
@@ -513,17 +581,23 @@ defmodule Operator.Cluster do
   defp merge(s, _peers), do: s
 
   defp pin(s, fingerprint, node) do
-    if revoked?(s, fingerprint) do
-      s
-    else
-      peers =
-        Enum.reject(s.peers, &(&1.fingerprint == fingerprint)) ++
-          [%{fingerprint: fingerprint, node: node, revoked: false}]
+    cond do
+      revoked?(s, fingerprint) ->
+        s
 
-      s = %{s | peers: peers}
-      save(s)
-      sync_pins(s)
-      s
+      known?(s, fingerprint) ->
+        rename(s, fingerprint, node)
+
+      Enum.count(s.peers, &(not &1.revoked)) >= @max_peers or
+          length(s.peers) >= @max_identities ->
+        s
+
+      true ->
+        peers = s.peers ++ [%{fingerprint: fingerprint, node: node, revoked: false}]
+        s = %{s | peers: peers}
+        save(s)
+        sync_pins(s)
+        s
     end
   end
 
@@ -550,13 +624,20 @@ defmodule Operator.Cluster do
     s = %{s | peers: peers}
     save(s)
     sync_pins(s)
-    if node != "", do: Node.disconnect(String.to_atom(node))
+    if node != "", do: disconnect(node)
     s
   end
 
   defp known?(s, fp), do: Enum.any?(s.peers, &(&1.fingerprint == fp))
   defp pinned?(s, fp), do: Enum.any?(s.peers, &(&1.fingerprint == fp and not &1.revoked))
   defp revoked?(s, fp), do: Enum.any?(s.peers, &(&1.fingerprint == fp and &1.revoked))
+
+  # Never creates an atom from a name a peer gossiped.
+  defp disconnect(node) do
+    Node.disconnect(String.to_existing_atom(node))
+  rescue
+    ArgumentError -> false
+  end
 
   defp sync_pins(s) do
     {revoked, pinned} = Enum.split_with(s.peers, & &1.revoked)
@@ -577,7 +658,7 @@ defmodule Operator.Cluster do
 
   defp close_window(s) do
     Tls.close_window()
-    %{s | window_until: nil}
+    %{s | window_until: nil, window_secret: nil}
   end
 
   # ── cookie ──
@@ -596,7 +677,60 @@ defmodule Operator.Cluster do
     end
   end
 
-  defp put_cookie(cookie), do: Operator.SecureStore.put(@cookie_account, cookie)
+  defp rotate_cookie(s),
+    do: take_cookie(s, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
+
+  defp take_cookie(s, cookie) do
+    case Operator.SecureStore.put(@cookie_account, cookie) do
+      :ok ->
+        if s.running, do: Node.set_cookie(String.to_atom(cookie))
+        {:ok, cookie}
+
+      {:error, reason} = error ->
+        Logger.error("[cluster] cookie not stored: #{inspect(reason)}")
+        error
+    end
+  end
+
+  defp admissible_invite(s, invite) do
+    cond do
+      revoked?(s, invite.fingerprint) ->
+        {:error, :revoked}
+
+      known?(s, invite.fingerprint) ->
+        :ok
+
+      Enum.count(s.peers, &(not &1.revoked)) >= @max_peers or
+          length(s.peers) >= @max_identities ->
+        {:error, :peer_limit}
+
+      true ->
+        :ok
+    end
+  end
+
+  # A member that missed a cookie change (it was offline when a peer was
+  # forgotten) takes the new one from an invite of a member it has pinned.
+  defp adopt_cookie(s, %{cookie: new_cookie, fingerprint: inviter}) do
+    case Operator.SecureStore.get(@cookie_account) do
+      {:ok, nil} ->
+        Operator.SecureStore.put(@cookie_account, new_cookie)
+
+      {:ok, ^new_cookie} ->
+        :ok
+
+      {:ok, _other} when s.peers == [] ->
+        Operator.SecureStore.put(@cookie_account, new_cookie)
+
+      {:ok, _other} ->
+        if pinned?(s, inviter),
+          do: Operator.SecureStore.put(@cookie_account, new_cookie),
+          else: {:error, :different_cluster}
+
+      {:error, _} = error ->
+        error
+    end
+  end
 
   defp same_port(@port), do: :ok
   defp same_port(_other), do: {:error, :other_port}
@@ -638,7 +772,7 @@ defmodule Operator.Cluster do
   end
 
   defp status_map(s) do
-    connected = Node.list()
+    connected = Enum.map(Node.list(), &Atom.to_string/1)
 
     %{
       enabled: s.enabled,
@@ -652,7 +786,7 @@ defmodule Operator.Cluster do
       error: s.error,
       peers:
         for peer <- s.peers do
-          Map.put(peer, :connected, s.running and String.to_atom(peer.node) in connected)
+          Map.put(peer, :connected, s.running and peer.node in connected)
         end
     }
   end

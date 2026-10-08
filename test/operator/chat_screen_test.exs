@@ -59,8 +59,20 @@ defmodule Operator.ChatScreenTest do
     end
   end
 
-  defp send_text(view, text),
-    do: view |> render_info({:change, :draft, text}) |> render_info({:tap, :send})
+  defp draft_tag(view), do: {:draft, assigns(view).field_gen}
+
+  defp change_draft(view, text), do: render_info(view, {:change, draft_tag(view), text})
+
+  defp tap_send(view) do
+    tag = draft_tag(view)
+    view = render_info(view, {:tap, :send})
+
+    if assigns(view).pending_send,
+      do: render_info(view, {:blur, tag}),
+      else: view
+  end
+
+  defp send_text(view, text), do: view |> change_draft(text) |> tap_send()
 
   defp button?(view, label), do: find(view, :button, text: label) != nil
 
@@ -498,7 +510,7 @@ defmodule Operator.ChatScreenTest do
       assert find(view, :text, text: "[x] picked.png 4 B")
       assert find(view, :text, text: "[x] camera.jpg 4 B")
 
-      view = view |> render_info({:tap, :send}) |> pump(:agent_end)
+      view = view |> tap_send() |> pump(:agent_end)
       [%{messages: [%{content: parts}]}] = FakeLLM.requests(llm)
       assert Enum.map(parts, & &1.type) == [:text, :image, :text, :image]
       assert text(view) =~ "› + picked.png · 4 B"
@@ -625,7 +637,7 @@ defmodule Operator.ChatScreenTest do
 
       view =
         view
-        |> render_info({:change, :draft, "fix the "})
+        |> change_draft("fix the ")
         |> dictate([:listening], [{:final, "flaky test please"}])
 
       assert assigns(view).dictation == :listening
@@ -642,7 +654,7 @@ defmodule Operator.ChatScreenTest do
       # a second dictation appends to the edited draft, not the old base
       view =
         view
-        |> render_info({:change, :draft, "fix the flaky test please, then"})
+        |> change_draft("fix the flaky test please, then")
         |> dictate([:listening], [{:final, "commit"}])
         |> release()
         |> speech(:idle)
@@ -657,7 +669,7 @@ defmodule Operator.ChatScreenTest do
 
       view =
         view
-        |> render_info({:change, :draft, "keep me"})
+        |> change_draft("keep me")
         |> dictate([:listening], [{:final, "never"}])
         |> render_info({:press_out, :mic})
         |> speech(:idle)
@@ -697,9 +709,9 @@ defmodule Operator.ChatScreenTest do
   end
 
   describe "the composer" do
-    # Tapping the field focuses it: {:focus, :draft} opens the composer,
-    # which slides up over a few frames.
-    defp open(view), do: view |> render_info({:focus, :draft}) |> slide()
+    # Tapping the field focuses it: the generation-tagged focus event opens
+    # the composer, which slides up over a few frames.
+    defp open(view), do: view |> render_info({:focus, draft_tag(view)}) |> slide()
 
     defp slide(view) do
       if assigns(view).slide do
@@ -716,16 +728,17 @@ defmodule Operator.ChatScreenTest do
     test "tapping the field opens it over a live sliver of the transcript; [hide] keeps the draft",
          %{tmp_dir: dir} do
       %{view: view} = mount_chat(dir, [[{:text, "first reply"}, {:sleep, 200}]])
-      closed = field(view)
       assert transcript(view).props.weight == 1
       refute find(view, :text, text: "[hide]")
 
-      # opened while the agent works on a message sent from the closed bar
-      view = view |> send_text("one") |> pump(:message_update) |> open()
-      view = render_info(view, {:change, :draft, "line one\nline two"})
+      # opened while the agent works on a message sent from the closed bar;
+      # sending retired the old field, and opening keeps the replacement.
+      view = view |> send_text("one") |> pump(:message_update)
+      sent_field = field(view)
+      view = open(view)
+      view = change_draft(view, "line one\nline two")
       assert assigns(view).composing
-      # the same field (its focus and keyboard carry over), now tall
-      assert field(view).props.id == closed.props.id
+      assert field(view).props.id == sent_field.props.id
       assert field(view).props.lines > 1
       assert field(view).props.value == "line one\nline two"
       assert find(view, :text, text: "[hide]")
@@ -758,8 +771,8 @@ defmodule Operator.ChatScreenTest do
       view =
         view
         |> open()
-        |> render_info({:change, :draft, "two\nlines"})
-        |> render_info({:tap, :send})
+        |> change_draft("two\nlines")
+        |> tap_send()
 
       refute assigns(view).composing
       assert assigns(view).draft == ""
@@ -771,9 +784,54 @@ defmodule Operator.ChatScreenTest do
       assert text(view) =~ "done"
     end
 
+    test "Send commits the active IME text and ignores that field after sending", %{tmp_dir: dir} do
+      %{view: view, llm: llm} = mount_chat(dir, [[{:text, "done"}]])
+      view = open(view)
+      old_tag = draft_tag(view)
+      view = change_draft(view, "compose")
+
+      # Send replaces the focused native field. Its final composition arrives
+      # before blur, then blur commits the message.
+      view = render_info(view, {:tap, :send})
+      refute assigns(view).composing
+      assert assigns(view).pending_send == elem(old_tag, 1)
+      view = render_info(view, {:change, old_tag, "composed"})
+      view = render_info(view, {:blur, old_tag})
+
+      assert assigns(view).draft == ""
+      refute assigns(view).pending_send
+
+      # Queued events from that retired native field cannot resurrect text or
+      # reopen the composer after the send.
+      view = render_info(view, {:change, old_tag, "stale"})
+      view = render_info(view, {:focus, old_tag})
+      assert assigns(view).draft == ""
+      refute assigns(view).composing
+
+      _view = pump(view, :agent_end)
+      [%{messages: [%{content: [typed]}]}] = FakeLLM.requests(llm)
+      assert typed.text == "composed"
+    end
+
+    test "a closed-bar send retires that field before queued native changes arrive", %{
+      tmp_dir: dir
+    } do
+      %{view: view, llm: llm} = mount_chat(dir, [[{:text, "done"}]])
+      old_tag = draft_tag(view)
+      view = view |> change_draft("from the bar") |> tap_send()
+
+      assert draft_tag(view) != old_tag
+      view = render_info(view, {:change, old_tag, "late native value"})
+      assert assigns(view).draft == ""
+
+      _view = pump(view, :agent_end)
+      [%{messages: [%{content: [typed]}]}] = FakeLLM.requests(llm)
+      assert typed.text == "from the bar"
+    end
+
     test "an empty draft doesn't send or close", %{tmp_dir: dir} do
       %{view: view, llm: llm} = mount_chat(dir, [])
-      view = view |> open() |> render_info({:tap, :send})
+      view = view |> open() |> tap_send()
       assert assigns(view).composing
       assert FakeLLM.requests(llm) == []
     end
@@ -794,7 +852,7 @@ defmodule Operator.ChatScreenTest do
       assert assigns(view).composing
       assert find(view, :text, text: "[x] notes.txt 9 B")
 
-      view = view |> render_info({:tap, :send}) |> pump(:agent_end)
+      view = view |> tap_send() |> pump(:agent_end)
       refute assigns(view).composing
       refute find(view, :text, text: "[x] notes.txt 9 B")
       [%{messages: [%{content: [file]}]}] = FakeLLM.requests(llm)
@@ -807,7 +865,7 @@ defmodule Operator.ChatScreenTest do
       view =
         view
         |> open()
-        |> render_info({:change, :draft, "fix the"})
+        |> change_draft("fix the")
         |> dictate([:listening], [{:final, "flaky test"}])
         |> release()
         |> speech(:idle)

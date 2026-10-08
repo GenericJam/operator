@@ -23,11 +23,11 @@ defmodule Operator.Core.Files do
 
   What the phone's capabilities hand a screen (a `Mob.Files.pick/2` pick, a
   `MobCamera` photo, a `MobPhotos` pick, a recording) is a file in the app's
-  temporary files (Android's cache dir, iOS's tmp), which is no root;
-  `keep/2` copies one into the workspace's `inbox/`, where `read/1`
-  reaches it. It takes nothing else: only a regular file under that dir,
-  after `..` and symlinks are resolved, so no app-private file (sessions,
-  the Dyn store, settings) can be pulled into the workspace through it.
+  temporary files (Android's cache dir, iOS's tmp), which is no root.
+  `Operator.ShellScreen` marks the exact paths delivered by native code for
+  the current front host; `keep/2` consumes one such process-local grant and
+  copies that file into the workspace's `inbox/`, where `read/1` reaches it.
+  Merely guessing another cache filename is not authorization.
 
   `ctx[:file_roots]` replaces the roots (tests); otherwise the workspace is
   under `ctx[:data_dir]` or `Operator.Paths.data_dir/0`. The app env
@@ -46,6 +46,7 @@ defmodule Operator.Core.Files do
         }
 
   @shared "/storage/emulated/0"
+  @capability_grants {__MODULE__, :capability_grants}
 
   @doc false
   @spec roots(map()) :: [root()]
@@ -179,17 +180,17 @@ defmodule Operator.Core.Files do
   end
 
   @doc """
-  Copies a file from the app's temporary files (a capability's output: a
-  `Mob.Files.pick/2` item's `path`, a photo, a recording) into the
-  workspace's `inbox/`, as `name` if given (else its own name; `name-2`, …
-  if taken), and returns its path there. Anything but a regular file under
-  the temporary files' dir is `{:error, text}` (see the moduledoc).
+  Copies one native capability result into the workspace's `inbox/`, as
+  `name` if given (else its own name; `name-2`, … if taken), and returns its
+  path there. The exact path must first have arrived from native code through
+  `grant_capability/1`; each grant is consumed by one call.
   """
   @spec keep(String.t(), String.t() | nil) :: {:ok, Path.t()} | {:error, String.t()}
   def keep(path, name \\ nil)
 
   def keep(path, name) when is_binary(path) do
-    with {:ok, src} <- app_temp_file(path) do
+    with {:ok, src} <- app_temp_file(path),
+         :ok <- consume_grant(src) do
       inbox = Path.join(workspace(), "inbox")
       dest = Attachments.unique(inbox, Attachments.named(plain_name(name), src))
 
@@ -203,6 +204,62 @@ defmodule Operator.Core.Files do
   end
 
   def keep(other, _name), do: {:error, "Not a path: #{inspect(other, limit: 5)}."}
+
+  @doc false
+  @spec grant_capability(term()) :: :ok
+  def grant_capability(result) do
+    granted =
+      result
+      |> capability_paths()
+      |> Enum.reduce(grants(), fn path, acc ->
+        case app_temp_file(path) do
+          {:ok, real} -> MapSet.put(acc, real)
+          {:error, _reason} -> acc
+        end
+      end)
+
+    Process.put(@capability_grants, granted)
+    :ok
+  end
+
+  @doc "Reads and removes a temporary thumbnail of an authorized workspace/shared image."
+  @spec thumbnail(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def thumbnail(path, opts \\ []) do
+    with {:ok, source, _root} <- resolve(path, :read),
+         {:ok, %{path: thumb}} <- MobPhotos.thumbnail(source, opts) do
+      try do
+        File.read(thumb)
+      after
+        _ = File.rm(thumb)
+      end
+    end
+  end
+
+  defp consume_grant(path) do
+    granted = grants()
+
+    if MapSet.member?(granted, path) do
+      Process.put(@capability_grants, MapSet.delete(granted, path))
+      :ok
+    else
+      {:error, "#{path} wasn't handed to this screen by a phone capability."}
+    end
+  end
+
+  defp grants, do: Process.get(@capability_grants, MapSet.new())
+
+  defp capability_paths({:files, :picked, items}) when is_list(items),
+    do: paths(items)
+
+  defp capability_paths({:photos, :picked, items}) when is_list(items),
+    do: paths(items)
+
+  defp capability_paths({:camera, :photo, item}) when is_map(item), do: paths([item])
+  defp capability_paths({:audio, :recorded, item}) when is_map(item), do: paths([item])
+  defp capability_paths(_result), do: []
+
+  defp paths(items),
+    do: for(%{path: path} <- items, is_binary(path), do: path)
 
   defp app_temp_file(path) do
     case app_temp() do

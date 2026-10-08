@@ -15,7 +15,7 @@ Operator is an Android (and, in progress, iOS) app with two sides:
   the phone, takes photos, reads your location, looks things up, and writes
   Elixir. Hold the mic to talk: speech is transcribed on the phone, offline.
 - **The front is whatever you want.** It opens on a welcome screen with two
-  ways on: the terminal and the **component library**, 60
+  ways on: the terminal and the **component library**, 77
   [Mishka Chelekom](https://mishka.tools) widget pages plus working widgets
   for the phone's capabilities (camera, microphone, location, sensors, QR,
   Bluetooth, NFC, MIDI, ...). Ask for a screen, a tracker, a game, a weird
@@ -23,8 +23,8 @@ Operator is an Android (and, in progress, iOS) app with two sides:
   page hands that widget to the agent. The rotary dial in the front's
   upper-left corner opens the terminal; there, `[frontend]` goes back and
   `[menu]` holds sign-in, model, sessions, usage (the subscription's 5-hour
-  and weekly windows, tokens), the component library and diagnostics.
-  `[attach]` sends photos and files with a message.
+  and weekly windows, tokens), the component library, a secure local cluster,
+  and diagnostics. `[attach]` sends photos and files with a message.
 
 Every change the agent makes to the app is compiled and self-tested on the
 phone, then waits for **your screen lock** (fingerprint, face or PIN). New code
@@ -44,9 +44,8 @@ on an Android 9+ phone, open it, and allow your browser or Files app to install
 it. In Operator, tap the dial for the terminal, then `[menu] › accounts` to sign
 in with your own Claude or ChatGPT subscription.
 
-> **Status:** 1.0.1, sideloaded from GitHub; not in any store. Tested on a Moto
-> G 2021 and 2024 (Android 11 and 15). The iPhone port runs on the simulator and
-> is under way on a device. Expect sharp edges.
+> **Status:** 1.1.0, sideloaded from GitHub; not in any store. Tested on a Moto
+> G 2021 (Android 11) and a physical iPhone. Expect sharp edges.
 
 ## What it can do
 
@@ -63,6 +62,7 @@ in with your own Claude or ChatGPT subscription.
 | **Voice** | hold-to-talk dictation with on-device Whisper ([mob_speech](https://hex.pm/packages/mob_speech) + [mob_whisper](https://hex.pm/packages/mob_whisper)); spoken updates when a run ends |
 | **Background** | keeps a run going with the screen off (Android foreground service; iOS audio-session keep-alive) |
 | **Plugins** | camera, photos, location, scanner, notify, Bluetooth, biometric, video, screencast, touch, wake, themes, Mishka, and more on the way, all available to front screens |
+| **Local cluster** | Optional TLS 1.3 Erlang distribution between Operators on one private LAN: QR invite, screen-lock approval, pinned per-install certificates, peer revocation, and a bounded topic/service API. Off by default; trusted peers have full BEAM authority. See [`docs/CLUSTER.md`](docs/CLUSTER.md). |
 
 ## Moving work from your computer to the phone
 
@@ -136,12 +136,12 @@ mix credo --strict
 | `lib/operator/core/` | the Core: agent loop, session, LLM adapters, tools, Dyn engine (`dyn/`), the front host, theme, voice, keep-alive |
 | `lib/operator/*_screen.ex` | chat (terminal), menu (settings), usage, shell (front), diagnostics, rescue, QR scanner |
 | `lib/operator/auth*` | provider sign-in, token refresh, QR login transfer |
-| `lib/operator/handoff*`, `links.ex` | `operator://` links: handoff, login, update server |
+| `lib/operator/cluster*`, `src/operator_{dist,epmd}.erl` | optional local TLS cluster: identity, pairing, pinning, fixed-port distribution and bounded application bus |
 | `lib/mix/tasks/` | the Mac-side tasks (`operator.handoff`, `.login`, `.deliver.*`, `.publish`, `.docs`) |
 | `priv/dyn_seed/` | the default front (welcome screen, component library: `showcase/components/` Mishka pages, `showcase/phone/` capability widgets), installed as a generation; a newer seed is merged in on update, user edits kept |
 | `priv/docs/` | the docs bundled for the phone agent (`mix operator.docs` refreshes them) |
 | `android/`, `ios/` | the native apps: approval prompt, Markdown view, secure store, deep links |
-| `docs/DESIGN.md` | why it's built this way: Core vs Dyn, generations, the safety pipeline |
+| `docs/DESIGN.md`, `docs/CLUSTER.md` | self-modification architecture; local-cluster security, operation and the headless/Nerves path |
 | `PLAN.md` | what's built, what's verified on which device, and what's next |
 
 ## License

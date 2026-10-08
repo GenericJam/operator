@@ -32,6 +32,9 @@ defmodule Operator.Core.Dyn.Check do
       and listing every process (`Process.list/0`, `:erlang.processes/0`);
       `:persistent_term` only to read (`put` / `erase` change VM-wide state
       and trigger a global GC);
+    * not the router's name, `:mob_screen`: whatever arrives there is handed
+      to the front host as a native reply, so a front screen sending to it
+      could forge a capability grant (a picked file);
     * Operator's own modules are off limits except `Operator.Core.Tool`
       (the behaviour a Dyn tool implements), `Operator.Core.Files` (file
       access inside the workspace and, on Android, shared storage),
@@ -89,6 +92,8 @@ defmodule Operator.Core.Dyn.Check do
     "Code" => "compiles or evaluates code",
     "Module" => "defines or changes modules at runtime",
     "Port" => "runs OS processes",
+    "GenServer" => "reaches named Core processes directly",
+    "Registry" => "discovers processes outside the front host",
     "Node" => "controls distribution",
     "File" =>
       "touches the file system directly (use Operator.Core.Files: the same calls, inside its roots)",
@@ -117,6 +122,9 @@ defmodule Operator.Core.Dyn.Check do
     erl_ddll: "loads drivers",
     c: "is the shell",
     shell: "is the shell",
+    gen: "calls arbitrary processes through the raw OTP protocol",
+    gen_server: "calls arbitrary OTP servers",
+    global: "discovers globally registered processes",
     sys: "reaches into other processes' state",
     application: "starts and stops applications",
     seq_trace: "traces other processes",
@@ -138,8 +146,7 @@ defmodule Operator.Core.Dyn.Check do
     {:elixir, "String"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "List"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "Function"} => ~w(capture)a,
-    {:elixir, "Process"} => [:list],
-    # Paths are plain strings; only the wildcard reads the file system.
+    {:elixir, "Process"} => ~w(list info whereis registered)a,
     {:elixir, "Path"} => [:wildcard],
     {:elixir, "Kernel"} => [],
     {:elixir, "Mob.Screen"} =>
@@ -149,13 +156,15 @@ defmodule Operator.Core.Dyn.Check do
       ~w(halt open_port load_module purge_module delete_module check_old_code load_nif
          set_cookie system_flag make_fun binary_to_atom list_to_atom binary_to_existing_atom
          list_to_existing_atom suspend_process resume_process trace trace_pattern
-         trace_delivered trace_info system_monitor system_profile processes)a,
+         trace_delivered trace_info system_monitor system_profile processes process_info whereis
+         registered)a,
     {:erlang, :os} => ~w(cmd putenv unsetenv set_signal)a,
     {:erlang, :persistent_term} => ~w(put erase)a,
     # The file tools' side: these take a caller's roots (a forged ctx would
     # put the workspace, and its mkdir, anywhere); Dyn code gets the calls
     # that check against the real roots.
-    {:elixir, "Operator.Core.Files"} => ~w(roots workspace resolve needs_access? real_path)a
+    {:elixir, "Operator.Core.Files"} =>
+      ~w(roots workspace resolve needs_access? real_path grant_capability)a
   }
 
   # `{module, function, arity}` taking a module + function as data (index 0, 1).
@@ -180,6 +189,7 @@ defmodule Operator.Core.Dyn.Check do
   @kernel_mfa [:apply, :spawn, :spawn_link, :spawn_monitor]
   @forbidden_forms %{
     defmacro: "defines a macro",
+    receive: "blocks the shared front host and can intercept Core messages",
     defmacrop: "defines a macro",
     quote: "uses quote (macros are not allowed)",
     unquote: "uses unquote (macros are not allowed)",
@@ -187,6 +197,9 @@ defmodule Operator.Core.Dyn.Check do
     defprotocol: "defines a protocol",
     defimpl: "defines a protocol implementation (it would live outside Operator.Dyn)"
   }
+
+  @router :mob_screen
+  @router_why ":mob_screen is the router: native replies reach a front screen only through its host"
 
   @doc """
   Parses and checks `sources` (`%{relative_path => source}`). Returns the
@@ -315,6 +328,7 @@ defmodule Operator.Core.Dyn.Check do
        do: add(acc, ctx, meta, "captures #{name}/3: call it directly with a literal module")
 
   defp walk({{:., _, [recv, fun]}, meta, args}, ctx, acc) when is_atom(fun) and is_list(args) do
+    {args, acc} = router_args(args, meta, ctx, acc)
     acc = remote(recv, fun, args, meta, ctx, acc)
 
     case module_ref(recv, ctx) do
@@ -401,11 +415,19 @@ defmodule Operator.Core.Dyn.Check do
   # a variable
   defp walk({name, _meta, context}, _ctx, acc) when is_atom(name) and is_atom(context), do: acc
 
-  defp walk({form, _meta, args}, ctx, acc) when is_list(args),
-    do: walk(args, ctx, walk(form, ctx, acc))
+  defp walk({form, meta, args}, ctx, acc) when is_list(args) do
+    {args, acc} = router_args(args, meta, ctx, acc)
+    walk(args, ctx, walk(form, ctx, acc))
+  end
 
   defp walk({left, right}, ctx, acc), do: walk(right, ctx, walk(left, ctx, acc))
   defp walk(list, ctx, acc) when is_list(list), do: Enum.reduce(list, acc, &walk(&1, ctx, &2))
+
+  # The router's registered name. Whatever reaches it is forwarded to the shell
+  # and from there to the front host as a native reply (a capability grant):
+  # front code sending there could forge one. As a call's argument it's
+  # reported with the call's line (`router_args/4`); anywhere else, here.
+  defp walk(@router, ctx, acc), do: add(acc, ctx, [], @router_why)
 
   defp walk(atom, ctx, acc) when is_atom(atom) do
     case resolve_atom(atom) do
@@ -416,6 +438,12 @@ defmodule Operator.Core.Dyn.Check do
   end
 
   defp walk(_literal, _ctx, acc), do: acc
+
+  defp router_args(args, meta, ctx, acc) do
+    if @router in args,
+      do: {Enum.reject(args, &(&1 == @router)), add(acc, ctx, meta, @router_why)},
+      else: {args, acc}
+  end
 
   # ── calls ──
 
@@ -739,10 +767,20 @@ defmodule Operator.Core.Dyn.Check do
 
   defp beam_atoms(atoms, own) do
     for {_, atom} <- atoms,
-        "Elixir." <> name <- [Atom.to_string(atom)],
-        why <- [beam_module(name, own)],
+        why <- [beam_atom(atom, own)],
         why != nil,
-        do: "names #{name}, which #{why}"
+        do: why
+  end
+
+  defp beam_atom(@router, _own), do: @router_why
+
+  defp beam_atom(atom, own) do
+    with "Elixir." <> name <- Atom.to_string(atom),
+         why when is_binary(why) <- beam_module(name, own) do
+      "names #{name}, which #{why}"
+    else
+      _ -> nil
+    end
   end
 
   defp beam_module(name, own) do

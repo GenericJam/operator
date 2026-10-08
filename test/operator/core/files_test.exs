@@ -26,7 +26,11 @@ defmodule Operator.Core.FilesTest do
       nested = Path.join(cache, "mob_temp/clip.m4a")
       File.write!(nested, "audio")
 
+      :ok = Files.grant_capability({:files, :picked, [%{path: src}, %{path: nested}]})
       assert {:ok, kept} = Files.keep(src, "notes.txt")
+      assert {:error, message} = Files.keep(src, "notes.txt")
+      assert message =~ "wasn't handed to this screen"
+      :ok = Files.grant_capability({:audio, :recorded, %{path: src}})
       assert {:ok, again} = Files.keep(src, "notes.txt")
       assert {:ok, clip} = Files.keep(nested)
       on_exit(fn -> Enum.each([kept, again, clip], &File.rm/1) end)
@@ -38,6 +42,14 @@ defmodule Operator.Core.FilesTest do
       assert Files.read(kept) == {:ok, "one\ntwo\n"}
       # A copy: the screen can still show the original.
       assert File.read!(src) == "one\ntwo\n"
+    end
+
+    test "refuses a guessed temporary filename that no capability delivered", %{cache: cache} do
+      guessed = Path.join(cache, "old-picker-result.txt")
+      File.write!(guessed, "private")
+
+      assert {:error, message} = Files.keep(guessed)
+      assert message =~ "wasn't handed to this screen"
     end
 
     test "refuses the app's private files, .., symlinks out and directories",

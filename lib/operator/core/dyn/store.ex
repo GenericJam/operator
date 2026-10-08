@@ -252,6 +252,22 @@ defmodule Operator.Core.Dyn.Store do
     end
   end
 
+  @doc "Creates a staging source only when `rel` does not already exist."
+  @spec stage_create(Path.t(), String.t(), String.t()) ::
+          :ok | {:error, :bad_path | :exists | File.posix()}
+  def stage_create(root, rel, source) when is_binary(source) do
+    with {:ok, rel} <- valid_rel(rel) do
+      path = Path.join(staging_dir(root), rel)
+      File.mkdir_p!(Path.dirname(path))
+
+      case File.open(path, [:write, :exclusive], &IO.binwrite(&1, source)) do
+        {:ok, :ok} -> :ok
+        {:error, :eexist} -> {:error, :exists}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
   @spec stage_delete(Path.t(), String.t()) :: :ok | {:error, :bad_path}
   def stage_delete(root, rel) do
     with {:ok, rel} <- valid_rel(rel) do

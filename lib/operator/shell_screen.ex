@@ -21,9 +21,13 @@ defmodule Operator.ShellScreen do
 
   @zero %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
 
+  # Subscribed before `show/1`: the first view usually arrives after it (the
+  # host renders once started), and so do crashes, new generations and the
+  # front's requests for the terminal.
   def mount(_params, _session, socket) do
     _ = Front.subscribe()
-    {:ok, Mob.Socket.assign(socket, :front, Front.show(env(socket)))}
+    front = Front.show(env(socket)) |> Map.put_new(:capability_key, nil)
+    {:ok, Mob.Socket.assign(socket, :front, front)}
   end
 
   def render(assigns) do
@@ -34,8 +38,25 @@ defmodule Operator.ShellScreen do
     }
   end
 
-  def handle_info({:operator_front, snapshot}, socket),
-    do: {:noreply, Mob.Socket.assign(socket, :front, snapshot)}
+  def handle_info({:operator_front, snapshot}, socket) do
+    old = socket.assigns.front
+
+    key =
+      if old.host == snapshot.host,
+        do: old.capability_key,
+        else: Map.get(snapshot, :capability_key)
+
+    {:noreply, Mob.Socket.assign(socket, :front, Map.put(snapshot, :capability_key, key))}
+  end
+
+  def handle_info({:operator_front_capability, host, key}, socket)
+      when is_pid(host) and is_reference(key) do
+    if socket.assigns.front.host == host do
+      {:noreply, Mob.Socket.assign(socket, :front, %{socket.assigns.front | capability_key: key})}
+    else
+      {:noreply, socket}
+    end
+  end
 
   def handle_info({:tap, :operator_toggle}, socket) do
     :ok = Front.hide()
@@ -57,9 +78,13 @@ defmodule Operator.ShellScreen do
     {:noreply, Mob.Socket.reset_to(socket, Operator.ChatScreen, %{link: url})}
   end
 
-  # Everything else is the front screen's.
+  # Native capability replies arrive at :mob_screen. The unguessable key was
+  # handed directly from Core to this shell, never to front code.
   def handle_info(message, socket) do
-    with %{host: host} when is_pid(host) <- socket.assigns.front, do: send(host, message)
+    with %{host: host, capability_key: key} when is_pid(host) and is_reference(key) <-
+           socket.assigns.front,
+         do: send(host, {Operator.Core.Front.Host, :native, key, message})
+
     {:noreply, socket}
   end
 

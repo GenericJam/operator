@@ -153,6 +153,11 @@ defmodule Operator.Dyn.Showcase.Phone.Location do
     end
   end
 
+  def terminate(_reason, socket) do
+    _ = stop_updates(socket)
+    :ok
+  end
+
   # ── the buttons: ask for access first, act on the answer ──
 
   defp widget({:tap, :once}, socket), do: ask(socket, :once)

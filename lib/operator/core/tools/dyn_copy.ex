@@ -64,10 +64,9 @@ defmodule Operator.Core.Tools.DynCopy do
 
     with {:ok, new} <- new_module(args["module"], to),
          {:ok, source} <- read(from, keeper),
-         :ok <- absent(to, keeper),
          {:ok, old} <- top_module(source, from),
          copy = rename(source, old, new),
-         :ok <- put(to, copy, keeper) do
+         :ok <- put_new(to, copy, keeper) do
       {:ok, header(from, to, new, copy) <> "\n\n" <> listing(to, ctx)}
     end
   end
@@ -85,12 +84,14 @@ defmodule Operator.Core.Tools.DynCopy do
   end
 
   @doc """
-  `source` with every whole occurrence of module name `old` (alone or
-  before `.`) replaced by `new`.
+  `source` with every whole occurrence of module name `old` (alone, before
+  `.`, or root-qualified as `Elixir.<old>`) replaced by `new`.
   """
   @spec rename(String.t(), String.t(), String.t()) :: String.t()
   def rename(source, old, new) do
-    Regex.replace(~r/(?<![\w.])#{Regex.escape(old)}(?!\w)/, source, fn _ -> new end)
+    Regex.replace(~r/(?<![\w.])(Elixir\.)?#{Regex.escape(old)}(?!\w)/, source, fn _, root ->
+      root <> new
+    end)
   end
 
   defp new_module(nil, to), do: new_module(module_for(to), to)
@@ -125,38 +126,36 @@ defmodule Operator.Core.Tools.DynCopy do
     end
   end
 
-  defp absent(to, keeper) do
-    case Dyn.stage_read(to, keeper) do
-      {:error, :not_found} ->
-        :ok
-
-      {:ok, _} ->
-        {:error, "#{to} already exists in staging: pick another `to`, or dyn_edit that file"}
-
-      {:error, reason} ->
-        DynTool.error(reason, to)
-    end
-  end
-
   defp top_module(source, from) do
-    with {:ok, ast} <- Code.string_to_quoted(source),
-         [{:defmodule, _, [{:__aliases__, _, parts}, _]} | _] <-
-           Enum.filter(top_level(ast), &match?({:defmodule, _, _}, &1)),
-         true <- Enum.all?(parts, &is_atom/1) do
-      {:ok, Enum.map_join(parts, ".", &Atom.to_string/1)}
-    else
-      {:error, _} -> {:error, "#{from} doesn't parse, so its module can't be renamed"}
+    first_code_line =
+      source
+      |> String.split("\n")
+      |> Enum.find(fn line ->
+        trimmed = String.trim_leading(line)
+        trimmed != "" and not String.starts_with?(trimmed, "#")
+      end)
+
+    case first_code_line &&
+           Regex.run(
+             ~r/^[ \t]*defmodule[ \t]+((?:[A-Z][A-Za-z0-9_]*)(?:\.[A-Z][A-Za-z0-9_]*)*)[ \t]+do\b/,
+             first_code_line,
+             capture: :all_but_first
+           ) do
+      [module] -> {:ok, module}
       _ -> {:error, "#{from} defines no module to rename"}
     end
   end
 
-  defp top_level({:__block__, _, forms}), do: forms
-  defp top_level(form), do: [form]
+  defp put_new(to, copy, keeper) do
+    case Dyn.stage_create(to, copy, keeper) do
+      :ok ->
+        :ok
 
-  defp put(to, copy, keeper) do
-    case Dyn.stage_put(to, copy, keeper) do
-      :ok -> :ok
-      {:error, reason} -> DynTool.error(reason, to)
+      {:error, :exists} ->
+        {:error, "#{to} already exists in staging: pick another `to`, or dyn_edit that file"}
+
+      {:error, reason} ->
+        DynTool.error(reason, to)
     end
   end
 
