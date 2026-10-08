@@ -234,6 +234,14 @@ defmodule Operator.ChatScreen do
     {:noreply, socket}
   end
 
+  # Back from the front (`Operator.ShellScreen` going away): the native list
+  # was rebuilt at its top. Like a terminal, it shows the end again.
+  def handle_info(:operator_terminal_shown, socket) do
+    send(self(), :stick)
+    Process.send_after(self(), :stick, @attach_stick_ms)
+    {:noreply, Mob.Socket.assign(socket, following: true, last_offset: nil)}
+  end
+
   # Only the toast it was set for: a newer one keeps its full time.
   def handle_info({:clear_toast, text}, %{assigns: %{toast: text}} = socket),
     do: {:noreply, socket |> Mob.Socket.assign(:toast, nil) |> refresh()}
@@ -533,8 +541,13 @@ defmodule Operator.ChatScreen do
 
   # ── self-modification proposals (Operator.Core.Dyn) ──
 
-  def handle_info({:operator_dyn, %{type: :candidate, gen: n}}, socket),
-    do: {:noreply, socket |> Mob.Socket.assign(:proposal, proposal(n)) |> repaint()}
+  # The approval bar takes its room from the transcript once laid out, after
+  # repaint's own stick: a following list sticks again then.
+  def handle_info({:operator_dyn, %{type: :candidate, gen: n}}, socket) do
+    socket = socket |> Mob.Socket.assign(:proposal, proposal(n)) |> repaint()
+    if socket.assigns.following, do: Process.send_after(self(), :stick, @attach_stick_ms)
+    {:noreply, socket}
+  end
 
   def handle_info({:operator_dyn, event}, socket) do
     gone =
@@ -1677,8 +1690,9 @@ defmodule Operator.ChatScreen do
           max_lines: 1,
           text_size: t.text_size - 1
         ),
-        approve_chip(n, t),
-        UI.chip("deny", :deny_proposal, t, "error")
+        # The preferred action goes right-most.
+        UI.chip("deny", :deny_proposal, t, "error"),
+        approve_chip(n, t)
       ])
     ]
   end

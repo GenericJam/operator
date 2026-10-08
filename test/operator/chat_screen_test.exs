@@ -254,6 +254,24 @@ defmodule Operator.ChatScreenTest do
       render_info(view, {:stick, 3})
       refute_receive {:stick, _}, 300
     end
+
+    test "back from the front, the terminal shows its end again, even after a scroll up",
+         %{tmp_dir: dir} do
+      %{view: view} = mount_chat(dir, [[{:text, "one\n"}, {:sleep, 250}, {:text, "two"}]])
+      Process.put(:fake_scroll_info, FakeNative.index_info(10, 10, 20))
+      view = view |> send_text("go") |> pump(:flush)
+      Process.put(:fake_scroll_info, FakeNative.index_info(3, 10, 20))
+      view = pump(view, :message_end)
+      refute assigns(view).following
+
+      # the native list comes back rebuilt, at its top
+      Process.put(:fake_scroll_info, FakeNative.index_info(0, 10, 20))
+      view = render_info(view, :operator_terminal_shown)
+      assert assigns(view).following
+      assert_receive :stick, 500
+      render_info(view, :stick)
+      assert_received {:scrolled_to, "transcript", +0.0, 19.0}
+    end
   end
 
   test "copying: long-press a line, a code block's Copy, copy last reply", %{tmp_dir: dir} do

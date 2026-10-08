@@ -273,8 +273,8 @@ defmodule Operator.ClusterScreen do
       UI.line(invite.node, t),
       UI.line("certificate " <> short(invite.fingerprint), t, "dim"),
       UI.bar_row(t, [
-        approve_chip(id, invite.node, t),
-        UI.chip("cancel", :cancel_join, t, "error")
+        UI.chip("cancel", :cancel_join, t, "error"),
+        approve_chip(id, invite.node, t)
       ])
     ]
   end

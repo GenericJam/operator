@@ -88,6 +88,13 @@ defmodule Operator.ShellScreen do
     {:noreply, socket}
   end
 
+  # However the front was left (the toggle, Android's back, the front asking
+  # for the terminal), the terminal is on screen again.
+  def terminate(_reason, _socket) do
+    if chat = Phone.host(), do: send(chat, :operator_terminal_shown)
+    :ok
+  end
+
   defp front({:tree, tree}), do: layer([tree])
 
   defp front({:error, text}) do
