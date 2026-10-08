@@ -44,7 +44,7 @@ on an Android 9+ phone, open it, and allow your browser or Files app to install
 it. In Operator, tap the dial for the terminal, then `[menu] › accounts` to sign
 in with your own Claude or ChatGPT subscription.
 
-> **Status:** 1.1.0, sideloaded from GitHub; not in any store. Tested on a Moto
+> **Status:** 1.2.0, sideloaded from GitHub; not in any store. Tested on a Moto
 > G 2021 (Android 11) and a physical iPhone. Expect sharp edges.
 
 ## What it can do

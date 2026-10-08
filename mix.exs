@@ -4,7 +4,7 @@ defmodule Operator.MixProject do
   def project do
     [
       app: :operator,
-      version: "1.1.0",
+      version: "1.2.0",
       elixir: "~> 1.18",
       start_permanent: false,
       deps: deps(),
