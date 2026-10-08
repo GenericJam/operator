@@ -4,7 +4,7 @@ defmodule Operator.MixProject do
   def project do
     [
       app: :operator,
-      version: "1.2.0",
+      version: "1.2.1",
       elixir: "~> 1.18",
       start_permanent: false,
       deps: deps(),
@@ -25,7 +25,7 @@ defmodule Operator.MixProject do
   defp deps do
     mob =
       case System.get_env("MOB_PATH") do
-        nil -> {:mob, "~> 0.9.13"}
+        nil -> {:mob, "~> 0.9.14"}
         path -> {:mob, path: path, override: true}
       end
 

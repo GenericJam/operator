@@ -4,4 +4,7 @@ data_dir = Path.join(System.tmp_dir!(), "operator-test-#{System.unique_integer([
 File.mkdir_p!(data_dir)
 System.put_env("MOB_DATA_DIR", data_dir)
 
+# On a phone Mob.App starts it at boot; native views in a front need it.
+{:ok, _} = GenServer.start(Mob.ComponentRegistry, [], name: Mob.ComponentRegistry)
+
 ExUnit.start()

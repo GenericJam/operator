@@ -20,8 +20,16 @@ defmodule Operator.Core.Front.Host do
   event target, so the front's taps and changes come straight here; the
   stack goes as `{:operator_front_host, pid, {:stack, modules}}`.
 
-  Native views (`Mob.UI.native_view/2`) aren't supported in the front: the
-  shell would have to run their component code, so they're drawn as a note.
+  Native views (`Mob.UI.native_view/2`, e.g. `Mob.Scene3d.viewport/1`) are
+  expanded here too (`Mob.Component.expand/3`): each component runs in its
+  own `Mob.ComponentServer` process that this host owns (they stop with it,
+  or when they leave the view), never in the shell, which draws the
+  already-expanded nodes as they are (mob checks each against its owner,
+  this host). A component's change repaints. Two kinds are drawn as a note
+  instead: Operator's own native views (the approve chip, the Markdown view:
+  a front can't put a look-alike approval prompt on screen), and a node the
+  front code marked as expanded itself (`:__mob_expanded__`: it would borrow a
+  component another process owns, such as the shell's real approve chip).
   """
 
   alias Operator.Core.Files
@@ -121,6 +129,10 @@ defmodule Operator.Core.Front.Host do
 
       {__MODULE__, :env, env} ->
         s |> Map.put(:env, env) |> loop()
+
+      # A native view's component changed: its props go out with the next view.
+      {:component_changed, _id, _module} ->
+        s |> paint() |> loop()
 
       message ->
         s |> handle(message) |> paint() |> loop()
@@ -282,12 +294,14 @@ defmodule Operator.Core.Front.Host do
   # Sent only when it changed; the theme counts (a theme switch redraws
   # with the same tree).
   defp paint(%{stack: [top | _]} = s) do
-    tree =
+    {tree, components} =
       top.module.render(top.socket.assigns)
       |> Mob.Composite.expand(self())
       |> Mob.List.expand(Map.get(top.socket.__mob__, :list_renderers, %{}), self())
-      |> without_native_views()
+      |> front_native_views()
+      |> Mob.Component.expand(self(), s.env.platform)
 
+    :ok = Mob.ComponentRegistry.reconcile(self(), components)
     hash = :erlang.phash2({tree, Mob.Theme.current()})
 
     if hash == s.last do
@@ -298,18 +312,35 @@ defmodule Operator.Core.Front.Host do
     end
   end
 
-  defp without_native_views(%{type: :native_view}) do
-    %{
-      type: :text,
-      props: %{text: "(native views can't run in the front)", text_color: :muted},
-      children: []
-    }
+  defp front_native_views(%{type: :native_view, props: props} = node) do
+    if front_native?(node, props) do
+      node
+    else
+      %{
+        type: :text,
+        props: %{text: "(this native view can't run in the front)", text_color: :muted},
+        children: []
+      }
+    end
   end
 
-  defp without_native_views(%{children: [_ | _] = kids} = node),
-    do: %{node | children: kids |> List.flatten() |> Enum.map(&without_native_views/1)}
+  defp front_native_views(%{children: [_ | _] = kids} = node),
+    do: %{node | children: kids |> List.flatten() |> Enum.map(&front_native_views/1)}
 
-  defp without_native_views(node), do: node
+  defp front_native_views(node), do: node
+
+  # Expanded only here; the native factory is looked up by the module's name
+  # with "." as "_", so the check is on that name.
+  defp front_native?(node, props) do
+    module = props[:module]
+
+    is_atom(module) and not Map.has_key?(node, :__mob_expanded__) and
+      not (module
+           |> Atom.to_string()
+           |> String.replace_prefix("Elixir.", "")
+           |> String.replace(".", "_")
+           |> String.starts_with?("Operator_"))
+  end
 
   defp short(term), do: inspect(term, limit: 10, printable_limit: 200)
 end

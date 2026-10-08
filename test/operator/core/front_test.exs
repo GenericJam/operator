@@ -1,3 +1,16 @@
+# A plugin-like native view (a plugin's component isn't under Operator.).
+defmodule FrontNativeGauge do
+  use Mob.Component
+
+  def mount(props, socket), do: {:ok, Mob.Socket.assign(socket, :level, props[:level])}
+  # Its own state outlives the parent's re-renders.
+  def update(_props, socket), do: {:ok, socket}
+  def render(assigns), do: %{level: assigns.level}
+
+  def handle_info({:level, level}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :level, level)}
+end
+
 defmodule Operator.Core.FrontTest do
   # Dyn generations load into the VM-wide code server; the shell screen runs
   # in the test process (Mob.ScreenCase).
@@ -63,6 +76,36 @@ defmodule Operator.Core.FrontTest do
       Task.shutdown(socket.assigns.task, :brutal_kill)
       send(socket.assigns.owner, {:terminated, :child, reason})
     end
+  end
+
+  defmodule NativeFront do
+    use Mob.Screen
+
+    def mount(params, _session, socket), do: {:ok, Mob.Socket.assign(socket, params)}
+
+    def render(assigns) do
+      # Claims to be a component the shell runs.
+      forged =
+        FrontNativeGauge
+        |> Mob.UI.native_view(id: :borrowed, level: 9)
+        |> Map.put(:__mob_expanded__, {assigns.shell, :borrowed, FrontNativeGauge, assigns.shell})
+
+      kids =
+        if assigns[:gauge] == false,
+          do: [],
+          else: [Mob.UI.native_view(FrontNativeGauge, id: :gauge, level: 3)]
+
+      %{
+        type: :column,
+        props: %{},
+        children:
+          kids ++
+            [Mob.UI.native_view(Operator.Core.ApproveButton, id: :approve, subject: :x), forged]
+      }
+    end
+
+    def handle_info(:drop_gauge, socket), do: {:noreply, Mob.Socket.assign(socket, :gauge, false)}
+    def handle_info(_message, socket), do: {:noreply, socket}
   end
 
   defmodule LifecycleHung do
@@ -258,6 +301,34 @@ defmodule Operator.Core.FrontTest do
     assert :ok = Host.stop(host)
     assert_receive {:terminated, :root, :shutdown}
     assert_receive {:DOWN, ^monitor, :process, ^host, :normal}
+  end
+
+  test "a front's native views run in components the host owns; Operator's own and forged ones don't" do
+    env = %{@env | platform: :no_render}
+
+    {host, _monitor, _key} =
+      Host.start(self(), [{NativeFront, %{shell: self()}}], env, &(&1 == NativeFront))
+
+    assert_receive {:operator_front_host, ^host, {:view, %{children: [gauge, approve, forged]}}}
+    assert %{type: :native_view, props: %{module: "FrontNativeGauge", level: 3}} = gauge
+    assert is_integer(gauge.props.component_handle)
+    note = "(this native view can't run in the front)"
+    assert %{type: :text, props: %{text: ^note}} = approve
+    assert %{type: :text, props: %{text: ^note}} = forged
+
+    # The component is the host's, not this (the shell's) process; its change repaints.
+    {:ok, component} = Mob.ComponentRegistry.lookup(host, :gauge, FrontNativeGauge)
+    assert {:error, :not_found} = Mob.ComponentRegistry.lookup(self(), :gauge, FrontNativeGauge)
+    send(component, {:level, 7})
+
+    assert_receive {:operator_front_host, ^host,
+                    {:view, %{children: [%{props: %{level: 7}} | _]}}}
+
+    # Leaving the view stops it; so does the host stopping.
+    monitor = Process.monitor(component)
+    send(host, :drop_gauge)
+    assert_receive {:DOWN, ^monitor, :process, ^component, _}, 1_000
+    assert :ok = Host.stop(host)
   end
 
   test "the host tears down its mounted screen when screen code crashes" do
