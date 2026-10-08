@@ -15,7 +15,7 @@ Operator is an Android (and, in progress, iOS) app with two sides:
   the phone, takes photos, reads your location, looks things up, and writes
   Elixir. Hold the mic to talk: speech is transcribed on the phone, offline.
 - **The front is whatever you want.** It opens on a welcome screen with two
-  ways on: the terminal and the **component library**, 77
+  ways on: the terminal and the **component library**, 75
   [Mishka Chelekom](https://mishka.tools) widget pages plus working widgets
   for the phone's capabilities (camera, microphone, location, sensors, QR,
   Bluetooth, NFC, MIDI, ...). Ask for a screen, a tracker, a game, a weird

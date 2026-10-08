@@ -8,10 +8,11 @@ defmodule Operator.Cluster do
 
   ## Distribution modes
 
-  The BEAM always boots with `-proto_dist operator` (`:operator_dist`) and
-  `-ssl_dist_optfile <data dir>/cluster/ssl_dist.conf`: this process writes
-  them with `Mob.InitArgs` at every launch, so they apply from the second
-  launch of a build on (`status/0`'s `restart_needed`). Distribution then
+  The BEAM always boots with `-proto_dist operator` (`:operator_dist`),
+  `-ssl_dist_optfile <data dir>/cluster/ssl_dist.conf` and `-connect_all
+  false` (global reads it once, at boot): this process writes them with
+  `Mob.InitArgs` at every launch, so they apply from the second launch of a
+  build on (`status/0`'s `restart_needed`). Distribution then
   runs in one of two modes, never both:
 
     * off (the default): development builds keep `Mob.Dist`'s link, plain
@@ -64,6 +65,7 @@ defmodule Operator.Cluster do
   @max_peers 32
   @max_identities 64
   @cookie_account "cluster_cookie"
+  @join_account "cluster_join"
   @dev_node :"operator_android@127.0.0.1"
   @pg_scope :operator_cluster
 
@@ -151,7 +153,8 @@ defmodule Operator.Cluster do
   @spec booted_for_cluster?(String.t()) :: boolean()
   def booted_for_cluster?(optfile) do
     :init.get_argument(:proto_dist) == {:ok, [[~c"operator"]]} and
-      :init.get_argument(:ssl_dist_optfile) == {:ok, [[String.to_charlist(optfile)]]}
+      :init.get_argument(:ssl_dist_optfile) == {:ok, [[String.to_charlist(optfile)]]} and
+      :init.get_argument(:connect_all) == {:ok, [[~c"false"]]}
   end
 
   @doc "The phone's Wi-Fi (or other private LAN) IPv4 address."
@@ -214,7 +217,9 @@ defmodule Operator.Cluster do
       fingerprint: nil,
       window_until: nil,
       window_secret: nil,
-      join_secret: nil,
+      # Survives the restart a join usually needs (the first launch with
+      # the cluster's init args), until the inviter's window would close.
+      join_secret: stored_join_secret(),
       error: nil,
       subscribers: MapSet.new(),
       dev_node: Keyword.get(opts, :dev_node, @dev_node),
@@ -282,7 +287,7 @@ defmodule Operator.Cluster do
          :ok <- adopt_cookie(s, invite) do
       s = pin(s, invite.fingerprint, invite.node)
       s = %{s | enabled: true, join_secret: invite.secret}
-      Process.send_after(self(), {:join_expired, invite.secret}, @window_ms)
+      store_join_secret(invite.secret)
       save(s)
       complete_join(s, invite)
     else
@@ -306,8 +311,9 @@ defmodule Operator.Cluster do
   def handle_call(:reset, _from, s) do
     s = s |> stop_cluster() |> close_window()
     _ = Operator.SecureStore.delete(@cookie_account)
+    _ = Operator.SecureStore.delete(@join_account)
     _ = Identity.delete()
-    s = %{s | enabled: false, peers: [], fingerprint: nil, error: nil}
+    s = %{s | enabled: false, peers: [], fingerprint: nil, error: nil, join_secret: nil}
     save(s)
     sync_pins(s)
     start_dev_link(s)
@@ -406,8 +412,10 @@ defmodule Operator.Cluster do
       else: {:noreply, s}
   end
 
-  def handle_info({:join_expired, secret}, %{join_secret: secret} = s),
-    do: {:noreply, %{s | join_secret: nil}}
+  def handle_info({:join_expired, secret}, %{join_secret: secret} = s) do
+    _ = Operator.SecureStore.delete(@join_account)
+    {:noreply, %{s | join_secret: nil}}
+  end
 
   def handle_info({:DOWN, _ref, :process, pid, _}, s),
     do: {:noreply, %{s | subscribers: MapSet.delete(s.subscribers, pid)}}
@@ -677,6 +685,27 @@ defmodule Operator.Cluster do
     end
   end
 
+  # "<unix expiry>:<secret>" in the secure store; schedules its own expiry.
+  defp store_join_secret(secret) do
+    expires = System.os_time(:second) + div(@window_ms, 1000)
+    _ = Operator.SecureStore.put(@join_account, "#{expires}:#{secret}")
+    Process.send_after(self(), {:join_expired, secret}, @window_ms)
+  end
+
+  defp stored_join_secret do
+    with {:ok, value} when is_binary(value) <- Operator.SecureStore.get(@join_account),
+         [expires, secret] <- String.split(value, ":", parts: 2),
+         {expires, ""} <- Integer.parse(expires),
+         left when left > 0 <- expires - System.os_time(:second) do
+      Process.send_after(self(), {:join_expired, secret}, left * 1000)
+      secret
+    else
+      _ ->
+        _ = Operator.SecureStore.delete(@join_account)
+        nil
+    end
+  end
+
   defp rotate_cookie(s),
     do: take_cookie(s, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
 
@@ -738,7 +767,11 @@ defmodule Operator.Cluster do
   # ── state ──
 
   defp write_init_args(optfile) do
-    args = ["-proto_dist", "operator", "-ssl_dist_optfile", optfile]
+    # `connect_all false`: this process decides whom to connect to (the
+    # pinned members). With global's default, a member that pins only its
+    # inviter (a headless device) makes global drop working links "to
+    # prevent overlapping partitions". global reads it once, at boot.
+    args = ["-proto_dist", "operator", "-ssl_dist_optfile", optfile, "-connect_all", "false"]
 
     if Mob.InitArgs.read() != args do
       case Mob.InitArgs.write(args) do

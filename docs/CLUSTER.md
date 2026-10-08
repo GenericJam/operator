@@ -56,6 +56,7 @@ The wire protocol is normal distributed Erlang with Operator's TLS pinning and m
    ```text
    -proto_dist operator
    -ssl_dist_optfile /data/operator_cluster/ssl_dist.conf
+   -connect_all false
    ```
 
 4. a private-LAN address, TCP port 9370, and an invite-confirmation policy suitable for the device (for example, a physical button plus a phone-displayed fingerprint instead of a phone screen lock).
@@ -64,7 +65,7 @@ For Nerves, put the VM arguments in the release's `vm.args.eex` and persist iden
 
 ### Desktop stand-in
 
-`scripts/cluster_peer.exs` is a headless peer with one `nerves.echo` service. It runs the same custom distribution modules and handshake from this checkout, providing a cheap protocol stand-in before building firmware. It pins only its inviter and ignores membership gossip, so it forms a two-node cluster with that phone; it is not a full member of a larger cluster.
+`scripts/cluster_peer.exs` is a headless peer with one `nerves.echo` service. It runs the same custom distribution modules and handshake from this checkout, providing a cheap protocol stand-in before building firmware. It pins only its inviter and ignores membership gossip and cookie changes, so it forms a two-node cluster with that phone and needs a fresh invite after the phone makes another one; it is not a full member of a larger cluster.
 
 From the Operator checkout:
 
@@ -73,7 +74,7 @@ export MOB_DATA_DIR="$PWD/_build/cluster_peer"
 OPTFILE=$(mix run --no-start scripts/cluster_peer.exs --prepare)
 
 # Obtain a fresh five-minute operator://cluster invite from the phone.
-elixir --erl "-proto_dist operator -ssl_dist_optfile $OPTFILE" \
+elixir --erl "-proto_dist operator -ssl_dist_optfile $OPTFILE -connect_all false" \
   -S mix run --no-start scripts/cluster_peer.exs 'operator://cluster?...'
 ```
 
