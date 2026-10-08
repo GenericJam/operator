@@ -10,18 +10,13 @@ alias Operator.Cluster.Tls
 
 args = System.argv()
 dir = System.get_env("MOB_DATA_DIR") || Path.expand("../_build/cluster_peer", __DIR__)
-optfile = Path.join(dir, "ssl_dist.conf")
 File.mkdir_p!(dir)
-File.write!(optfile, Tls.optfile_contents())
+# The identity and cookie stores read it.
+System.put_env("MOB_DATA_DIR", dir)
 
-if args == ["--prepare"] do
-  IO.puts(optfile)
-  System.halt(0)
-end
-
-unless Cluster.booted_for_cluster?(optfile) do
-  IO.puts(:stderr, "This peer must boot with Operator's distribution transport.")
-  IO.puts(:stderr, "Run the two commands in docs/CLUSTER.md; optfile: #{optfile}")
+unless Cluster.booted_for_cluster?() do
+  IO.puts(:stderr, "This peer must boot with Operator's distribution carrier:")
+  IO.puts(:stderr, ~s(  elixir --erl "-proto_dist operator" -S mix run --no-start #{__ENV__.file} <invite>))
   System.halt(2)
 end
 
@@ -40,6 +35,7 @@ invite =
 :ok = Tls.put_pins([invite.fingerprint], [])
 {:ok, _} = :pg.start_link(Cluster.pg_scope())
 {:ok, address} = Cluster.lan_address()
+:ok = Cluster.prepare_node()
 :ok = :operator_dist.set_mode(:tls)
 Application.put_env(:kernel, :epmd_module, :operator_epmd)
 Application.put_env(:kernel, :operator_dist_port, Cluster.port())

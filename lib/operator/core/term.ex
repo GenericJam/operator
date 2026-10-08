@@ -87,7 +87,8 @@ defmodule Operator.Core.Term do
         tool_error: %{color: "error", prefix: "  ⎿ "},
         error: %{color: "error", bold: true, prefix: "✗ "},
         notice: %{color: "notice", italic: true, prefix: "· "},
-        aside: %{color: "accent", italic: true, prefix: "» "}
+        aside: %{color: "accent", italic: true, prefix: "» "},
+        stamp: %{color: "dim"}
       },
       markup: %{
         bold: %{bold: true},
@@ -190,14 +191,27 @@ defmodule Operator.Core.Term do
   and each code block's Copy tap (`{:tap, {:copy_code, key, n}}`).
   """
   @spec entry_rows(map(), String.t(), pid() | nil, map()) :: [map()]
-  def entry_rows(entry, key, owner, theme \\ theme())
+  def entry_rows(entry, key, owner, theme \\ theme()), do: body_rows(entry, key, owner, theme)
 
-  def entry_rows(
-        %{"type" => "message", "message" => %{"role" => "assistant"} = m},
-        key,
-        owner,
-        theme
-      ) do
+  @doc """
+  `entry_rows/4` after a dim row with the entry's local time (`stamp/2`):
+  models are poor at time, so the transcript shows when each thing
+  happened. An entry that renders nothing gets no stamp either.
+  """
+  @spec stamped_rows(map(), String.t(), pid() | nil, map()) :: [map()]
+  def stamped_rows(entry, key, owner, theme \\ theme()) do
+    case body_rows(entry, key, owner, theme) do
+      [] -> []
+      rows -> stamp_rows(entry, key, theme) ++ rows
+    end
+  end
+
+  defp body_rows(
+         %{"type" => "message", "message" => %{"role" => "assistant"} = m},
+         key,
+         owner,
+         theme
+       ) do
     md = Session.text(m["content"])
     body = if md == "", do: [], else: body_lines(Markup.parse(md), String.split(md, "\n"), theme)
 
@@ -206,8 +220,47 @@ defmodule Operator.Core.Term do
       to_rows(call_lines(m, theme), key, owner, theme, "#{key}.c")
   end
 
-  def entry_rows(entry, key, owner, theme),
+  defp body_rows(entry, key, owner, theme),
     do: entry |> entry_lines(theme) |> to_rows(key, owner, theme)
+
+  defp stamp_rows(entry, key, theme) do
+    case stamp(entry) do
+      nil -> []
+      text -> [row([{text, theme.roles[:stamp] || %{color: "dim"}}], "#{key}.t", nil, key, theme)]
+    end
+  end
+
+  @doc """
+  An entry's time on the phone's clock: `HH:MM:SS` today, `Mon D HH:MM:SS`
+  on another day; `nil` without a timestamp. `now` is for tests.
+  """
+  @spec stamp(map(), integer()) :: String.t() | nil
+  def stamp(entry, now \\ System.os_time(:millisecond)) do
+    with ms when is_integer(ms) <- entry_ms(entry) do
+      {date, {h, mi, s}} = :calendar.system_time_to_local_time(ms, :millisecond)
+      {today, _} = :calendar.system_time_to_local_time(now, :millisecond)
+      time = :io_lib.format(~c"~2..0B:~2..0B:~2..0B", [h, mi, s]) |> to_string()
+
+      if date == today do
+        time
+      else
+        {_y, month, day} = date
+
+        Enum.at(~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec), month - 1) <>
+          " #{day} " <> time
+      end
+    end
+  end
+
+  defp entry_ms(%{"timestamp" => iso}) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _} -> DateTime.to_unix(dt, :millisecond)
+      _ -> nil
+    end
+  end
+
+  defp entry_ms(%{"message" => %{"timestamp" => ms}}) when is_integer(ms), do: ms
+  defp entry_ms(_entry), do: nil
 
   @doc """
   Rows for assistant text still streaming (the term renderer re-parses only

@@ -334,10 +334,27 @@ class MainActivity : ComponentActivity() {
         // running one (nativeSetActivity above) is the correct behaviour, not
         // merely the safe one.
         if (beamStarted.compareAndSet(false, true)) {
+            ensureInitArgs()
             Log.i(TAG, "onCreate — handing off to BEAM")
             Thread({ nativeStartBeam() }, "beam-main").start()
         } else {
             Log.i(TAG, "onCreate — BEAM already running, re-attaching")
+        }
+    }
+
+    // Operator.Cluster's carrier is chosen by -proto_dist, which OTP reads
+    // only from the command line: written here before the first launch, so
+    // turning the cluster on never needs a restart. Operator.Cluster keeps
+    // the same file afterwards (Mob.InitArgs); an existing one is left alone.
+    private fun ensureInitArgs() {
+        val file = File(filesDir, "mob_init_args")
+        if (file.exists()) return
+        try {
+            val tmp = File(filesDir, "mob_init_args.tmp")
+            tmp.writeText("-proto_dist operator\n")
+            tmp.renameTo(file)
+        } catch (e: Exception) {
+            Log.w(TAG, "init args not written: $e")
         }
     }
 

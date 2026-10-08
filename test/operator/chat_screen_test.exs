@@ -285,11 +285,12 @@ defmodule Operator.ChatScreenTest do
 
     {:ok, session, entries} = Session.open(session.path, model())
     %{view: view} = mount_chat(dir, [], session: {session, entries})
-    # 801 lines: the model_change line plus two per question; then the
-    # signed-out notice (no provider is signed in here)
+    # 1202 lines: the model_change entry and each question, each after its
+    # time stamp (2 + 400 × 3); then the signed-out notice
+    # (no provider is signed in here)
     visible = assigns(view).visible
     assert Enum.count(visible) == 302
-    assert hd(visible).props.text =~ "show 501 earlier lines"
+    assert hd(visible).props.text =~ "show 902 earlier lines"
     assert [%{props: %{id: "m400.1"}}, %{props: %{id: "sign-in"}}] = Enum.take(visible, -2)
     assert view |> flatten() |> Enum.count() < 700
 

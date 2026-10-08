@@ -29,7 +29,23 @@ extern void mob_notify_window_connected(void);
 // (UIInterfaceOrientationMaskAll when unlocked).
 extern UIInterfaceOrientationMask mob_locked_orientation_mask(void);
 
+// Operator.Cluster's carrier is chosen by -proto_dist, which OTP reads only
+// from the command line: written before the first launch (the same
+// Documents/mob_init_args mob's launcher reads), so turning the cluster on
+// never needs a restart. Operator.Cluster keeps the same file afterwards
+// (Mob.InitArgs); an existing one is left alone.
+static void operator_ensure_init_args(void) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (!docs) return;
+    NSString *path = [docs stringByAppendingPathComponent:@"mob_init_args"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) return;
+    NSError *err = nil;
+    if (![@"-proto_dist operator\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&err])
+        NSLog(@"[Operator] init args not written: %@", err);
+}
+
 static void* beam_thread(void* arg) {
+    operator_ensure_init_args();
     mob_start_beam((const char*)arg);
     return NULL;
 }

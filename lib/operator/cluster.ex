@@ -8,11 +8,13 @@ defmodule Operator.Cluster do
 
   ## Distribution modes
 
-  The BEAM always boots with `-proto_dist operator` (`:operator_dist`),
-  `-ssl_dist_optfile <data dir>/cluster/ssl_dist.conf` and `-connect_all
-  false` (global reads it once, at boot): this process writes them with
-  `Mob.InitArgs` at every launch, so they apply from the second launch of a
-  build on (`status/0`'s `restart_needed`). Distribution then
+  The BEAM boots with `-proto_dist operator` (`:operator_dist`), the one
+  thing OTP reads only from the command line (net_kernel picks the carrier
+  module from it). The native hosts write it to `Mob.InitArgs`' file
+  before the first launch and this process keeps it there, so no launch
+  needs a restart. Everything else is set at run time when cluster
+  distribution starts (`prepare_node/0`): the TLS options and global's
+  `connect_all`; then the cookie. Distribution then
   runs in one of two modes, never both:
 
     * off (the default): development builds keep `Mob.Dist`'s link, plain
@@ -149,12 +151,36 @@ defmodule Operator.Cluster do
   @spec subscribe() :: :ok
   def subscribe, do: GenServer.call(__MODULE__, {:subscribe, self()})
 
-  @doc "Whether this launch booted with the init args the cluster needs."
-  @spec booted_for_cluster?(String.t()) :: boolean()
-  def booted_for_cluster?(optfile) do
-    :init.get_argument(:proto_dist) == {:ok, [[~c"operator"]]} and
-      :init.get_argument(:ssl_dist_optfile) == {:ok, [[String.to_charlist(optfile)]]} and
-      :init.get_argument(:connect_all) == {:ok, [[~c"false"]]}
+  @doc """
+  Whether this launch booted with `-proto_dist operator`. Only a build from
+  before the native hosts wrote it lacks it on its first launch.
+  """
+  @spec booted_for_cluster?() :: boolean()
+  def booted_for_cluster?, do: :init.get_argument(:proto_dist) == {:ok, [[~c"operator"]]}
+
+  @doc """
+  Gets a node ready to start cluster distribution: `inet_tls_dist`'s
+  options, and `global` told not to mesh every node it hears of (each
+  node connects to the members it pinned; global's default would drop
+  working links to a member that doesn't pin everyone, a headless device,
+  "to prevent overlapping partitions"). global reads `connect_all` when it
+  starts, which is at boot, so it is restarted with the new setting; only
+  while distribution is off, where it holds nothing.
+  """
+  @spec prepare_node() :: :ok
+  def prepare_node do
+    :ok = Tls.install_dist_options()
+    limit_global()
+  end
+
+  defp limit_global do
+    if Application.get_env(:kernel, :connect_all) != false and not Node.alive?() do
+      Application.put_env(:kernel, :connect_all, false)
+      :ok = Supervisor.terminate_child(:kernel_sup, :global_name_server)
+      {:ok, _} = Supervisor.restart_child(:kernel_sup, :global_name_server)
+    end
+
+    :ok
   end
 
   @doc "The phone's Wi-Fi (or other private LAN) IPv4 address."
@@ -197,18 +223,15 @@ defmodule Operator.Cluster do
     phone? = System.get_env("MOB_BEAMS_DIR") != nil
     dir = Keyword.get_lazy(opts, :dir, fn -> Path.join(Operator.Paths.data_dir(), "cluster") end)
     File.mkdir_p!(dir)
-    optfile = Path.join(dir, "ssl_dist.conf")
-    :ok = File.write(optfile, Tls.optfile_contents())
     :ok = Tls.init_table()
     # Linked: restarted along with this process. Local-only while off.
     {:ok, _} = :pg.start_link(@pg_scope)
-    if phone?, do: write_init_args(optfile)
+    if phone?, do: write_init_args()
 
     saved = read_state(dir)
 
     s = %{
       dir: dir,
-      optfile: optfile,
       enabled: saved.enabled,
       peers: saved.peers,
       running: false,
@@ -243,7 +266,7 @@ defmodule Operator.Cluster do
 
     case start_cluster(s) do
       {:ok, s} -> {:reply, :ok, changed(s)}
-      {:error, reason, s} -> {:reply, {:error, reason}, changed(s)}
+      {:error, reason, s} -> {:reply, {:error, reason}, changed(recover(s, reason))}
     end
   end
 
@@ -365,19 +388,8 @@ defmodule Operator.Cluster do
   @impl true
   def handle_info(:boot_dist, %{enabled: true} = s) do
     case start_cluster(s) do
-      {:ok, s} ->
-        {:noreply, changed(s)}
-
-      # Only another launch fixes this one.
-      {:error, :restart_needed, s} ->
-        start_dev_link(s)
-        {:noreply, changed(s)}
-
-      # No Wi-Fi yet, or it failed this time: try again while still enabled.
-      {:error, _reason, s} ->
-        start_dev_link(s)
-        Process.send_after(self(), :boot_dist, @reconnect_ms)
-        {:noreply, changed(s)}
+      {:ok, s} -> {:noreply, changed(s)}
+      {:error, reason, s} -> {:noreply, changed(recover(s, reason))}
     end
   end
 
@@ -424,15 +436,25 @@ defmodule Operator.Cluster do
 
   # ── starting and stopping ──
 
+  # A start that failed: the development link comes back (a development
+  # build), and unless only another launch can fix it, another try later
+  # (no Wi-Fi yet, the port taken, ...) while the cluster stays enabled.
+  defp recover(s, reason) do
+    start_dev_link(s)
+    if reason != :restart_needed, do: Process.send_after(self(), :boot_dist, @reconnect_ms)
+    s
+  end
+
   defp start_cluster(%{running: true} = s), do: {:ok, s}
 
   defp start_cluster(s) do
-    with :ok <- booted(s),
+    with :ok <- booted(),
          {:ok, ip} <- address(s),
          {:ok, identity} <- Identity.load_or_create(),
          {:ok, cookie} <- cookie(),
          {:ok, _} <- Application.ensure_all_started(:ssl) do
-      if Node.alive?(), do: Mob.Dist.stop()
+      :ok = stop_dist()
+      :ok = prepare_node()
       node = :"#{Identity.name(identity)}@#{:inet.ntoa(ip)}"
       :ok = :operator_dist.set_mode(:tls)
       Application.put_env(:kernel, :epmd_module, :operator_epmd)
@@ -465,13 +487,29 @@ defmodule Operator.Cluster do
     end
   end
 
+  # The development link has to go before cluster distribution starts. On
+  # Android mob starts it at run time (`Mob.Dist`); an iOS development build
+  # starts it from the command line (`-name`), which `net_kernel:stop/0`
+  # refuses to stop: then kernel's boot-time `net_sup` child is removed by
+  # hand, after which `Node.start/2` adds its own as for any runtime start.
+  defp stop_dist do
+    Mob.Dist.stop()
+
+    if Node.alive?() do
+      :ok = Supervisor.terminate_child(:kernel_sup, :net_sup)
+      :ok = Supervisor.delete_child(:kernel_sup, :net_sup)
+    end
+
+    :ok
+  end
+
   defp failed(s, reason) do
     Logger.warning("[cluster] not started: #{inspect(reason)}")
     {:error, reason, %{s | error: reason}}
   end
 
-  defp booted(s),
-    do: if(booted_for_cluster?(s.optfile), do: :ok, else: {:error, :restart_needed})
+  defp booted,
+    do: if(booted_for_cluster?(), do: :ok, else: {:error, :restart_needed})
 
   defp stop_cluster(%{running: false} = s), do: s
 
@@ -766,12 +804,10 @@ defmodule Operator.Cluster do
 
   # ── state ──
 
-  defp write_init_args(optfile) do
-    # `connect_all false`: this process decides whom to connect to (the
-    # pinned members). With global's default, a member that pins only its
-    # inviter (a headless device) makes global drop working links "to
-    # prevent overlapping partitions". global reads it once, at boot.
-    args = ["-proto_dist", "operator", "-ssl_dist_optfile", optfile, "-connect_all", "false"]
+  # The native hosts write the same before the first launch (MainActivity,
+  # AppDelegate); this keeps it so after an app update or a reset.
+  defp write_init_args do
+    args = ["-proto_dist", "operator"]
 
     if Mob.InitArgs.read() != args do
       case Mob.InitArgs.write(args) do
@@ -814,7 +850,7 @@ defmodule Operator.Cluster do
       address: s.address && to_string(:inet.ntoa(s.address)),
       port: @port,
       fingerprint: s.fingerprint || stored_fingerprint(),
-      restart_needed: not booted_for_cluster?(s.optfile),
+      restart_needed: not booted_for_cluster?(),
       pairing: s.window_until != nil,
       error: s.error,
       peers:

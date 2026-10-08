@@ -292,6 +292,36 @@ defmodule Operator.Core.TermTest do
     end
   end
 
+  describe "time stamps" do
+    test "each message starts with its local time; another day adds the date" do
+      ms = 1_791_460_000_123
+      iso = ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
+
+      entry = %{
+        "type" => "message",
+        "timestamp" => iso,
+        "message" => Session.user("hi")["message"]
+      }
+
+      {_date, {h, m, s}} = :calendar.system_time_to_local_time(ms, :millisecond)
+      time = :io_lib.format(~c"~2..0B:~2..0B:~2..0B", [h, m, s]) |> to_string()
+
+      assert Term.stamp(entry, ms) == time
+      assert Term.stamp(entry, ms + 3 * 86_400_000) =~ ~r/^[A-Z][a-z]{2} \d{1,2} #{time}$/
+      assert [^time, "› hi"] = Term.rows_text(Term.stamped_rows(entry, "m1", nil))
+    end
+
+    test "no stamp without a time, or for an entry that renders nothing" do
+      assert Term.stamp(%{"type" => "message"}) == nil
+
+      assert Term.stamped_rows(
+               %{"type" => "label", "timestamp" => "2026-10-08T10:00:00Z"},
+               "m1",
+               nil
+             ) == []
+    end
+  end
+
   describe "native renderer" do
     setup do
       %{theme: %{Term.default_theme() | renderer: :native}}

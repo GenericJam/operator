@@ -5,7 +5,7 @@ Operator 1.1 can join phones and headless BEAM devices on one private LAN. Clust
 ## Pair two Operators
 
 1. Connect both devices to the same private Wi-Fi network.
-2. On the first device, open `[menu] › cluster`, enable the cluster, then close and reopen Operator when prompted. The second launch starts TLS distribution.
+2. On the first device, open `[menu] › cluster` and enable the cluster. TLS distribution starts right away; no restart.
 3. Choose **show invite**. Pairing remains open for five minutes.
 4. On the second device, open `[menu] › cluster › scan invite` and scan the first device's QR.
 5. Compare the displayed node and certificate fingerprint. Approve with the second device's system screen lock.
@@ -51,13 +51,13 @@ The wire protocol is normal distributed Erlang with Operator's TLS pinning and m
 
 1. persistent EC identity and cluster cookie storage appropriate to the board;
 2. `Operator.Cluster.Identity`, `Tls`, `Invite`, `Bus`, `:operator_dist`, and `:operator_epmd` (these should become a small standalone dependency before product use; depending on the whole mobile app is not recommended);
-3. these VM arguments at boot:
+3. one VM argument at boot, the only part of distribution OTP takes from the command line (net_kernel picks the carrier module from it):
 
    ```text
    -proto_dist operator
-   -ssl_dist_optfile /data/operator_cluster/ssl_dist.conf
-   -connect_all false
    ```
+
+   Everything else is set at run time by `Operator.Cluster.prepare_node/0` before `Node.start/2`: the TLS options (into the `ssl_dist_opts` table `inet_tls_dist` reads, instead of an `-ssl_dist_optfile`) and global's `connect_all false`;
 
 4. a private-LAN address, TCP port 9370, and an invite-confirmation policy suitable for the device (for example, a physical button plus a phone-displayed fingerprint instead of a phone screen lock).
 
@@ -71,10 +71,9 @@ From the Operator checkout:
 
 ```sh
 export MOB_DATA_DIR="$PWD/_build/cluster_peer"
-OPTFILE=$(mix run --no-start scripts/cluster_peer.exs --prepare)
 
 # Obtain a fresh five-minute operator://cluster invite from the phone.
-elixir --erl "-proto_dist operator -ssl_dist_optfile $OPTFILE -connect_all false" \
+elixir --erl "-proto_dist operator" \
   -S mix run --no-start scripts/cluster_peer.exs 'operator://cluster?...'
 ```
 
@@ -84,7 +83,7 @@ This probe establishes transport and API compatibility; it does not claim Nerves
 
 ## Operations
 
-- Enabling writes the required VM init arguments for the next launch. A native build with mob 0.9.13 or newer is required.
+- `-proto_dist operator` must be on the BEAM's command line from the first launch: the native hosts (`MainActivity`, `AppDelegate`) write it to `Mob.InitArgs`' file before starting the BEAM. Without it (an install of an older build, first launch only) enabling asks for one restart. A native build with mob 0.9.13 or newer is required.
 - While clustering is on, it replaces mob's development distribution link. Use cluster membership for remote inspection; disabling restores the loopback development link in a development build.
 - Certificate fingerprints are SHA-256 lowercase hex. Node names and cookie strings are validated and bounded before approval; atoms are created only after the system-lock approval path.
 - Do not expose port 9370 with router port forwarding. Host firewalls should restrict it to the private LAN.

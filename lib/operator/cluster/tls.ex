@@ -3,13 +3,14 @@ defmodule Operator.Cluster.Tls do
   The TLS side of the cluster: the options `inet_tls_dist` runs with, and
   the certificate check that pins peers by fingerprint.
 
-  The BEAM boots with `-proto_dist operator -ssl_dist_optfile <optfile>`
-  (`Operator.Cluster` writes them for the next launch with
-  `Mob.InitArgs`). The optfile holds no secret, only a call back here:
-  `ssl_dist_sup` evaluates it when cluster distribution starts and gets
-  `dist_options/0`, which reads the key from the secure store
-  (`Operator.Cluster.Identity`). Both directions are TLS 1.3 with a client
-  certificate required.
+  The BEAM boots with `-proto_dist operator` only (`Operator.Cluster`
+  writes it with `Mob.InitArgs`; the native hosts write it before the very
+  first launch). Nothing else has to be decided at boot: before cluster
+  distribution starts, `install_dist_options/0` gives `inet_tls_dist` its
+  options at run time, in the `ssl_dist_opts` table it reads (what
+  `-ssl_dist_optfile` would otherwise fill), from `dist_options/0`, which
+  reads the key from the secure store (`Operator.Cluster.Identity`). Both
+  directions are TLS 1.3 with a client certificate required.
 
   ## Who is let in
 
@@ -137,11 +138,12 @@ defmodule Operator.Cluster.Tls do
   end
 
   @doc """
-  The options for `inet_tls_dist` (what the optfile evaluates to): this
-  node's certificate and key, TLS 1.3, peer certificates required both ways
-  and checked by `verify/3`. `cacerts` is only there because `verify_peer`
-  needs a trust store; it holds this node's own certificate, which no peer
-  can present without this node's key.
+  The options for `inet_tls_dist`: this node's certificate and key, TLS
+  1.3, peer certificates required both ways and checked by `verify/3`.
+  `cacerts` is only there because `verify_peer` needs a trust store; it
+  holds this node's own certificate, which no peer can present without
+  this node's key. (Also what the `ssl_dist.conf` optfile of 1.1.0 builds
+  calls back.)
   """
   @spec dist_options() :: [{:server | :client, keyword()}]
   def dist_options do
@@ -162,7 +164,23 @@ defmodule Operator.Cluster.Tls do
     ]
   end
 
-  @doc "What the optfile says: a call to `dist_options/0`, no secret."
-  @spec optfile_contents() :: String.t()
-  def optfile_contents, do: "'Elixir.Operator.Cluster.Tls':dist_options().\n"
+  @dist_table :ssl_dist_opts
+
+  @doc """
+  Puts `dist_options/0` where `inet_tls_dist` looks for its options (the
+  `ssl_dist_opts` table; the caller, `Operator.Cluster`, owns it), for the
+  next connections. A node booted with `-ssl_dist_optfile` (1.1.0) has the
+  table from `ssl_dist_sup`, filled through the same callback: left alone.
+  """
+  @spec install_dist_options() :: :ok
+  def install_dist_options do
+    if :init.get_argument(:ssl_dist_optfile) == :error do
+      if :ets.whereis(@dist_table) == :undefined,
+        do: :ets.new(@dist_table, [:named_table, :protected, :set, read_concurrency: true])
+
+      true = :ets.insert(@dist_table, dist_options())
+    end
+
+    :ok
+  end
 end

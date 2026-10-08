@@ -743,8 +743,9 @@ defmodule Operator.ChatScreen do
   defp titled(_handoff), do: ""
 
   # `key` ("m<n>") prefixes the message's row ids and tags its copy events.
+  # Each message starts with its time (`Term.stamped_rows/4`).
   defp message(entry, key, owner),
-    do: %{key: key, entry: entry, rows: Term.entry_rows(entry, key, owner)}
+    do: %{key: key, entry: entry, rows: Term.stamped_rows(entry, key, owner)}
 
   defp on_event(%{type: :agent_start}, socket),
     do: Mob.Socket.assign(socket, status: :running, detail: nil)
