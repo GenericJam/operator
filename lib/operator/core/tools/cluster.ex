@@ -2,7 +2,10 @@ defmodule Operator.Core.Tools.Cluster do
   @moduledoc """
   Core tool: the other Operators this phone is paired with in its local
   cluster ([menu] › cluster), through `Operator.Cluster.Remote` on each:
-  list them, run one of their agent tools there, or show them a message.
+  list them, run one of their agent tools there, show them a message, or
+  ask their agent something and get its answer (`Operator.Cluster.Ask`).
+  A session that is answering another phone's question can't ask: an
+  exchange is one question and one answer.
   """
   @behaviour Operator.Core.Tool
 
@@ -17,20 +20,23 @@ defmodule Operator.Core.Tools.Cluster do
     do:
       "The other phones (Operators) paired with this one in its local cluster; each is a node " <>
         "like operator_9598e293b8@10.0.0.132. action `peers` lists them and whether each is " <>
-        "connected. `tool` runs one of a peer's agent tools on that phone and returns the " <>
-        "result: `tool` is its name (location, sensors, notify, clipboard, notes, http_get, " <>
-        "camera_snap, photos_recent, file_list, file_read, file_write, ...), `args` its " <>
-        "arguments; pictures stay on that phone. `message` shows `text` in that phone's " <>
-        "terminal and as a notification there; its agent reads it on its next turn. `peer` " <>
+        "connected. `ask` gives `text` to that phone's agent and returns its answer (it may " <>
+        "take a minute; a slower answer arrives later as a message): use it to have the other " <>
+        "agent do or tell something. `tool` runs one of a peer's tools directly on that phone " <>
+        "and returns the result: `tool` is its name (location, sensors, notify, clipboard, " <>
+        "notes, http_get, camera_snap, photos_recent, file_list, file_read, file_write, ...), " <>
+        "`args` its arguments; pictures stay on that phone. `message` only shows `text` in " <>
+        "that phone's terminal and as a notification there; its agent doesn't answer. `peer` " <>
         "is a node name or a unique part of one, and may be left out when one peer is " <>
-        "connected. Pairing happens in the menu, not here."
+        "connected. While you are answering another phone's question you can't `ask`: put " <>
+        "your answer in your reply. Pairing happens in the menu, not here."
 
   @impl true
   def parameter_schema do
     %{
       "type" => "object",
       "properties" => %{
-        "action" => %{"type" => "string", "enum" => ["peers", "tool", "message"]},
+        "action" => %{"type" => "string", "enum" => ["peers", "ask", "tool", "message"]},
         "peer" => %{"type" => "string"},
         "tool" => %{"type" => "string"},
         "args" => %{"type" => "object"},
@@ -79,13 +85,30 @@ defmodule Operator.Core.Tools.Cluster do
          do: request(call, node, Remote.message_service(), {:message, text}, 15_000)
   end
 
+  def run(%{"action" => "ask", "text" => text} = args, ctx, peers, call)
+      when is_binary(text) and text != "" do
+    answering? = Map.get(ctx, :answering?, &Remote.answering?/1)
+
+    if answering?.(ctx[:session_id]) do
+      {:error,
+       "You are answering another phone's question, so you can't ask one: put your answer " <>
+         "in your reply, it goes back to that phone."}
+    else
+      with {:ok, node} <- pick(args["peer"], peers.()),
+           do: request(call, node, Remote.ask_service(), {:ask, text}, timeout_ms() - 10_000)
+    end
+  end
+
+  def run(%{"action" => "ask"}, _ctx, _peers, _call),
+    do: {:error, "action ask needs a non-empty `text` (the question or request)"}
+
   def run(%{"action" => "tool"}, _ctx, _peers, _call),
     do: {:error, "action tool needs `tool` (the tool's name) and optionally `args`"}
 
   def run(%{"action" => "message"}, _ctx, _peers, _call),
     do: {:error, "action message needs a non-empty `text`"}
 
-  def run(_args, _ctx, _peers, _call), do: {:error, "`action` is peers, tool or message"}
+  def run(_args, _ctx, _peers, _call), do: {:error, "`action` is peers, ask, tool or message"}
 
   defp state(true), do: "connected"
   defp state(false), do: "not connected"

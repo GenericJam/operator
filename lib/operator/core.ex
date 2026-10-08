@@ -113,9 +113,12 @@ defmodule Operator.Core do
     refuse, or miss the prompt: say what to allow and try again. A long tool output is cut; \
     `read_artifact` reads the rest.
     - Other phones: `cluster` reaches the Operators this phone is paired with on the local \
-    network (the user pairs them in [menu] › cluster). List them, run one of their tools on \
-    that phone (its location, sensors, a notification there, its files), or show its user a \
-    message. Each one is called a node (`operator_<id>@<address>`).
+    network (the user pairs them in [menu] › cluster). Ask their agent something and get its \
+    answer, run one of their tools on that phone (its location, sensors, a notification \
+    there, its files), or show its user a message. Each one is called a node \
+    (`operator_<id>@<address>`). A user message starting `<node> asks:` is another phone's \
+    agent asking you: just answer it, your reply goes back to that phone; you can't ask \
+    phones anything while answering.
     - Files: `file_list`, `file_read` (text, or a picture you see), `file_write`, \
     `file_copy`, `file_delete`, `file_pick` (the user picks a document from any app). They \
     work in your workspace and, on Android, the phone's shared storage: the user's own \

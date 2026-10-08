@@ -1,7 +1,7 @@
 defmodule Operator.Cluster.Remote do
   @moduledoc """
-  What this Operator does for the agents on the other members, through two
-  `Operator.Cluster.Bus` services (only members reach the Bus):
+  What this Operator does for the agents on the other members, through
+  three `Operator.Cluster.Bus` services (only members reach the Bus):
 
     * `"operator.tool"`: runs one of this phone's agent tools
       (`{:tool, name, args}`) and answers with its result, so a member's
@@ -13,12 +13,18 @@ defmodule Operator.Cluster.Remote do
       Bus reply is at most 64 KiB.
     * `"operator.message"`: shows a member's message (`{:message, text}`)
       in this phone's terminal, as a notice the agent here also reads on
-      its next call, and as a notification.
+      its next call, and as a notification. It doesn't start a run.
+    * `"operator.ask"`: a member's agent asks this one (`{:ask, text}`):
+      this phone's agent takes it as its next message and its answer goes
+      back (`Operator.Cluster.Ask`). One question per peer at a time, #{3}
+      in all; while answering, this agent can't ask anyone, so an exchange
+      ends with the answer.
 
   The agent's side is `Operator.Core.Tools.Cluster`.
   """
   use GenServer
 
+  alias Operator.Cluster.Ask
   alias Operator.Cluster.Bus
   alias Operator.Core.Loop
   alias Operator.Core.Phone
@@ -30,6 +36,9 @@ defmodule Operator.Cluster.Remote do
 
   @tool_service "operator.tool"
   @message_service "operator.message"
+  @ask_service "operator.ask"
+  # Questions answered at once, from all peers together (one per peer).
+  @max_asks 3
   # A Bus message is at most 64 KiB; leave room for the tuple around it.
   @max_reply 60_000
   @max_message 4_000
@@ -41,6 +50,21 @@ defmodule Operator.Cluster.Remote do
 
   @spec message_service() :: String.t()
   def message_service, do: @message_service
+
+  @spec ask_service() :: String.t()
+  def ask_service, do: @ask_service
+
+  @doc """
+  Is session `session_id` answering another phone's question right now?
+  Its agent may not ask a phone anything meanwhile: an exchange is one
+  question and one answer.
+  """
+  @spec answering?(String.t()) :: boolean()
+  def answering?(session_id) do
+    GenServer.call(__MODULE__, {:answering?, session_id})
+  catch
+    :exit, _ -> false
+  end
 
   @spec max_message() :: pos_integer()
   def max_message, do: @max_message
@@ -56,19 +80,70 @@ defmodule Operator.Cluster.Remote do
   def init(_opts) do
     :ok = Bus.register(@tool_service)
     :ok = Bus.register(@message_service)
-    {:ok, %{}}
+    :ok = Bus.register(@ask_service)
+    {:ok, %{asks: %{}}}
+  end
+
+  @impl true
+  def handle_call({:answering?, session_id}, _from, s),
+    do: {:reply, Enum.any?(s.asks, fn {_peer, a} -> a.session == session_id end), s}
+
+  @impl true
+  def handle_cast({:answering, peer, session_id}, s) do
+    asks = if s.asks[peer], do: put_in(s.asks[peer].session, session_id), else: s.asks
+    {:noreply, %{s | asks: asks}}
+  end
+
+  # A question takes this phone's agent for a whole run: one at a time per
+  # peer, a few in all.
+  @impl true
+  def handle_info({:cluster_call, {pid, _ref} = from, {:ask, text}}, s) when is_pid(pid) do
+    peer = node(pid)
+
+    cond do
+      not (is_binary(text) and String.trim(text) != "" and byte_size(text) <= @max_message) ->
+        _ = Bus.reply(from, {:error, "a question is 1..#{@max_message} bytes of text"})
+        {:noreply, s}
+
+      Map.has_key?(s.asks, peer) ->
+        _ = Bus.reply(from, {:error, "#{Node.self()} is still answering your last question"})
+        {:noreply, s}
+
+      map_size(s.asks) >= @max_asks ->
+        _ = Bus.reply(from, {:error, "#{Node.self()} is busy answering other phones"})
+        {:noreply, s}
+
+      true ->
+        {_pid, mon} = spawn_monitor(fn -> answer_ask(from, text, peer) end)
+        {:noreply, put_in(s.asks[peer], %{mon: mon, session: nil})}
+    end
   end
 
   # Answered from a task each: a tool can take a while (a location fix, a
   # human on this phone picking a photo) and requests must not queue.
-  @impl true
   def handle_info({:cluster_call, {pid, _ref} = from, request}, s) when is_pid(pid) do
     peer = node(pid)
     {:ok, _} = Task.start(fn -> _ = Bus.reply(from, answer(request, peer)) end)
     {:noreply, s}
   end
 
+  def handle_info({:DOWN, mon, :process, _pid, _reason}, s) do
+    {:noreply, %{s | asks: Map.reject(s.asks, fn {_peer, a} -> a.mon == mon end)}}
+  end
+
   def handle_info(_message, s), do: {:noreply, s}
+
+  defp answer_ask(from, text, peer) do
+    Logger.info("[cluster] #{peer} asks this phone's agent")
+
+    Ask.run(Operator.Core.current(), String.trim(text), peer,
+      reply: fn {status, answer} -> Bus.reply(from, {status, clip(answer)}) end,
+      late: fn answer ->
+        Bus.call(peer, @message_service, {:message, "Answer to your question: " <> clip(answer)})
+      end,
+      on_session: &GenServer.cast(__MODULE__, {:answering, peer, &1})
+    )
+  end
 
   @doc false
   @spec answer(term(), node()) :: {:ok, String.t()} | {:error, String.t()}

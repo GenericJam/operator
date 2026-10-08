@@ -352,7 +352,7 @@ defmodule Operator.Cluster do
     case if(s.running, do: {:ok, s}, else: start_cluster(s)) do
       {:ok, s} ->
         Node.set_cookie(String.to_atom(invite.cookie))
-        connect_async(String.to_atom(invite.node))
+        connect_async(String.to_atom(invite.node), true)
         {:reply, :ok, changed(s)}
 
       {:error, reason, s} ->
@@ -412,7 +412,7 @@ defmodule Operator.Cluster do
     for %{node: node, revoked: false} <- s.peers,
         node = String.to_atom(node),
         node != Node.self() and node not in Node.list(),
-        do: connect_async(node)
+        do: connect_async(node, s.join_secret != nil)
 
     # Still joining: say hello again on every link. The first one can be
     # lost (an iPhone suspended right after the connection came up), and
@@ -559,7 +559,35 @@ defmodule Operator.Cluster do
     end
   end
 
-  defp connect_async(node), do: spawn(fn -> Node.connect(node) end)
+  # While joining, someone is watching the screen: say why a link failed
+  # (the reconnect loop retries quietly the rest of the time).
+  defp connect_async(node, joining?) do
+    spawn(fn ->
+      with :ok <- reachable(node),
+           true <- Node.connect(node) do
+        :ok
+      else
+        failed -> joining? && Logger.warning("[cluster] can't reach #{node}: #{failed}")
+      end
+    end)
+  end
+
+  # Distribution only dials once the peer's port answers. A dial that can't
+  # arrive (the peer is on a network that reaches us but not the other way
+  # round) stays pending, and while it does, the node with the greater name
+  # turns away the peer's own dial without an error: two phones that each
+  # retry would then never link.
+  defp reachable(node) do
+    [_name, host] = node |> Atom.to_string() |> String.split("@", parts: 2)
+
+    with {:ok, ip} <- :inet.parse_address(String.to_charlist(host)),
+         {:ok, socket} <- :gen_tcp.connect(ip, @port, [], 3_000) do
+      :gen_tcp.close(socket)
+    else
+      {:error, :einval} -> :ok
+      {:error, reason} -> reason
+    end
+  end
 
   # Who this node is and whom it trusts; with the pairing secret while joining.
   defp say_hello(s, node) do

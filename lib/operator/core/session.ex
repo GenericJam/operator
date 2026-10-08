@@ -203,7 +203,8 @@ defmodule Operator.Core.Session do
   @doc """
   A user message: `text` (may be empty when `opts[:attachments]` isn't)
   then each attachment's parts. `opts[:steering]` marks a message sent
-  while the agent was running.
+  while the agent was running; `opts[:ask]` (an id) a question another
+  phone's agent asked (`Operator.Cluster.Remote`), from node `opts[:from]`.
   """
   @spec user(String.t(), keyword()) :: entry()
   def user(text, opts \\ []) do
@@ -223,6 +224,13 @@ defmodule Operator.Core.Session do
         else: Map.put(message, "attachments", Enum.map(attachments, &attachment_meta/1))
 
     message = if opts[:steering], do: Map.put(message, "steering", true), else: message
+
+    # A field of its own: "attribution" stays one of omp's values.
+    message =
+      if opts[:ask],
+        do: Map.merge(message, %{"ask" => opts[:ask], "from" => to_string(opts[:from])}),
+        else: message
+
     %{"type" => "message", "message" => message}
   end
 

@@ -103,6 +103,15 @@ defmodule Operator.Core.Loop do
   def follow_up(loop, text, attachments \\ []),
     do: GenServer.call(loop, {:follow_up, {text, attachments}})
 
+  @doc """
+  Another phone's question (`Operator.Cluster.Remote`): queued like
+  `follow_up/3` (a run starts if idle), as a user entry marked `"ask" => id`
+  and attributed to node `from`, so the asker can find the answer after it.
+  """
+  @spec ask(GenServer.server(), String.t(), String.t(), node()) :: :ok
+  def ask(loop, text, id, from),
+    do: GenServer.call(loop, {:follow_up, {text, [], [ask: id, from: from]}})
+
   @doc "Aborts the model call and unstarted tools; no-op when idle."
   @spec stop(GenServer.server()) :: :ok
   def stop(loop), do: GenServer.call(loop, :stop)
@@ -554,12 +563,18 @@ defmodule Operator.Core.Loop do
     s |> Map.put(:follow_up, []) |> queued() |> begin_turn(inputs)
   end
 
-  defp user({text, attachments}, opts \\ []),
+  defp user(input, opts \\ [])
+
+  defp user({text, attachments}, opts),
     do: Session.user(text, [attachments: attachments] ++ opts)
+
+  defp user({text, attachments, input_opts}, opts),
+    do: Session.user(text, [attachments: attachments] ++ input_opts ++ opts)
 
   # A queued message as the screen shows it: its text, else its files.
   defp labels(queue) do
-    for {text, attachments} <- queue do
+    for input <- queue do
+      {text, attachments} = {elem(input, 0), elem(input, 1)}
       if text == "", do: Enum.map_join(attachments, ", ", & &1.name), else: text
     end
   end

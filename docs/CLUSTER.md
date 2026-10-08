@@ -32,9 +32,12 @@ Each Operator's agent has a `cluster` tool (`Operator.Core.Tools.Cluster`):
 
 - `peers`: this phone's node and each paired one, connected or not.
 - `tool`: runs one of a peer's agent tools on that phone and returns the result: its `location`, `sensors` (battery, motion, ...), a `notify` there, its `clipboard`, `notes`, files, `http_get`, `camera_snap`. Pictures stay on that phone (a Bus reply is at most 64 KiB). Tools that would change the peer's own app (Dyn writes, `dyn_propose`, `front_open`) or that only make sense in one session are refused, and so is `cluster` itself.
-- `message`: shows a text in the peer's terminal (an `»` notice its agent also reads on its next turn) and as a notification there.
+- `ask`: gives a text to the peer's agent and returns its answer. On the peer it becomes the next user message of its current session (`<node> asks: …`): a run starts if the agent is idle, otherwise it is answered when the current run would stop. The answer is that run's last text. Past 110 s the asker hears "still working" and the answer arrives later as a `message`.
+- `message`: shows a text in the peer's terminal (an `»` notice its agent also reads on its next turn) and as a notification there. It doesn't start a run.
 
-The peer side is `Operator.Cluster.Remote`, two Bus services (`operator.tool`, `operator.message`), so only members reach it. On 2026-10-08 the Moto's agent, asked to, listed the peers, read the iPhone's battery with `sensors` and sent it a message.
+An exchange is one question and one answer: while a session is answering a peer's question, its agent can't `ask` anyone, so two agents can't keep waking each other. A peer gets one question answered at a time, and a phone answers at most three at once.
+
+The peer side is `Operator.Cluster.Remote`, three Bus services (`operator.tool`, `operator.message`, `operator.ask`), so only members reach it. On 2026-10-08 the Moto's agent, asked to, listed the peers, read the iPhone's battery with `sensors` and sent it a message; later, asked to get a joke from the other phone, it called `ask` and the iPhone's agent answered in 3 s with nobody touching the iPhone.
 
 ## Application API
 
@@ -95,5 +98,6 @@ This probe establishes transport and API compatibility; it does not claim Nerves
 
 - `-proto_dist operator` must be on the BEAM's command line from the first launch: the native hosts (`MainActivity`, `AppDelegate`) write it to `Mob.InitArgs`' file before starting the BEAM. Without it (an install of an older build, first launch only) enabling asks for one restart. A native build with mob 0.9.13 or newer is required.
 - While clustering is on, it replaces mob's development distribution link. Use cluster membership for remote inspection; disabling restores the loopback development link in a development build.
+- Members may reach each other one way only (two Wi-Fi networks behind one router: on 2026-10-08 the iPhone reached the Moto but not the reverse). A member dials a peer only after a plain TCP connect to its port 9370 succeeds. Otherwise a dial that can never arrive stays pending, and while it does, distribution turns away the peer's own dial (the node with the greater name keeps its own attempt), so the two would never link. While joining, a failed dial is logged with its reason.
 - Certificate fingerprints are SHA-256 lowercase hex. Node names and cookie strings are validated and bounded before approval; atoms are created only after the system-lock approval path.
 - Do not expose port 9370 with router port forwarding. Host firewalls should restrict it to the private LAN.

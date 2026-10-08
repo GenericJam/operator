@@ -85,6 +85,22 @@ defmodule Operator.Core.Tools.ClusterTest do
     refute_received {:called, _, _, _}
   end
 
+  test "ask returns the peer agent's answer; a session answering a question can't ask" do
+    one = peers([%{node: @a, connected: true}])
+    args = %{"action" => "ask", "text" => "tell me a joke"}
+    free = %{session_id: "s1", answering?: fn "s1" -> false end}
+
+    assert {:ok, "operator_aaaa111111@10.0.0.2: a joke"} =
+             Tool.run(args, free, one, bus({:ok, {:ok, "a joke"}}))
+
+    assert_received {:called, @a, "operator.ask", {:ask, "tell me a joke"}}
+
+    answering = %{session_id: "s1", answering?: fn "s1" -> true end}
+    assert {:error, text} = Tool.run(args, answering, one, bus(nil))
+    assert text =~ "can't ask"
+    refute_received {:called, _, _, _}
+  end
+
   test "a peer that is gone or silent is a readable error" do
     one = peers([%{node: @a, connected: true}])
     msg = %{"action" => "message", "text" => "hi"}
