@@ -26,6 +26,8 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.PickPhotos,
     Operator.Core.Tools.PhotosRecent,
     Operator.Core.Tools.Sensors,
+    # The other Operators paired in the local cluster.
+    Operator.Core.Tools.Cluster,
     # Files: the workspace, Android's shared storage, the document picker.
     Operator.Core.Tools.FileList,
     Operator.Core.Tools.FileRead,

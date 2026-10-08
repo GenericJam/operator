@@ -108,6 +108,16 @@ defmodule Operator.Core.Loop do
   def stop(loop), do: GenServer.call(loop, :stop)
 
   @doc """
+  Adds a notice entry (`kind` `:notice` / `:aside`) to the session, as the
+  loop's own are: the user sees it, and the model with the next call. A
+  run in progress gets it when the run ends, so it never lands between a
+  tool call and its result.
+  """
+  @spec note(GenServer.server(), :notice | :aside, String.t()) :: :ok
+  def note(loop, kind, text) when kind in [:notice, :aside] and is_binary(text),
+    do: GenServer.call(loop, {:note, kind, text})
+
+  @doc """
   Sends `pid` (the caller by default) `{:operator_core, session_id, event}`
   for every event, until it exits or unsubscribes.
   """
@@ -146,6 +156,7 @@ defmodule Operator.Core.Loop do
       status: :idle,
       steering: [],
       follow_up: [],
+      notes: [],
       run: nil
     }
 
@@ -171,6 +182,12 @@ defmodule Operator.Core.Loop do
     do: {:reply, :ok, queued(%{s | follow_up: s.follow_up ++ [input]})}
 
   def handle_call(:stop, _from, s), do: {:reply, :ok, do_stop(s)}
+
+  def handle_call({:note, kind, text}, _from, %{status: :idle} = s),
+    do: {:reply, :ok, notice(s, kind, text)}
+
+  def handle_call({:note, kind, text}, _from, s),
+    do: {:reply, :ok, %{s | notes: s.notes ++ [{kind, text}]}}
 
   def handle_call({:subscribe, pid}, _from, s) do
     subs =
@@ -552,7 +569,7 @@ defmodule Operator.Core.Loop do
     s = %{s | status: :idle, run: nil, steering: [], follow_up: []}
     if had_queue, do: emit(s, %{type: :queue, steering: [], follow_up: []})
     emit(s, %{type: :agent_end, reason: reason})
-    s
+    Enum.reduce(s.notes, %{s | notes: []}, fn {kind, text}, acc -> notice(acc, kind, text) end)
   end
 
   # ── compaction ──

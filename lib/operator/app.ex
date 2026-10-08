@@ -20,9 +20,13 @@ defmodule Operator.App do
     # the cluster (TLS on the Wi-Fi address) when it is on, otherwise the
     # development link (Mob.Dist, loopback only; no :cookie: the node takes
     # the per-app cookie mob_dev writes to $MOB_BEAMS_DIR/mob_dist_cookie).
+    # Operator.Cluster.Remote answers the other members' agents through the
+    # Bus (the cluster's :pg scope, which Operator.Cluster owns): restarted
+    # with it, so it re-joins a new scope.
     {:ok, _} =
-      Supervisor.start_link([{Operator.Cluster, dev_node: :"operator_android@127.0.0.1"}],
-        strategy: :one_for_one,
+      Supervisor.start_link(
+        [{Operator.Cluster, dev_node: :"operator_android@127.0.0.1"}, Operator.Cluster.Remote],
+        strategy: :rest_for_one,
         name: Operator.Cluster.Supervisor
       )
 

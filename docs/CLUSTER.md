@@ -26,6 +26,16 @@ The QR is a secret. It contains the inviter's node, pinned certificate fingerpri
 
 A trusted Erlang distribution peer has the authority of the app. It can send ordinary distribution messages and can invoke BEAM facilities such as RPC; `Operator.Cluster.Bus` is a small stable application API, **not a sandbox against a malicious member**. Pair only devices and firmware you control.
 
+## The agents talk to each other
+
+Each Operator's agent has a `cluster` tool (`Operator.Core.Tools.Cluster`):
+
+- `peers`: this phone's node and each paired one, connected or not.
+- `tool`: runs one of a peer's agent tools on that phone and returns the result: its `location`, `sensors` (battery, motion, ...), a `notify` there, its `clipboard`, `notes`, files, `http_get`, `camera_snap`. Pictures stay on that phone (a Bus reply is at most 64 KiB). Tools that would change the peer's own app (Dyn writes, `dyn_propose`, `front_open`) or that only make sense in one session are refused, and so is `cluster` itself.
+- `message`: shows a text in the peer's terminal (an `»` notice its agent also reads on its next turn) and as a notification there.
+
+The peer side is `Operator.Cluster.Remote`, two Bus services (`operator.tool`, `operator.message`), so only members reach it. On 2026-10-08 the Moto's agent, asked to, listed the peers, read the iPhone's battery with `sensors` and sent it a message.
+
 ## Application API
 
 Front screens and embedded services should use `Operator.Cluster.Bus` rather than depending on Operator's internal process names:

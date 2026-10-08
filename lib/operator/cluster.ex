@@ -399,8 +399,8 @@ defmodule Operator.Cluster do
   end
 
   def handle_info({:nodeup, node, _info}, %{running: true} = s) do
-    hello = {:hello, Node.self(), s.fingerprint, wire_peers(s), s.join_secret}
-    GenServer.cast({__MODULE__, node}, hello)
+    Logger.info("[cluster] linked to #{node}#{if s.join_secret, do: " (joining)", else: ""}")
+    say_hello(s, node)
     {:noreply, changed(s)}
   end
 
@@ -413,6 +413,11 @@ defmodule Operator.Cluster do
         node = String.to_atom(node),
         node != Node.self() and node not in Node.list(),
         do: connect_async(node)
+
+    # Still joining: say hello again on every link. The first one can be
+    # lost (an iPhone suspended right after the connection came up), and
+    # the inviter pins only on a hello with its window's secret.
+    if s.join_secret, do: Enum.each(Node.list(), &say_hello(s, &1))
 
     Process.send_after(self(), :reconnect, @reconnect_ms)
     {:noreply, s}
@@ -556,6 +561,12 @@ defmodule Operator.Cluster do
 
   defp connect_async(node), do: spawn(fn -> Node.connect(node) end)
 
+  # Who this node is and whom it trusts; with the pairing secret while joining.
+  defp say_hello(s, node) do
+    hello = {:hello, Node.self(), s.fingerprint, wire_peers(s), s.join_secret}
+    GenServer.cast({__MODULE__, node}, hello)
+  end
+
   # ── pinning ──
 
   defp hello(s, node, fingerprint, peers, secret)
@@ -574,12 +585,22 @@ defmodule Operator.Cluster do
       true ->
         # Connected without a pinned certificate, or a pending one without
         # this window's secret: not ours.
+        Logger.warning("[cluster] #{node} isn't a member: #{not_admitted(s, secret)}")
         Node.disconnect(node)
         s
     end
   end
 
   defp hello(s, _node, _fingerprint, _peers, _secret), do: s
+
+  defp not_admitted(%{window_secret: nil}, _secret), do: "no pairing window is open"
+  defp not_admitted(_s, nil), do: "it sent no pairing secret"
+
+  defp not_admitted(s, secret) do
+    if window_secret?(s, secret),
+      do: "its certificate wasn't presented in this pairing window",
+      else: "its pairing secret is from another invite"
+  end
 
   defp admit(s, node, fingerprint, peers) do
     s = pin(s, fingerprint, Atom.to_string(node))

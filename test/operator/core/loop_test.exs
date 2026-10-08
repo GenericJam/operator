@@ -299,6 +299,42 @@ defmodule Operator.Core.LoopTest do
     assert text_of(last) == "also do y"
   end
 
+  test "a note during a run lands after it, never between a tool call and its result", %{
+    tmp_dir: dir
+  } do
+    script = [
+      [{:tool_call, "c1", "echo", %{"text" => "x", "sleep_ms" => 150}}],
+      [{:text, "ok"}],
+      [{:text, "again ok"}]
+    ]
+
+    %{loop: loop, llm: llm} = start_loop(dir, script)
+    :ok = Loop.prompt(loop, "start")
+    await_event(:tool_execution_start)
+    :ok = Loop.note(loop, :aside, "phone b says: hi")
+    events = collect()
+    assert {:message_end, "custom"} not in shape(events)
+
+    # Right after agent_end; the next model call sees it, after the reply.
+    assert %{entry: %{"customType" => "operator.aside"}} = await_event(:message_end)
+    :ok = Loop.prompt(loop, "again")
+    _ = collect()
+
+    kinds =
+      Enum.map(Loop.snapshot(loop).entries, &(&1["customType"] || &1["message"]["role"]))
+
+    assert Enum.take(kinds, -5) == [
+             "toolResult",
+             "assistant",
+             "operator.aside",
+             "user",
+             "assistant"
+           ]
+
+    third = List.last(FakeLLM.requests(llm))
+    assert Enum.any?(third.messages, &(text_of(&1) == "phone b says: hi"))
+  end
+
   test "follow_up runs once the agent would stop", %{tmp_dir: dir} do
     script = [[{:sleep, 100}, {:text, "first"}], [{:text, "second"}]]
     %{loop: loop, llm: llm} = start_loop(dir, script)
