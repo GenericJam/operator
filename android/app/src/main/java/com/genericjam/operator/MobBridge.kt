@@ -839,16 +839,20 @@ object MobBridge {
 
         if (!latch.await(2, java.util.concurrent.TimeUnit.SECONDS) || !ok) return null
 
+        val full =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) withSurfaceViews(decor, src, handler)
+            else src
+
         val bmp =
             if (scale > 0.0 && scale != 1.0) {
                 Bitmap.createScaledBitmap(
-                    src,
+                    full,
                     (w * scale).toInt().coerceAtLeast(1),
                     (h * scale).toInt().coerceAtLeast(1),
                     true
                 )
             } else {
-                src
+                full
             }
 
         val out = java.io.ByteArrayOutputStream()
@@ -858,6 +862,76 @@ object MobBridge {
             bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
         return out.toByteArray()
+    }
+
+    /**
+     * PixelCopy of a window copies the window's own surface only. A SurfaceView
+     * (a 3D viewport, a camera preview) has a surface of its own that the system
+     * composites underneath, through a transparent hole in the window: alone, the
+     * window copy shows it black. Copies each visible SurfaceView, lays them out
+     * where they are, and the window over them, as the screen shows it.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
+    private fun withSurfaceViews(
+        decor: android.view.View,
+        window: Bitmap,
+        handler: android.os.Handler,
+    ): Bitmap {
+        val found = java.util.ArrayList<Pair<android.view.SurfaceView, IntArray>>()
+        val listed = java.util.concurrent.CountDownLatch(1)
+        handler.post {
+            try {
+                collectSurfaceViews(decor, found)
+            } finally {
+                listed.countDown()
+            }
+        }
+        if (!listed.await(1, java.util.concurrent.TimeUnit.SECONDS) || found.isEmpty()) return window
+
+        val out = Bitmap.createBitmap(window.width, window.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        canvas.drawColor(android.graphics.Color.BLACK)
+        for ((view, at) in found) {
+            val copy = copySurface(view, handler) ?: continue
+            canvas.drawBitmap(copy, at[0].toFloat(), at[1].toFloat(), null)
+        }
+        canvas.drawBitmap(window, 0f, 0f, null)
+        return out
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
+    private fun copySurface(view: android.view.SurfaceView, handler: android.os.Handler): Bitmap? {
+        val w = view.width
+        val h = view.height
+        if (w <= 0 || h <= 0 || !view.holder.surface.isValid) return null
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val done = java.util.concurrent.CountDownLatch(1)
+        var good = false
+        try {
+            PixelCopy.request(view, bmp, { result ->
+                good = result == PixelCopy.SUCCESS
+                done.countDown()
+            }, handler)
+        } catch (e: IllegalArgumentException) {
+            return null
+        }
+        return if (done.await(1, java.util.concurrent.TimeUnit.SECONDS) && good) bmp else null
+    }
+
+    private fun collectSurfaceViews(
+        view: android.view.View,
+        out: MutableList<Pair<android.view.SurfaceView, IntArray>>,
+    ) {
+        if (view.visibility != android.view.View.VISIBLE) return
+        if (view is android.view.SurfaceView) {
+            val at = IntArray(2)
+            view.getLocationInWindow(at)
+            out.add(view to at)
+            return
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) collectSurfaceViews(view.getChildAt(i), out)
+        }
     }
 
     /**
