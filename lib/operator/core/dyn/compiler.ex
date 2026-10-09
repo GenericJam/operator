@@ -84,12 +84,15 @@ defmodule Operator.Core.Dyn.Compiler do
   Compiles checked files (`Check.run/1`'s result) into generation `n`.
 
   Compiling loads what it compiles at once, VM-wide, before any check of
-  the result can run, so a module the compile created or replaced outside
-  the generation (a library macro's, or one the static check missed) is
-  undone right after it, whatever the outcome: a new one is unloaded, a
-  replaced one reloaded from its file. The generation's modules and its
-  own protocol implementations stay (`Check.generation_module?/4`);
-  `Check.beam/2` then rejects a build that had any other.
+  the result can run. So the compile process's tracer refuses a module
+  outside the generation as its definition starts (`Trace.guard/3`), and
+  reports every module this compile defines, with what was loaded under
+  that name before. Afterwards, whatever the outcome, each one other than
+  the generation's modules and its own protocol implementations
+  (`Check.generation_module?/4`) is undone: a new one unloaded, a replaced
+  one reloaded from its file. Modules other processes define meanwhile (an
+  `eval`, a subagent) are left alone. `Check.beam/2` then rejects a build
+  that had any other.
   """
   @spec compile([{String.t(), Macro.t()}], pos_integer(), keyword()) ::
           {:ok, build()} | {:error, {:compile, String.t()}}
@@ -97,20 +100,26 @@ defmodule Operator.Core.Dyn.Compiler do
     if loaded(n) != [] do
       {:error, {:compile, "generation #{n} is already loaded"}}
     else
-      before = snapshot()
-      result = parsed |> prepare(n, opts) |> isolated(n, opts)
-      undo_outside(before, kept(result, n))
+      guard = make_ref()
+      result = parsed |> prepare(n, opts) |> isolated(n, opts, guard)
+      undo_outside(defined(guard, %{}), kept(result, n))
       result
     end
   end
 
-  # Every loaded module: its md5 and where it was loaded from.
-  defp snapshot do
-    for {mod, from} <- :code.all_loaded(), into: %{}, do: {mod, {md5(mod), from}}
+  # What the compile's tracer reported: module => what was loaded before
+  # (the first report of a module holds the original).
+  defp defined(guard, acc) do
+    receive do
+      {^guard, :defmodule, mod, prior} -> defined(guard, Map.put_new(acc, mod, prior))
+    after
+      0 -> acc
+    end
   end
 
+  # Never autoloads: a module not loaded has none.
   defp md5(mod) do
-    mod.module_info(:md5)
+    if :erlang.module_loaded(mod), do: mod.module_info(:md5)
   rescue
     _ -> nil
   end
@@ -126,33 +135,16 @@ defmodule Operator.Core.Dyn.Compiler do
 
   defp kept(_failed, _n), do: MapSet.new()
 
-  # Modules loaded from memory (not a file on disk: what a compile loads)
-  # that are new or changed since `before`, other than `kept`. Any module
-  # that existed before and changed is undone. New generation modules are
-  # left: this one's are kept or purged by a failed compile, another's come
-  # from a rebuild running beside it.
-  defp undo_outside(before, kept) do
-    for {mod, from} <- :code.all_loaded(),
-        {was} <- [{before[mod]}],
-        changed?(was, mod),
+  defp undo_outside(defined, kept) do
+    for {mod, prior} <- defined,
         not MapSet.member?(kept, mod),
-        not compiler_temporary?(mod),
-        was != nil or generation_of(mod) == nil,
-        not on_disk?(from) do
-      undo(mod, was)
-    end
+        changed?(prior, mod),
+        do: undo(mod, prior)
 
     :ok
   end
 
-  # Elixir's own module-body modules (`:elixir_compiler_<n>`), which it unloads.
-  defp compiler_temporary?(mod),
-    do: String.starts_with?(Atom.to_string(mod), "elixir_compiler_")
-
-  defp on_disk?(from) when is_list(from) and from != [], do: File.regular?(List.to_string(from))
-  defp on_disk?(_from), do: false
-
-  defp changed?(nil, _mod), do: true
+  defp changed?(nil, mod), do: md5(mod) != nil
   defp changed?({md5, _from}, mod), do: md5(mod) != md5
 
   defp undo(mod, before) do
@@ -161,7 +153,8 @@ defmodule Operator.Core.Dyn.Compiler do
     case before do
       {_md5, from} when is_list(from) and from != [] ->
         restored =
-          on_disk?(from) and match?({:module, _}, :code.load_abs(:filename.rootname(from)))
+          File.regular?(List.to_string(from)) and
+            match?({:module, _}, :code.load_abs(:filename.rootname(from)))
 
         Logger.warning(
           "[dyn] a compile replaced #{inspect(mod)}: " <>
@@ -590,7 +583,7 @@ defmodule Operator.Core.Dyn.Compiler do
 
   # ── compile process ──
 
-  defp isolated(files, n, opts) do
+  defp isolated(files, n, opts, guard) do
     timeout = Keyword.get(opts, :compile_timeout_ms, @default_timeout_ms)
     heap = words(Keyword.get(opts, :compile_max_heap_mb, @default_max_heap_mb))
     parent = self()
@@ -605,6 +598,7 @@ defmodule Operator.Core.Dyn.Compiler do
           include_shared_binaries: true
         })
 
+        :ok = Trace.guard(n, parent, guard)
         send(parent, {ref, compile_files(files, n, Keyword.get(opts, :reuse))})
       end)
 

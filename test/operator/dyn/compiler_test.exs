@@ -41,47 +41,71 @@ defmodule Operator.Core.Dyn.CompilerTest do
     assert Compiler.core_digest() == v1
   end
 
+  defp compile(source, n), do: Compiler.compile([{"b.ex", Code.string_to_quoted!(source)}], n, [])
+
   @tag :capture_log
-  test "a compile that replaces or creates a module outside its generation leaves the VM as it was" do
-    n = 977
+  test "a module outside the generation is refused before it loads, whatever defines it" do
+    on_exit(fn -> Compiler.purge(Compiler.loaded(977)) end)
     # What the static check refuses, compiled anyway (as a library macro might).
+    for {body, name} <- [
+          {"defimpl Inspect, for: Atom do\n    def inspect(_a, _o), do: \"pwned\"\n  end",
+           "Inspect.Atom"},
+          {"require Protocol\n  Protocol.derive(Inspect, Range)", "Inspect.Range"},
+          {"defmodule Elixir.Outside.Made do\n  end", "Outside.Made"},
+          {"defmodule Elixir.Kernel.Operator.Dyn.G977.B do\n  end", "Kernel.Operator.Dyn.G977.B"}
+        ] do
+      md5s = Map.new([Inspect.Atom, Inspect.Range], &{&1, &1.module_info(:md5)})
+      source = "defmodule Operator.Dyn.B do\n  #{body}\nend\n"
+
+      assert {:error, {:compile, text}} = compile(source, 977)
+      assert text =~ "defines #{name}: a Dyn generation may only define", text
+      assert Map.new([Inspect.Atom, Inspect.Range], &{&1, &1.module_info(:md5)}) == md5s
+      assert inspect(:ok) == ":ok" and inspect(1..2) == "1..2"
+      refute :code.is_loaded(Outside.Made)
+      assert Compiler.loaded(977) == []
+    end
+  end
+
+  @tag :capture_log
+  test "an implementation for a module the build doesn't have is undone; its own stay" do
     source = """
     defmodule Operator.Dyn.B do
-      defimpl Inspect, for: Atom do
-        def inspect(_a, _o), do: Inspect.Algebra.string("pwned")
-      end
-
-      defmodule Elixir.Outside.Made do
-        def x, do: 1
-      end
-
       defstruct [:a]
 
       defimpl String.Chars do
         def to_string(_b), do: "b"
       end
+
+      defimpl String.Chars, for: Operator.Dyn.Missing do
+        def to_string(_m), do: "m"
+      end
     end
     """
 
-    md5 = Inspect.Atom.module_info(:md5)
-    on_exit(fn -> Compiler.purge(Compiler.loaded(n)) end)
+    on_exit(fn -> Compiler.purge(Compiler.loaded(976)) end)
+    assert {:ok, build} = compile(source, 976)
 
-    assert {:ok, build} = Compiler.compile([{"b.ex", Code.string_to_quoted!(source)}], n, [])
+    stray = Module.concat(String.Chars, Operator.Dyn.G976.Missing)
+    refute :code.is_loaded(stray)
+    own_impl = Module.concat(String.Chars, Operator.Dyn.G976.B)
+    assert Enum.sort(Compiler.loaded(976)) == Enum.sort([Operator.Dyn.G976.B, own_impl])
+    assert {:error, [%{file: file}]} = Check.beam(build.modules, 976)
+    assert file == inspect(stray)
+  end
 
-    # Undone at once: the stdlib's implementation is back, the stray module gone.
-    assert Inspect.Atom.module_info(:md5) == md5
-    assert inspect(:ok) == ":ok"
-    refute :code.is_loaded(Outside.Made)
+  test "modules other processes define during a compile are left alone" do
+    on_exit(fn ->
+      Compiler.purge(Compiler.loaded(975))
+      unload(Concurrent.Probe)
+    end)
 
-    # The generation and its own implementation stay, and the build is refused.
-    own_impl = Module.concat(String.Chars, Operator.Dyn.G977.B)
-    assert Enum.sort(Compiler.loaded(n)) == Enum.sort([Operator.Dyn.G977.B, own_impl])
-    assert {:error, violations} = Check.beam(build.modules, n)
+    slow = "defmodule Operator.Dyn.Slow do\n  Process.sleep(300)\nend\n"
+    task = Task.async(fn -> compile(slow, 975) end)
+    Process.sleep(50)
+    load("defmodule Concurrent.Probe do\n  def x, do: 1\nend\n")
 
-    assert Enum.map(violations, & &1.file) |> Enum.uniq() |> Enum.sort() == [
-             "Inspect.Atom",
-             "Outside.Made"
-           ]
+    assert {:ok, _} = Task.await(task)
+    assert :code.is_loaded(Concurrent.Probe) != false
   end
 
   test "only a loaded implementation for a generation's module counts as one" do

@@ -853,18 +853,21 @@ defmodule Operator.Core.FrontTest do
     use Mob.Screen
     alias Operator.Core.Files
 
-    def mount(_params, _session, socket), do: {:ok, Mob.Socket.assign(socket, :shown, "none")}
+    def mount(_params, _session, socket),
+      do: {:ok, Mob.Socket.assign(socket, shown: "none", slow: 0)}
 
     def render(assigns) do
       %{type: :column, props: %{}, children: [
         %{type: :text, props: %{text: "cam \#{assigns.shown}"}, children: []},
-        %{type: :button, props: %{text: "Same", on_tap: {self(), :same}}, children: []}
+        %{type: :text, props: %{text: "slow \#{assigns.slow}"}, children: []},
+        %{type: :button, props: %{text: "Same", on_tap: {self(), :same}}, children: []},
+        %{type: :button, props: %{text: "Slow", on_tap: {self(), :slow}}, children: []}
       ]}
     end
 
-    def handle_info({:camera, :photo, %{path: path}}, socket) do
+    def handle_info({:camera, kind, %{path: path}}, socket) when kind in [:photo, :video] do
       shown =
-        with {:ok, kept} <- Files.keep(path, "shot.jpg"),
+        with {:ok, kept} <- Files.keep(path, "shot" <> Path.extname(path)),
              {:ok, bytes} <- Files.read(kept) do
           "kept \#{Path.basename(kept)} \#{bytes}"
         else
@@ -875,6 +878,12 @@ defmodule Operator.Core.FrontTest do
     end
 
     def handle_info({:tap, :boom}, _socket), do: raise("cam boom")
+
+    def handle_info({:tap, :slow}, socket) do
+      Process.sleep(300)
+      {:noreply, Mob.Socket.assign(socket, :slow, socket.assigns.slow + 1)}
+    end
+
     def handle_info(_message, socket), do: {:noreply, socket}
   end
   """
@@ -889,6 +898,7 @@ defmodule Operator.Core.FrontTest do
     File.mkdir_p!(temp)
     File.mkdir_p!(Path.join(data, "workspace/inbox"))
     File.write!(Path.join(data, "workspace/inbox/src.jpg"), "pixels")
+    File.write!(Path.join(data, "workspace/inbox/clip.mp4"), "frames")
     File.write!(Path.join(temp, "other.jpg"), "someone else's")
     Application.put_env(:operator, :app_temp, temp)
     System.put_env("MOB_DATA_DIR", data)
@@ -930,6 +940,12 @@ defmodule Operator.Core.FrontTest do
     assert rest =~ "to Cam; it re-rendered."
     await_view("cam kept shot.jpg pixels")
 
+    # A video too.
+    assert {:ok, _} =
+             FrontSend.run(%{"message" => ~s|{:camera, :video, %{path: "inbox/clip.mp4"}}|}, ctx)
+
+    await_view("cam kept shot.mp4 frames")
+
     # The screen got them, but another app's window takes the user's touches: said so.
     covered = Map.put(ctx, :foreground?, fn -> false end)
 
@@ -963,6 +979,45 @@ defmodule Operator.Core.FrontTest do
 
     assert error =~ "cam boom"
     assert {:error, "No front screen is running" <> _} = FrontTap.run(%{"tag" => "same"}, %{})
+  end
+
+  test "front tools from different callers take turns on the front", %{settings: settings} do
+    activate!(files(%{"cam.ex" => @cam}))
+    start_front(settings)
+    {:ok, "Cam"} = Front.open("Cam")
+    _ = Front.subscribe()
+    _ = Front.show(@env)
+    await_view("cam none")
+
+    # Two callers at once (say a subagent's loop and eval): the second tap
+    # waits for the first to finish, so each sees its own re-render.
+    started = System.monotonic_time(:millisecond)
+    taps = for _ <- 1..2, do: Task.async(fn -> FrontTap.run(%{"tag" => "slow"}, %{}) end)
+
+    assert [{:ok, "Tapped slow on Cam; it re-rendered."}, {:ok, "Tapped slow on Cam" <> _}] =
+             Task.await_many(taps, 5_000)
+
+    assert System.monotonic_time(:millisecond) - started >= 550
+    assert {:ok, "Cam assigns:\n%{slow: 2}"} = FrontState.run(%{"keys" => ["slow"]}, %{})
+
+    # Busy past the wait: an error, and nothing runs. A holder that dies frees it.
+    test = self()
+
+    holder =
+      spawn(fn ->
+        Front.exclusive(fn ->
+          send(test, :holding)
+          Process.sleep(:infinity)
+        end)
+      end)
+
+    assert_receive :holding
+    assert {:error, :busy} = Front.exclusive(fn -> :ran end, Front, 50)
+    Process.exit(holder, :kill)
+    assert :ran = Front.exclusive(fn -> :ran end, Front, 1_000)
+
+    # Re-entrant within one caller.
+    assert :inner = Front.exclusive(fn -> Front.exclusive(fn -> :inner end, Front, 0) end)
   end
 
   test "front_send parses literals only" do

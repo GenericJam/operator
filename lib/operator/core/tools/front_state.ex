@@ -10,6 +10,7 @@ defmodule Operator.Core.Tools.FrontState do
   @behaviour Operator.Core.Tool
 
   alias Operator.Core.Front
+  alias Operator.Core.Tools.FrontTap
 
   @max_bytes 8_000
 
@@ -39,14 +40,16 @@ defmodule Operator.Core.Tools.FrontState do
   end
 
   @impl true
-  def timeout_ms, do: 5_000
+  def timeout_ms, do: 15_000
 
   # The front has one screen: no other front call runs alongside.
   @impl true
   def concurrency, do: :exclusive
 
   @impl true
-  def run(args, ctx) do
+  def run(args, ctx), do: FrontTap.exclusive(ctx, fn -> act(args, ctx) end)
+
+  defp act(args, ctx) do
     case Front.assigns(Map.get(ctx, :front, Front)) do
       {:ok, screen, assigns} ->
         {:ok, render(screen, pick(assigns, args["keys"]))}

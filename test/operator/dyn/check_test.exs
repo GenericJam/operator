@@ -55,6 +55,9 @@ defmodule Operator.Core.Dyn.CheckTest do
       {~s|:os.cmd(~c"ls")|, ":os.cmd"},
       {~s|Code.eval_string("1")|, "Code"},
       {~s|Code.compile_string("x")|, "Code"},
+      {":erlang.binary_to_term(mod)", ":erlang.binary_to_term"},
+      {"Protocol.derive(Inspect, Range)", "Protocol.derive"},
+      {"Protocol.consolidate(Inspect, [])", "Protocol.consolidate"},
       {"Mob.Dist.ensure_started([])", "Mob.Dist"},
       {"Node.connect(:x@y)", "Node"},
       {":init.stop()", ":init"},
@@ -297,6 +300,18 @@ defmodule Operator.Core.Dyn.CheckTest do
              Check.run(%{"q.ex" => "defimpl Inspect, for: Operator.Dyn.Q do\nend\n"})
 
     assert m =~ "top level"
+  end
+
+  test "Protocol.derive at a module's top, which would redefine the stdlib's Inspect.Range" do
+    source = """
+    defmodule Operator.Dyn.D do
+      require Protocol
+      Protocol.derive(Inspect, Range)
+    end
+    """
+
+    assert {:error, [%{line: 3, message: m}]} = Check.run(%{"d.ex" => source})
+    assert m =~ "Protocol.derive"
   end
 
   test "compiled modules are the generation's, or protocol implementations for them" do

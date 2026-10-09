@@ -37,14 +37,16 @@ defmodule Operator.Core.Tools.FrontScreenshot do
     do: %{"type" => "object", "properties" => %{}, "additionalProperties" => false}
 
   @impl true
-  def timeout_ms, do: 20_000
+  def timeout_ms, do: 30_000
 
   # The front has one screen: no other front call runs alongside.
   @impl true
   def concurrency, do: :exclusive
 
   @impl true
-  def run(_args, ctx) do
+  def run(args, ctx), do: FrontTap.exclusive(ctx, fn -> act(args, ctx) end)
+
+  defp act(_args, ctx) do
     front = Map.get(ctx, :front, Front)
     capture = Map.get(ctx, :front_capture, &capture/1)
 

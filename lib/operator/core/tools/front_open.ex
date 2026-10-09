@@ -7,6 +7,7 @@ defmodule Operator.Core.Tools.FrontOpen do
   @behaviour Operator.Core.Tool
 
   alias Operator.Core.Front
+  alias Operator.Core.Tools.FrontTap
 
   @impl true
   def name, do: "front_open"
@@ -34,14 +35,16 @@ defmodule Operator.Core.Tools.FrontOpen do
   end
 
   @impl true
-  def timeout_ms, do: 15_000
+  def timeout_ms, do: 25_000
 
   # The front has one screen: no other front call runs alongside.
   @impl true
   def concurrency, do: :exclusive
 
   @impl true
-  def run(%{"screen" => screen}, ctx) when is_binary(screen) do
+  def run(args, ctx), do: FrontTap.exclusive(ctx, fn -> act(args, ctx) end)
+
+  defp act(%{"screen" => screen}, ctx) when is_binary(screen) do
     case Front.open(screen, [], Map.get(ctx, :front, Front)) do
       {:ok, name} ->
         {:ok,
@@ -56,5 +59,5 @@ defmodule Operator.Core.Tools.FrontOpen do
     end
   end
 
-  def run(_args, _ctx), do: {:error, "screen (a front screen's name) is required"}
+  defp act(_args, _ctx), do: {:error, "screen (a front screen's name) is required"}
 end

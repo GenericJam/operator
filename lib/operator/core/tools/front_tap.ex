@@ -37,14 +37,16 @@ defmodule Operator.Core.Tools.FrontTap do
   end
 
   @impl true
-  def timeout_ms, do: 10_000
+  def timeout_ms, do: 20_000
 
   # The front has one screen: no other front call runs alongside.
   @impl true
   def concurrency, do: :exclusive
 
   @impl true
-  def run(%{"tag" => tag}, ctx) when is_binary(tag) do
+  def run(args, ctx), do: exclusive(ctx, fn -> act(args, ctx) end)
+
+  defp act(%{"tag" => tag}, ctx) when is_binary(tag) do
     result =
       case Front.tap(tag, Map.get(ctx, :front, Front)) do
         {:ok, screen, outcome} ->
@@ -64,7 +66,25 @@ defmodule Operator.Core.Tools.FrontTap do
     covered(result, ctx)
   end
 
-  def run(_args, _ctx), do: {:error, "`tag` is required"}
+  defp act(_args, _ctx), do: {:error, "`tag` is required"}
+
+  @doc """
+  Runs a front tool's `fun` holding the front's tool lock
+  (`Front.exclusive/3`, on `ctx[:front]`): the loop runs one front call at a
+  time, but another loop (a subagent's) or eval's `tool` may call too.
+  """
+  @spec exclusive(map(), (-> {:ok | :error, term()})) :: {:ok | :error, term()}
+  def exclusive(ctx, fun) do
+    case Front.exclusive(fun, Map.get(ctx, :front, Front)) do
+      {:error, :busy} ->
+        {:error,
+         "Another front tool call (from a subagent, eval or another loop) is using the " <>
+           "front and didn't finish within 10 s; try again when it has."}
+
+      result ->
+        result
+    end
+  end
 
   @doc "The tool result for `done` (\"Tapped x on Home\") and what the screen did after it."
   @spec outcome(String.t(), Front.outcome()) :: {:ok, String.t()} | {:error, String.t()}
@@ -98,6 +118,6 @@ defmodule Operator.Core.Tools.FrontTap do
 
   @impl true
   def selftest do
-    with {:error, "`tag` is required"} <- run(%{}, %{}), do: :ok
+    with {:error, "`tag` is required"} <- act(%{}, %{}), do: :ok
   end
 end

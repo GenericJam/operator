@@ -16,9 +16,19 @@ defmodule Operator.Core.Dyn.Trace do
   the VM are untouched. `collect/2` also reports the modules the file
   defined (`:on_module`); a caller that sees fewer than it compiled treats
   the file's needs as unknown.
+
+  It is also the gate on what a Dyn compile may define, before anything
+  loads (`guard/2`, in the compiling process): when a module's definition
+  starts (`:defmodule`) it is reported to the compiler, which undoes what
+  the compile defined outside the generation, and refused (the compile of
+  that file fails) unless it is `Operator.Dyn.G<n>.*` or named as a
+  protocol's implementation for one (`Inspect.Operator.Dyn.G<n>.X`, with
+  `Inspect` a protocol). A `Protocol.derive/2` for a stdlib type or a
+  library macro's module elsewhere never replaces anything.
   """
 
   @key {__MODULE__, :file}
+  @guard {__MODULE__, :guard}
 
   # Events whose module is needed at compile time wherever they happen.
   @always [
@@ -60,8 +70,69 @@ defmodule Operator.Core.Dyn.Trace do
     end
   end
 
+  @doc """
+  From now on in this process, every module definition that starts is
+  sent to `pid` as `{ref, :defmodule, module, prior}` (`prior`: the md5
+  and file of the version loaded under that name until then, or nil), and
+  one outside generation `n` (see the moduledoc) raises instead of being
+  defined.
+  """
+  @spec guard(pos_integer(), pid(), reference()) :: :ok
+  def guard(n, pid, ref) do
+    Process.put(@guard, %{own: "Elixir.Operator.Dyn.G#{n}.", pid: pid, ref: ref})
+    :ok
+  end
+
+  @doc """
+  May a compile for generation `own` (`"Elixir.Operator.Dyn.G<n>."`) define
+  `mod`: one of its own, or a protocol's implementation for one?
+  """
+  @spec allowed?(module(), String.t()) :: boolean()
+  def allowed?(mod, "Elixir." <> own_name = own) do
+    name = Atom.to_string(mod)
+
+    String.starts_with?(name, own) or
+      case :binary.split(name, "." <> own_name) do
+        ["Elixir." <> _ = protocol, rest] when rest != "" ->
+          protocol?(String.to_existing_atom(protocol))
+
+        _ ->
+          false
+      end
+  rescue
+    ArgumentError -> false
+  end
+
+  defp protocol?(mod) do
+    Code.ensure_loaded?(mod) and function_exported?(mod, :__protocol__, 1)
+  end
+
+  defp check_module(%{module: mod}) do
+    case Process.get(@guard) do
+      nil ->
+        :ok
+
+      %{own: own, pid: pid, ref: ref} ->
+        prior =
+          if :erlang.module_loaded(mod), do: {mod.module_info(:md5), :code.which(mod)}
+
+        send(pid, {ref, :defmodule, mod, prior})
+
+        unless allowed?(mod, own) do
+          raise "defines #{inspect(mod)}: a Dyn generation may only define " <>
+                  "Operator.Dyn.* modules and protocol implementations for them"
+        end
+
+        :ok
+    end
+  end
+
   @doc false
   @spec trace(tuple() | atom(), Macro.Env.t()) :: :ok
+  # `:defmodule` is an atom on Elixir 1.20, `{:defmodule, meta}` before.
+  def trace(:defmodule, env), do: check_module(env)
+  def trace({:defmodule, _meta}, env), do: check_module(env)
+
   def trace(event, env) do
     case Process.get(@key) do
       nil -> :ok

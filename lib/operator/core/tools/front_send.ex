@@ -58,14 +58,16 @@ defmodule Operator.Core.Tools.FrontSend do
   end
 
   @impl true
-  def timeout_ms, do: 10_000
+  def timeout_ms, do: 20_000
 
   # The front has one screen: no other front call runs alongside.
   @impl true
   def concurrency, do: :exclusive
 
   @impl true
-  def run(%{"message" => text}, ctx) when is_binary(text) do
+  def run(args, ctx), do: FrontTap.exclusive(ctx, fn -> act(args, ctx) end)
+
+  defp act(%{"message" => text}, ctx) when is_binary(text) do
     with {:ok, message} <- parse(text),
          {:ok, message} <- Files.stage_capability(message, ctx) do
       case Front.deliver(message, Map.get(ctx, :front, Front)) do
@@ -80,7 +82,7 @@ defmodule Operator.Core.Tools.FrontSend do
     end
   end
 
-  def run(_args, _ctx), do: {:error, "`message` is required"}
+  defp act(_args, _ctx), do: {:error, "`message` is required"}
 
   @doc """
   Parses `text` as an Elixir literal: `{:ok, term}`, or `{:error, text}`

@@ -54,6 +54,7 @@ defmodule Operator.Core.Front do
   @settings_max_heap_words 1_000_000
   @max_error_bytes 6_000
   @render_wait_ms 1_000
+  @tools_wait_ms 10_000
 
   @type toggle :: :dial | {:text, String.t()}
   @type view :: {:tree, map()} | {:error, String.t()} | {:note, String.t()}
@@ -160,6 +161,57 @@ defmodule Operator.Core.Front do
           {:ok, String.t(), outcome()} | {:error, :not_running}
   def deliver(message, server \\ __MODULE__, wait_ms \\ @render_wait_ms),
     do: GenServer.call(server, {:deliver, message, wait_ms}, wait_ms + 5_000)
+
+  @doc """
+  Runs `fun` holding the front's tool lock: one screen, so one agent tool
+  acts on it at a time, whoever calls (the loop, a subagent's loop, eval's
+  `tool`). Waits up to `wait_ms` for whoever holds it, else returns
+  `{:error, :busy}` without running `fun`. Re-entrant in the caller's
+  process; released when `fun` returns or raises, or its process dies.
+  """
+  @spec exclusive((-> result), GenServer.server(), timeout()) :: result | {:error, :busy}
+        when result: term()
+  def exclusive(fun, server \\ __MODULE__, wait_ms \\ @tools_wait_ms) do
+    held = {__MODULE__, :tools_held, server}
+
+    if Process.get(held) do
+      fun.()
+    else
+      with {:ok, token} <- lock_tools(server, wait_ms) do
+        Process.put(held, true)
+
+        try do
+          fun.()
+        after
+          Process.delete(held)
+          GenServer.cast(server, {:unlock_tools, token})
+        end
+      end
+    end
+  end
+
+  defp lock_tools(server, wait_ms) do
+    case GenServer.call(server, :lock_tools) do
+      {:ok, token} ->
+        {:ok, token}
+
+      {:queued, token} ->
+        receive do
+          {:operator_front_tools, ^token} -> {:ok, token}
+        after
+          wait_ms ->
+            :ok = GenServer.call(server, {:unlock_tools, token})
+            # Granted just as the wait ran out: given back by the call above.
+            receive do
+              {:operator_front_tools, ^token} -> :ok
+            after
+              0 -> :ok
+            end
+
+            {:error, :busy}
+        end
+    end
+  end
 
   @doc """
   The open front screen's name and its assigns (its state), read from its
@@ -319,7 +371,11 @@ defmodule Operator.Core.Front do
       theme: nil,
       # Callers of tap/3 and deliver/3 waiting for the next view:
       # ref => {from, screen, timer}.
-      waiters: %{}
+      waiters: %{},
+      # The tool lock (exclusive/3): the holder's monitor, and the waiting
+      # callers' {monitor, pid}, first come first served.
+      tools: nil,
+      tools_queue: :queue.new()
     }
 
     {:ok, %{s | stack: Settings.front_stack(s.dir)}}
@@ -371,6 +427,16 @@ defmodule Operator.Core.Front do
     {:reply, s.screens |> Map.keys() |> Enum.sort(), s}
   end
 
+  def handle_call(:lock_tools, {pid, _tag}, s) do
+    token = Process.monitor(pid)
+
+    if s.tools,
+      do: {:reply, {:queued, token}, %{s | tools_queue: :queue.in({token, pid}, s.tools_queue)}},
+      else: {:reply, {:ok, token}, %{s | tools: token}}
+  end
+
+  def handle_call({:unlock_tools, token}, _from, s), do: {:reply, :ok, unlock_tools(s, token)}
+
   def handle_call(:host, _from, %{host: host} = s) when is_pid(host),
     do: {:reply, {:ok, host}, s}
 
@@ -419,6 +485,8 @@ defmodule Operator.Core.Front do
   @impl true
   def handle_cast(:refresh, s), do: {:noreply, s |> sync() |> restart_if_running()}
 
+  def handle_cast({:unlock_tools, token}, s), do: {:noreply, unlock_tools(s, token)}
+
   @impl true
   def handle_info({:operator_front_host, host, {:view, tree}}, %{host: host} = s),
     do: {:noreply, %{s | view: {:tree, tree}} |> broadcast() |> reply_waiters(:rendered)}
@@ -460,7 +528,7 @@ defmodule Operator.Core.Front do
         {:noreply, if(subs == %{} and s.visible, do: hide_front(s), else: s)}
 
       _ ->
-        {:noreply, s}
+        {:noreply, release_tools(s, ref)}
     end
   end
 
@@ -484,6 +552,27 @@ defmodule Operator.Core.Front do
     do: {:noreply, %{s | gen: nil} |> sync() |> restart_if_running()}
 
   def handle_info(_message, s), do: {:noreply, s}
+
+  # The holder gives the lock back, or a waiter stops waiting.
+  defp unlock_tools(s, token) do
+    Process.demonitor(token, [:flush])
+    release_tools(s, token)
+  end
+
+  # The tool lock is free: the next waiter gets it.
+  defp release_tools(%{tools: token} = s, token) when is_reference(token) do
+    case :queue.out(s.tools_queue) do
+      {{:value, {next, pid}}, queue} ->
+        send(pid, {:operator_front_tools, next})
+        %{s | tools: next, tools_queue: queue}
+
+      {:empty, _} ->
+        %{s | tools: nil}
+    end
+  end
+
+  defp release_tools(s, token),
+    do: %{s | tools_queue: :queue.filter(fn {ref, _pid} -> ref != token end, s.tools_queue)}
 
   # The tap or message went to the host: the caller gets the screen it went
   # to and what came of it (the next view, a crash, or nothing in wait_ms).

@@ -26,7 +26,11 @@ defmodule Operator.Core.Dyn.Check do
       `Path.wildcard/2`,
       `:init`, `:file`, `:os.cmd`, `:erlang.halt` and the other code-loading
       and node-control functions listed in `@partial`, `System.halt/stop/cmd`,
-      `Application.start/stop/put_env`, dynamic atoms (`String.to_atom`, ...);
+      `Application.start/stop/put_env`, dynamic atoms (`String.to_atom`, ...),
+      `:erlang.binary_to_term` (it makes any atom, a forbidden one too, and
+      funs), and `Protocol.derive` / `consolidate` (they define or replace
+      implementations for any type, the stdlib's too; `@derive` and
+      `defimpl` for a Dyn module are the way);
     * nothing that controls or watches other processes or the VM: tracing
       (`:erlang.trace*`, `:trace`, `:seq_trace`, `:dbg`, `:erl_tracer`),
       `:erlang.suspend_process/resume_process`, `system_monitor` /
@@ -150,6 +154,7 @@ defmodule Operator.Core.Dyn.Check do
     {:elixir, "String"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "List"} => ~w(to_atom to_existing_atom)a,
     {:elixir, "Function"} => ~w(capture)a,
+    {:elixir, "Protocol"} => ~w(derive __derive__ consolidate)a,
     {:elixir, "Process"} => ~w(list info whereis registered)a,
     {:elixir, "Path"} => [:wildcard],
     {:elixir, "Kernel"} => [],
@@ -159,6 +164,7 @@ defmodule Operator.Core.Dyn.Check do
     {:erlang, :erlang} =>
       ~w(halt open_port load_module purge_module delete_module check_old_code load_nif
          set_cookie system_flag make_fun binary_to_atom list_to_atom binary_to_existing_atom
+         binary_to_term
          list_to_existing_atom suspend_process resume_process trace trace_pattern
          trace_delivered trace_info system_monitor system_profile processes process_info whereis
          registered)a,

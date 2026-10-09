@@ -54,14 +54,16 @@ defmodule Operator.Core.Tools.FrontScroll do
   end
 
   @impl true
-  def timeout_ms, do: 20_000
+  def timeout_ms, do: 30_000
 
   # The front has one screen: no other front call runs alongside.
   @impl true
   def concurrency, do: :exclusive
 
   @impl true
-  def run(%{"to" => to} = args, ctx) when is_binary(to) do
+  def run(args, ctx), do: FrontTap.exclusive(ctx, fn -> act(args, ctx) end)
+
+  defp act(%{"to" => to} = args, ctx) when is_binary(to) do
     front = Map.get(ctx, :front, Front)
     nif = Map.get(ctx, :scroll_nif, :mob_nif)
     show = Map.get(ctx, :front_show, &FrontScreenshot.capture/2)
@@ -74,7 +76,7 @@ defmodule Operator.Core.Tools.FrontScroll do
     end
   end
 
-  def run(_args, _ctx), do: {:error, "`to` is required: top, bottom, down, up or a page number"}
+  defp act(_args, _ctx), do: {:error, "`to` is required: top, bottom, down, up or a page number"}
 
   @doc false
   # "top" | "bottom" | "down" | "up" | a page number, 1 the top.

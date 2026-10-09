@@ -266,7 +266,8 @@ defmodule Operator.Core.Files do
   end
 
   def stage_capability({kind, tag, item}, ctx)
-      when {kind, tag} in [{:camera, :photo}, {:audio, :recorded}] and is_map(item) do
+      when {kind, tag} in [{:camera, :photo}, {:camera, :video}, {:audio, :recorded}] and
+             is_map(item) do
     with {:ok, [item]} <- stage_items([item], ctx), do: {:ok, {kind, tag, item}}
   end
 
