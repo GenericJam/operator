@@ -1,6 +1,6 @@
 # Mob's rules for app code
 
-From mob 0.9.12's AGENTS.md (written for agents working on mob itself): the parts that hold for app code. Rules about mob's own repo, native code and releases are left out.
+From mob 0.9.14's AGENTS.md (written for agents working on mob itself): the parts that hold for app code. Rules about mob's own repo, native code and releases are left out.
 
 ## What Mob is, in one paragraph
 

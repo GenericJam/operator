@@ -43,7 +43,8 @@ defmodule Mix.Tasks.Operator.Docs do
     {"navigation", "push/pop/reset, tabs and stacks, transitions, data back on pop"},
     {"events", "tap/change/gesture/scroll events: payloads, throttling, patterns"},
     {"event_model", "how events are addressed and routed; stateful components"},
-    {"screen_lifecycle", "mount/render/handle_info, the socket, safe area, crashes, back"},
+    {"screen_lifecycle",
+     "mount/render/handle_info, the socket, async results, safe area, crashes, back"},
     {"permissions", "the permission each capability needs; asking again after a denial"},
     {"device_capabilities",
      "haptics, clipboard, share, camera, photos, audio, location, motion, alerts, ..."},
@@ -51,7 +52,9 @@ defmodule Mix.Tasks.Operator.Docs do
     {"data", "Mob.State (small persistent key-value store) and Ecto"},
     {"testing", "testing screens: Mob.ScreenCase, handle_info, Mob.Test"},
     {"background_execution", "what can run while the app is in the background"},
-    {"push_notifications", "local and push notifications, silent pushes"}
+    {"push_notifications", "local and push notifications, silent pushes"},
+    {"liveview",
+     "LiveView mode (a Phoenix LiveView in a WebView); how ~MOB screens mirror LiveView"}
   ]
 
   # Sections of mob's AGENTS.md that hold for app code; the rest is about

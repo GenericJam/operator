@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Operator.DocsTest do
 
   @guides ~w(components styling theming navigation events event_model screen_lifecycle
              permissions device_capabilities packages data testing background_execution
-             push_notifications)
+             push_notifications liveview)
 
   setup %{tmp_dir: tmp} do
     shell = Mix.shell()
