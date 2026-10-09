@@ -36,7 +36,9 @@ defmodule Operator.Core.Tools.Eval do
     scan or camera results) leaves its messages for `inbox.()` in a later call. inbox.() \
     returns the messages received since you last took them (oldest first, the newest 200 \
     kept) and clears them; inbox.(ms) waits up to ms for one when there are none yet. A \
-    `receive` in your code sees what arrives during that call.
+    `receive` in your code sees what arrives during that call. Between calls up to 200 \
+    messages wait, and large ones (frames) count against the process's 50 MB cap: stop a \
+    stream you don't need, or it can get the process killed and its messages lost.
 
     This has full authority over the app's BEAM: use it to inspect processes \
     (Process.info, :sys.get_state), ETS tables, Application.get_env, read the agent's own \
@@ -109,16 +111,20 @@ defmodule Operator.Core.Tools.Eval do
     {pid, status} = EvalKernel.evaluator(id)
     opts = [evaluator: pid, notes: notes(status)]
 
-    case EvalKernel.evaluate(code, EvalKernel.get(id), ctx, timeout, opts) do
-      {:ok, text, nil} ->
-        {:ok, text}
+    try do
+      case EvalKernel.evaluate(code, EvalKernel.get(id), ctx, timeout, opts) do
+        {:ok, text, nil} ->
+          {:ok, text}
 
-      {:ok, text, session} ->
-        :ok = EvalKernel.put(id, session)
-        {:ok, text}
+        {:ok, text, session} ->
+          :ok = EvalKernel.put(id, session)
+          {:ok, text}
 
-      {:error, text, _} ->
-        {:error, text}
+        {:error, text, _} ->
+          {:error, text}
+      end
+    after
+      EvalKernel.release(id)
     end
   end
 

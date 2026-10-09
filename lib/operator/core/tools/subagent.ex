@@ -19,9 +19,11 @@ defmodule Operator.Core.Tools.Subagent do
   and reported as timed out with what they had written; stopping the
   caller's run (the loop sends running tools `{:operator_core_stop, loop}`)
   or the caller's loop going away does the same. The subagents run outside
-  the call's process, started by a guard that ends them once the call's
-  process is gone, however it went (killed at its timeout included), so
-  none keeps calling the model in the background.
+  the call's process, started by a guard that ends them before the call
+  returns (so none outlives it, though `eval`'s evaluator, a caller that
+  lives for the session, does), or once the call's process is gone however
+  it went (killed at its timeout included), so none keeps calling the
+  model in the background.
   """
   @behaviour Operator.Core.Tool
 
@@ -103,12 +105,16 @@ defmodule Operator.Core.Tools.Subagent do
          {:ok, loop} <- caller_loop(ctx),
          {:ok, config} <- config(loop),
          cap = answer_cap(length(tasks)),
-         {:ok, children} <- start(tasks, context, config, cap) do
-      deadline = System.monotonic_time(:millisecond) + Keyword.fetch!(opts, :deadline_ms)
-      loop_ref = Process.monitor(loop)
-      outcome = await(children, loop, loop_ref, deadline)
-      Process.demonitor(loop_ref, [:flush])
-      {:ok, report(children, outcome, cap)}
+         {:ok, children, guard} <- start(tasks, context, config, cap) do
+      try do
+        deadline = System.monotonic_time(:millisecond) + Keyword.fetch!(opts, :deadline_ms)
+        loop_ref = Process.monitor(loop)
+        outcome = await(children, loop, loop_ref, deadline)
+        Process.demonitor(loop_ref, [:flush])
+        {:ok, report(children, outcome, cap)}
+      after
+        release(children, guard)
+      end
     end
   end
 
@@ -172,20 +178,20 @@ defmodule Operator.Core.Tools.Subagent do
 
     caller = self()
     ref = make_ref()
-    {_pid, guard_ref} = spawn_monitor(fn -> guard(caller, ref, specs) end)
+    {pid, mon} = spawn_monitor(fn -> guard(caller, ref, specs) end)
 
     receive do
       {^ref, pids} ->
-        Process.demonitor(guard_ref, [:flush])
+        children =
+          for {{name, prompt, opts}, pid} <- Enum.zip(specs, pids) do
+            :ok = Loop.subscribe(pid)
+            :ok = Loop.prompt(pid, child_prompt(name, prompt, context, cap))
+            %{name: name, pid: pid, ref: Process.monitor(pid), session_id: opts[:session].id}
+          end
 
-        {:ok,
-         for {{name, prompt, opts}, pid} <- Enum.zip(specs, pids) do
-           :ok = Loop.subscribe(pid)
-           :ok = Loop.prompt(pid, child_prompt(name, prompt, context, cap))
-           %{name: name, pid: pid, ref: Process.monitor(pid), session_id: opts[:session].id}
-         end}
+        {:ok, children, %{pid: pid, ref: ref, mon: mon}}
 
-      {:DOWN, ^guard_ref, :process, _pid, reason} ->
+      {:DOWN, ^mon, :process, _pid, reason} ->
         {:error, "could not start the subagents: #{Exception.format_exit(reason)}"}
     end
   end
@@ -216,8 +222,9 @@ defmodule Operator.Core.Tools.Subagent do
     intro <> context <> "\n\n" <> prompt
   end
 
-  # Unlinked loops, so a subagent's crash is only reported, and ended once
-  # the call's process is gone: it may be killed with no chance to clean up.
+  # Unlinked loops, so a subagent's crash is only reported. They end when
+  # the call is done with them (`release/2`), or once the call's process is
+  # gone: it may be killed with no chance to clean up.
   defp guard(caller, ref, specs) do
     caller_ref = Process.monitor(caller)
 
@@ -230,8 +237,43 @@ defmodule Operator.Core.Tools.Subagent do
     send(caller, {ref, pids})
 
     receive do
+      {^ref, :done} -> Enum.each(pids, &shutdown/1)
       {:DOWN, ^caller_ref, :process, _pid, _reason} -> Enum.each(pids, &shutdown/1)
     end
+  end
+
+  # Before the call returns: no subagent outlives it, however long the
+  # calling process lives on (`eval`'s evaluator lives for the session),
+  # and none of their events or monitors is left in its mailbox.
+  defp release(children, guard) do
+    Enum.each(children, &unsubscribe(&1.pid))
+    send(guard.pid, {guard.ref, :done})
+
+    receive do
+      {:DOWN, mon, :process, _pid, _reason} when mon == guard.mon -> :ok
+    after
+      # Each shutdown is bounded; past that, no more waiting.
+      length(children) * 11_000 ->
+        Process.demonitor(guard.mon, [:flush])
+        Enum.each(children, &Process.exit(&1.pid, :kill))
+    end
+
+    Enum.each(children, &Process.demonitor(&1.ref, [:flush]))
+    flush(Map.new(children, &{&1.session_id, true}))
+  end
+
+  defp flush(sessions) do
+    receive do
+      {:operator_core, sid, _event} when is_map_key(sessions, sid) -> flush(sessions)
+    after
+      0 -> :ok
+    end
+  end
+
+  defp unsubscribe(pid) do
+    Loop.unsubscribe(pid)
+  catch
+    :exit, _ -> :ok
   end
 
   # Stop first: it kills an in-flight model call, which no exit reaches.

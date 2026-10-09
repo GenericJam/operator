@@ -98,10 +98,16 @@ defmodule Operator.Core.EvalKernel do
 
   @doc """
   The session's evaluator process, started if it has none or its last one
-  died (`:restarted`: the messages that one had are gone).
+  died (`:restarted`: the messages that one had are gone). The session is
+  busy from now until the caller calls `release/1` or dies: a busy
+  session is never evicted or swept, so its process isn't killed mid-call.
   """
   @spec evaluator(term()) :: {pid(), evaluator_status()}
   def evaluator(session_id), do: GenServer.call(__MODULE__, {:evaluator, session_id})
+
+  @doc "The call `evaluator/1` began is over: the session may be evicted again."
+  @spec release(term()) :: :ok
+  def release(session_id), do: GenServer.call(__MODULE__, {:release, session_id})
 
   @doc "The sessions the store holds now (for tests and diagnostics)."
   @spec sessions() :: [term()]
@@ -158,8 +164,9 @@ defmodule Operator.Core.EvalKernel do
     end
   end
 
-  def handle_call({:evaluator, id}, _from, s) do
+  def handle_call({:evaluator, id}, {caller, _}, s) do
     entry = entry(s, id)
+    if entry.busy, do: Process.demonitor(entry.busy, [:flush])
 
     {pid, status} =
       cond do
@@ -168,7 +175,19 @@ defmodule Operator.Core.EvalKernel do
         true -> {Evaluator.start(self(), @max_heap_bytes), :new}
       end
 
-    {:reply, {pid, status}, touch(s, id, %{entry | pid: pid})}
+    entry = %{entry | pid: pid, busy: Process.monitor(caller)}
+    {:reply, {pid, status}, touch(s, id, entry)}
+  end
+
+  def handle_call({:release, id}, _from, s) do
+    case s.sessions do
+      %{^id => %{busy: ref} = entry} when is_reference(ref) ->
+        Process.demonitor(ref, [:flush])
+        {:reply, :ok, touch(s, id, %{entry | busy: nil})}
+
+      _ ->
+        {:reply, :ok, s}
+    end
   end
 
   def handle_call(:sessions, _from, s), do: {:reply, Map.keys(s.sessions), s}
@@ -177,27 +196,50 @@ defmodule Operator.Core.EvalKernel do
   def handle_info(:sweep, s) do
     {now_ms, _} = now()
     cutoff = now_ms - s.idle_ms
-    {keep, drop} = Map.split_with(s.sessions, fn {_, %{used: {at, _}}} -> at >= cutoff end)
+
+    {keep, drop} =
+      Map.split_with(s.sessions, fn {_, %{used: {at, _}, busy: busy}} ->
+        at >= cutoff or busy != nil
+      end)
+
     Enum.each(drop, &stop_evaluator/1)
     Process.send_after(self(), :sweep, s.sweep_ms)
     {:noreply, %{s | sessions: keep}}
   end
 
+  # A caller that died mid-call (the loop killed its tool call).
+  def handle_info({:DOWN, ref, :process, _, _}, s) do
+    case Enum.find(s.sessions, fn {_, e} -> e.busy == ref end) do
+      {id, entry} -> {:noreply, touch(s, id, %{entry | busy: nil})}
+      nil -> {:noreply, s}
+    end
+  end
+
   def handle_info(_msg, s), do: {:noreply, s}
 
-  defp entry(s, id), do: Map.get(s.sessions, id, %{binding: [], env: nil, pid: nil, used: nil})
+  defp entry(s, id),
+    do: Map.get(s.sessions, id, %{binding: [], env: nil, pid: nil, busy: nil, used: nil})
 
   defp touch(s, id, entry) do
     sessions = Map.put(s.sessions, id, %{entry | used: now()})
-    %{s | sessions: evict(sessions, s.max)}
+    %{s | sessions: evict(sessions, s.max, id)}
   end
 
-  defp evict(sessions, max) when map_size(sessions) <= max, do: sessions
+  # The least recently used session that isn't mid-call (nor the one in
+  # use right now) goes; while every other one is busy, the store holds
+  # more than `max` for a while.
+  defp evict(sessions, max, _current) when map_size(sessions) <= max, do: sessions
 
-  defp evict(sessions, max) do
-    {oldest, _} = old = Enum.min_by(sessions, fn {_, %{used: used}} -> used end)
-    stop_evaluator(old)
-    sessions |> Map.delete(oldest) |> evict(max)
+  defp evict(sessions, max, current) do
+    case Enum.reject(sessions, fn {id, e} -> e.busy || id == current end) do
+      [] ->
+        sessions
+
+      idle ->
+        {oldest, _} = old = Enum.min_by(idle, fn {_, %{used: used}} -> used end)
+        stop_evaluator(old)
+        sessions |> Map.delete(oldest) |> evict(max, current)
+    end
   end
 
   defp stop_evaluator({_id, %{pid: pid}}) when is_pid(pid), do: Process.exit(pid, :kill)
@@ -240,6 +282,8 @@ defmodule Operator.Core.EvalKernel do
     outcome =
       receive do
         {^ref, outcome} ->
+          # First, so a caller dying right now can't kill a healthy evaluator.
+          send(watcher, :done)
           Process.demonitor(mon, [:flush])
           outcome
 
@@ -257,10 +301,10 @@ defmodule Operator.Core.EvalKernel do
            [], nil}
       end
 
+    send(watcher, :done)
     unless kept?, do: Process.exit(pid, :kill)
     {out, total} = Capture.contents(capture)
     GenServer.stop(capture)
-    send(watcher, :done)
     outcome |> with_notes(Keyword.get(opts, :notes, [])) |> assemble(out, total) |> redact()
   end
 

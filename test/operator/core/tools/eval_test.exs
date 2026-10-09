@@ -291,6 +291,7 @@ defmodule Operator.Core.Tools.EvalTest do
     :ok = EvalKernel.put("a", session)
     :ok = EvalKernel.put("b", session)
     {pid_b, :new} = EvalKernel.evaluator("b")
+    :ok = EvalKernel.release("b")
     ref = Process.monitor(pid_b)
     _ = EvalKernel.get("a")
     :ok = EvalKernel.put("c", session)
@@ -299,11 +300,62 @@ defmodule Operator.Core.Tools.EvalTest do
     assert_receive {:DOWN, ^ref, :process, ^pid_b, :killed}
   end
 
+  test "a session mid-call is never evicted; it can be once the call is over" do
+    stop_supervised!(EvalKernel)
+    start_supervised!({EvalKernel, max_sessions: 1})
+    session = %{binding: [a: 1], env: nil}
+    test = self()
+
+    # A tool call holding session "a" (evaluator/1 until release/1).
+    caller =
+      spawn(fn ->
+        send(test, {:evaluator, EvalKernel.evaluator("a")})
+        receive do: (:release -> :ok = EvalKernel.release("a"))
+        send(test, :released)
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:evaluator, {pid_a, :new}}
+    ref = Process.monitor(pid_a)
+    :ok = EvalKernel.put("b", session)
+    :ok = EvalKernel.put("c", session)
+    refute_received {:DOWN, ^ref, _, _, _}
+    assert Process.alive?(pid_a)
+    assert "a" in EvalKernel.sessions()
+
+    send(caller, :release)
+    assert_receive :released
+    :ok = EvalKernel.put("d", session)
+    assert_receive {:DOWN, ^ref, :process, ^pid_a, :killed}
+    assert EvalKernel.sessions() == ["d"]
+  end
+
+  test "a caller that dies mid-call frees its session" do
+    stop_supervised!(EvalKernel)
+    start_supervised!({EvalKernel, max_sessions: 1})
+    test = self()
+
+    caller =
+      spawn(fn ->
+        send(test, {:evaluator, EvalKernel.evaluator("a")})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:evaluator, {pid_a, :new}}
+    ref = Process.monitor(pid_a)
+    caller_ref = Process.monitor(caller)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^caller_ref, :process, ^caller, :killed}
+    :ok = EvalKernel.put("b", %{binding: [], env: nil})
+    assert_receive {:DOWN, ^ref, :process, ^pid_a, :killed}
+  end
+
   test "idle sessions are swept, their process with them" do
     stop_supervised!(EvalKernel)
     start_supervised!({EvalKernel, idle_ms: 0, sweep_ms: 10})
     :ok = EvalKernel.put("a", %{binding: [a: 1], env: nil})
     {pid, :new} = EvalKernel.evaluator("a")
+    :ok = EvalKernel.release("a")
     ref = Process.monitor(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 500
     assert EvalKernel.sessions() == []

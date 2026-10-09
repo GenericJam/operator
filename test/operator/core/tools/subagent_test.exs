@@ -231,6 +231,42 @@ defmodule Operator.Core.Tools.SubagentTest do
     assert List.last(events).reason == :stopped
   end
 
+  test "a caller that lives on keeps no subagent and none of their messages", %{tmp_dir: dir} do
+    test = self()
+
+    args = %{
+      "tasks" => [
+        %{"name" => "quick", "prompt" => "JOB quick"},
+        %{"name" => "slow", "prompt" => "JOB slow"}
+      ]
+    }
+
+    # The model call runs in a worker the subagent's loop spawned.
+    child = fn request ->
+      {:parent, loop} = Process.info(self(), :parent)
+      send(test, {:child, loop, request.session_id})
+
+      if user_text(request) =~ "JOB quick",
+        do: [{:text, "quick answer"}],
+        else: [{:text, "partial"}, {:hold, test, :slow}]
+    end
+
+    %{loop: parent} = start_parent(dir, route(args, child))
+
+    # This test process is the caller, as `eval`'s evaluator is: it outlives the call.
+    assert {:ok, result} = Subagent.run(args, %{loop: parent}, deadline_ms: 500)
+    assert result =~ "## quick: done\n\nquick answer"
+    assert result =~ "## slow: timed out"
+
+    assert_received {:child, loop1, sid1}
+    assert_received {:child, loop2, sid2}
+    refute Process.alive?(loop1)
+    refute Process.alive?(loop2)
+
+    for sid <- [sid1, sid2], do: refute_received({:operator_core, ^sid, _})
+    refute_received {:DOWN, _, :process, _, _}
+  end
+
   test "a call killed half-way takes its subagents with it", %{tmp_dir: dir} do
     test = self()
     args = %{"tasks" => [%{"name" => "stuck", "prompt" => "JOB stuck"}]}
