@@ -166,10 +166,12 @@ defmodule Operator.Core.Front do
   Runs `fun` holding the front's tool lock: one screen, so one agent tool
   acts on it at a time, whoever calls (the loop, a subagent's loop, eval's
   `tool`). Waits up to `wait_ms` for whoever holds it, else returns
-  `{:error, :busy}` without running `fun`. Re-entrant in the caller's
-  process; released when `fun` returns or raises, or its process dies.
+  `{:error, :busy}` without running `fun`; `{:error, :not_running}` when
+  there is no front process to ask. Re-entrant in the caller's process;
+  released when `fun` returns or raises, or its process dies.
   """
-  @spec exclusive((-> result), GenServer.server(), timeout()) :: result | {:error, :busy}
+  @spec exclusive((-> result), GenServer.server(), timeout()) ::
+          result | {:error, :busy | :not_running}
         when result: term()
   def exclusive(fun, server \\ __MODULE__, wait_ms \\ @tools_wait_ms) do
     held = {__MODULE__, :tools_held, server}
@@ -190,26 +192,32 @@ defmodule Operator.Core.Front do
     end
   end
 
+  # The front process gone (or never started) is :not_running; one too busy
+  # to answer within the call's 5 s, :busy.
   defp lock_tools(server, wait_ms) do
     case GenServer.call(server, :lock_tools) do
-      {:ok, token} ->
-        {:ok, token}
+      {:ok, token} -> {:ok, token}
+      {:queued, token} -> await_tools(server, token, wait_ms)
+    end
+  catch
+    :exit, {:timeout, _call} -> {:error, :busy}
+    :exit, _reason -> {:error, :not_running}
+  end
 
-      {:queued, token} ->
+  defp await_tools(server, token, wait_ms) do
+    receive do
+      {:operator_front_tools, ^token} -> {:ok, token}
+    after
+      wait_ms ->
+        :ok = GenServer.call(server, {:unlock_tools, token})
+        # Granted just as the wait ran out: given back by the call above.
         receive do
-          {:operator_front_tools, ^token} -> {:ok, token}
+          {:operator_front_tools, ^token} -> :ok
         after
-          wait_ms ->
-            :ok = GenServer.call(server, {:unlock_tools, token})
-            # Granted just as the wait ran out: given back by the call above.
-            receive do
-              {:operator_front_tools, ^token} -> :ok
-            after
-              0 -> :ok
-            end
-
-            {:error, :busy}
+          0 -> :ok
         end
+
+        {:error, :busy}
     end
   end
 

@@ -90,9 +90,12 @@ defmodule Operator.Core.Dyn.Compiler do
   that name before. Afterwards, whatever the outcome, each one other than
   the generation's modules and its own protocol implementations
   (`Check.generation_module?/4`) is undone: a new one unloaded, a replaced
-  one reloaded from its file. Modules other processes define meanwhile (an
-  `eval`, a subagent) are left alone. `Check.beam/2` then rejects a build
-  that had any other.
+  one reloaded from its file. A module the compile returned that the
+  tracer never saw (`Module.create/3` with a keyword list, not an env,
+  traces nothing) and that isn't the generation's is undone too: unloaded,
+  and reloaded from the code path when a file for it is there. Modules
+  other processes define meanwhile (an `eval`, a subagent) are left alone.
+  `Check.beam/2` then rejects a build that had any other.
   """
   @spec compile([{String.t(), Macro.t()}], pos_integer(), keyword()) ::
           {:ok, build()} | {:error, {:compile, String.t()}}
@@ -102,7 +105,10 @@ defmodule Operator.Core.Dyn.Compiler do
     else
       guard = make_ref()
       result = parsed |> prepare(n, opts) |> isolated(n, opts, guard)
-      undo_outside(defined(guard, %{}), kept(result, n))
+      defined = defined(guard, %{})
+      kept = kept(result, n)
+      undo_outside(defined, kept)
+      undo_untraced(result, defined, kept)
       result
     end
   end
@@ -146,6 +152,27 @@ defmodule Operator.Core.Dyn.Compiler do
 
   defp changed?(nil, mod), do: md5(mod) != nil
   defp changed?({md5, _from}, mod), do: md5(mod) != md5
+
+  defp undo_untraced({:ok, %{modules: modules}}, defined, kept) do
+    for {mod, _bin} <- modules,
+        not MapSet.member?(kept, mod),
+        not Map.has_key?(defined, mod) do
+      purge([mod])
+      file = :code.where_is_file(~c"#{mod}.beam")
+
+      restored =
+        is_list(file) and match?({:module, _}, :code.load_abs(:filename.rootname(file)))
+
+      Logger.warning(
+        "[dyn] a compile defined #{inspect(mod)} outside its generation, untraced: " <>
+          if(restored, do: "reloaded from its file", else: "unloaded")
+      )
+    end
+
+    :ok
+  end
+
+  defp undo_untraced(_failed, _defined, _kept), do: :ok
 
   defp undo(mod, before) do
     purge([mod])

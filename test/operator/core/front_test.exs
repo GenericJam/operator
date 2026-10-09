@@ -1020,6 +1020,29 @@ defmodule Operator.Core.FrontTest do
     assert :inner = Front.exclusive(fn -> Front.exclusive(fn -> :inner end, Front, 0) end)
   end
 
+  test "front tools without a front process return an error, not a crash" do
+    dead = spawn(fn -> :ok end)
+    ref = Process.monitor(dead)
+    assert_receive {:DOWN, ^ref, :process, ^dead, _}
+
+    for front <- [dead, :operator_front_test_unregistered] do
+      ctx = %{front: front}
+
+      for {tool, args} <- [
+            {FrontTap, %{"tag" => "x"}},
+            {FrontSend, %{"message" => ":ok"}},
+            {FrontState, %{}},
+            {FrontOpen, %{"screen" => "Home"}},
+            {FrontScroll, %{"to" => "down"}},
+            {FrontScreenshot, %{}}
+          ] do
+        assert {:error, "No front screen is running" <> _} = tool.run(args, ctx)
+      end
+
+      assert {:error, :not_running} = Front.exclusive(fn -> :ran end, front)
+    end
+  end
+
   test "front_send parses literals only" do
     assert {:ok, {:photos, :picked, [%{path: "a.jpg", size: -1, ratio: 1.5}], [a: nil]}} =
              FrontSend.parse(

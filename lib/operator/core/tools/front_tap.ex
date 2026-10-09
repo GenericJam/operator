@@ -81,6 +81,11 @@ defmodule Operator.Core.Tools.FrontTap do
          "Another front tool call (from a subagent, eval or another loop) is using the " <>
            "front and didn't finish within 10 s; try again when it has."}
 
+      {:error, :not_running} ->
+        {:error,
+         "No front screen is running: Operator's front isn't up (it starts with the app); " <>
+           "try again in a moment, or see front_screens."}
+
       result ->
         result
     end

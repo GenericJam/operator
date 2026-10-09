@@ -93,6 +93,33 @@ defmodule Operator.Core.Dyn.CompilerTest do
     assert file == inspect(stray)
   end
 
+  @tag :capture_log
+  test "modules Module.create defines untraced are undone; a replaced one comes back from its file" do
+    replaced = Operator.Test.Dyn.Approval
+    md5 = replaced.module_info(:md5)
+    file = :code.which(replaced)
+    assert is_list(file)
+
+    source = """
+    defmodule Operator.Dyn.C do
+      Module.create(Outside.ViaCreate, quote(do: def(x, do: 1)), Macro.Env.location(__ENV__))
+      Module.create(#{inspect(replaced)}, quote(do: def(x, do: 2)), Macro.Env.location(__ENV__))
+    end
+    """
+
+    on_exit(fn -> Compiler.purge(Compiler.loaded(974)) end)
+    assert {:ok, build} = compile(source, 974)
+
+    refute :code.is_loaded(Outside.ViaCreate)
+    assert replaced.module_info(:md5) == md5
+    assert :code.which(replaced) == file
+    assert Compiler.loaded(974) == [Operator.Dyn.G974.C]
+
+    assert {:error, violations} = Check.beam(build.modules, 974)
+    files = violations |> Enum.map(& &1.file) |> Enum.uniq() |> Enum.sort()
+    assert files == ["Operator.Test.Dyn.Approval", "Outside.ViaCreate"]
+  end
+
   test "modules other processes define during a compile are left alone" do
     on_exit(fn ->
       Compiler.purge(Compiler.loaded(975))
