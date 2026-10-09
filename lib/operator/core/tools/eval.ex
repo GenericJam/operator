@@ -32,14 +32,21 @@ defmodule Operator.Core.Tools.Eval do
     tool this session doesn't offer you). A session's evals run one at a time. Dyn modules \
     by their logical names (`Operator.Dyn.Menu`) resolve to the running generation.
 
+    Your evaluations run in one process per session: a plugin that answers later (frames, \
+    scan or camera results) leaves its messages for `inbox.()` in a later call. inbox.() \
+    returns the messages received since you last took them (oldest first, the newest 200 \
+    kept) and clears them; inbox.(ms) waits up to ms for one when there are none yet. A \
+    `receive` in your code sees what arrives during that call.
+
     This has full authority over the app's BEAM: use it to inspect processes \
     (Process.info, :sys.get_state), ETS tables, Application.get_env, read the agent's own \
     state and files, and call a plugin's API to see what it really returns before building \
-    a screen on it. Code runs in a throwaway process, killed at timeout_ms; but what it \
-    does to other processes is real: killing or crashing processes it doesn't own, or \
-    calling GenServers that block, can break the app until it restarts. Output is \
-    truncated (inspect limits, about 8 KB of value and 6 KB of printed text); sign-in \
-    tokens in it are replaced by [redacted sign-in token].
+    a screen on it. The session's process is killed at timeout_ms (the next call starts a \
+    fresh one, bindings kept, messages lost); but what your code does to other processes \
+    is real: killing or crashing processes it doesn't own, or calling GenServers that \
+    block, can break the app until it restarts. Output is truncated (inspect limits, about \
+    8 KB of value and 6 KB of printed text); sign-in tokens in it are replaced by \
+    [redacted sign-in token].
     """
   end
 
@@ -99,7 +106,10 @@ defmodule Operator.Core.Tools.Eval do
     do: {:ok, "Bindings cleared (#{cleared} names)."}
 
   defp evaluate(code, _cleared, id, ctx, timeout) do
-    case EvalKernel.evaluate(code, EvalKernel.get(id), ctx, timeout) do
+    {pid, status} = EvalKernel.evaluator(id)
+    opts = [evaluator: pid, notes: notes(status)]
+
+    case EvalKernel.evaluate(code, EvalKernel.get(id), ctx, timeout, opts) do
       {:ok, text, nil} ->
         {:ok, text}
 
@@ -111,6 +121,14 @@ defmodule Operator.Core.Tools.Eval do
         {:error, text}
     end
   end
+
+  defp notes(:restarted),
+    do: [
+      "a new process for this session: the previous one had ended, so messages it had " <>
+        "received are gone (bindings are kept)"
+    ]
+
+  defp notes(_status), do: []
 
   defp code(nil), do: {:ok, ""}
   defp code(code) when is_binary(code), do: {:ok, if(String.trim(code) == "", do: "", else: code)}
@@ -134,7 +152,9 @@ defmodule Operator.Core.Tools.Eval do
          {:error, "** (RuntimeError) boom" <> _, nil} <-
            EvalKernel.evaluate(~s|raise "boom"|, s, ctx, 5_000),
          {:ok, ~s|{:error, "eval cannot call eval"}|, _} <-
-           EvalKernel.evaluate(~s|tool.("eval", %{"code" => "1"})|, s, ctx, 5_000) do
+           EvalKernel.evaluate(~s|tool.("eval", %{"code" => "1"})|, s, ctx, 5_000),
+         {:ok, "[:ping]", _} <-
+           EvalKernel.evaluate("send(self(), :ping); inbox.()", s, ctx, 5_000) do
       :ok
     else
       other -> {:error, other}

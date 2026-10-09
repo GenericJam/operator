@@ -23,6 +23,13 @@ defmodule Operator.Core.LLMTest do
     refute text =~ "cookie"
   end
 
+  test "a stream that stalls into a bare timeout is a transport error the loop retries" do
+    assert Adapter.normalize(:timeout) == {:transport, :timeout}
+    assert LLM.retryable?(Adapter.normalize(:timeout))
+    assert LLM.retryable?(Adapter.normalize({:timeout, {GenServer, :call, []}}))
+    refute LLM.retryable?(Adapter.normalize(:something_else))
+  end
+
   describe "req_llm options per model prefix" do
     defp request(model, extra \\ %{}),
       do:

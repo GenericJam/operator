@@ -4,27 +4,32 @@ defmodule Operator.Core.EvalKernel do
   evaluation itself, and the store that keeps each session's bindings so a
   variable bound in one call is there in the next, like an iex prompt.
 
-  Every evaluation runs in a fresh process, never in the loop, the tool's
-  task or this store: it prints into a bounded capture
-  (`Operator.Core.EvalKernel.Capture`), and is killed at its timeout, when
-  the user stops the run, or past a heap cap (off-heap binaries count).
-  A small watcher kills it (and the capture) if the caller dies first, so
-  when the loop kills a tool call that overran, the evaluation goes with
-  it; nothing is linked to the caller, so a crash in the evaluated code
-  can't take the tool's task down. The result comes back as text,
-  inspected and truncated in the evaluation process, so the timeout and
-  heap cap cover a huge `inspect` too.
+  A session's evaluations run in one long-lived process
+  (`Operator.Core.EvalKernel.Evaluator`), never in the loop, the tool's
+  task or this store, so a plugin that answers that process later (frames,
+  scan or camera results) leaves its messages for `inbox.()` in a later
+  call. Each call prints into its own bounded capture
+  (`Operator.Core.EvalKernel.Capture`). The process is killed at a call's
+  timeout, when the user stops the run, or past a heap cap (off-heap
+  binaries count); the next call starts a fresh one, with the bindings
+  (kept here, not in it) but not the messages it had. A small watcher
+  kills it (and the capture) if the caller dies mid-call, so when the
+  loop kills a tool call that overran, the evaluation goes with it;
+  nothing is linked to the caller, so a crash in the evaluated code can't
+  take the tool's task down. The result comes back as text, inspected
+  and truncated in the evaluator, so the timeout and heap cap cover a
+  huge `inspect` too.
 
   The store is in memory on purpose: a binding can hold pids, refs and
   closures that mean nothing after a restart, so a fresh launch is a clean
   slate. It is bounded by count, age and size: at most eight sessions (the
-  least recently used is dropped first), a session untouched for 30
-  minutes is dropped, and a call whose bindings come to more than 4 MB
-  (binaries included) doesn't keep them. Aliases, requires and imports
-  carry over too (the evaluation environment is kept with the bindings).
-  The loop runs a turn's tool calls side by side, so a session's
-  evaluations take a lock (`locked/2`) and run one after the other; each
-  sees what the one before it bound.
+  least recently used is dropped first, its process killed), a session
+  untouched for 30 minutes is dropped the same way, and a call whose
+  bindings come to more than 4 MB (binaries included) doesn't keep them.
+  Aliases, requires and imports carry over too (the evaluation
+  environment is kept with the bindings). The loop runs a turn's tool
+  calls side by side, so a session's evaluations take a lock (`locked/2`)
+  and run one after the other; each sees what the one before it bound.
 
   The text that comes back has the current sign-in tokens (and the
   cluster cookie) replaced by `[redacted sign-in token]`, so code the
@@ -35,6 +40,7 @@ defmodule Operator.Core.EvalKernel do
   use GenServer
 
   alias Operator.Core.EvalKernel.Capture
+  alias Operator.Core.EvalKernel.Evaluator
   alias Operator.Core.ToolRegistry
 
   @max_sessions 8
@@ -71,6 +77,7 @@ defmodule Operator.Core.EvalKernel do
 
   @type session :: %{binding: keyword(), env: Macro.Env.t() | nil}
   @type result :: {:ok | :error, String.t(), session() | nil}
+  @type evaluator_status :: :new | :running | :restarted
 
   # ── store ──
 
@@ -85,11 +92,18 @@ defmodule Operator.Core.EvalKernel do
   @spec put(term(), session()) :: :ok
   def put(session_id, session), do: GenServer.call(__MODULE__, {:put, session_id, session})
 
-  @doc "Drops the session's bindings; answers how many names it had."
+  @doc "Drops the session's bindings (its process stays); answers how many names it had."
   @spec reset(term()) :: non_neg_integer()
   def reset(session_id), do: GenServer.call(__MODULE__, {:reset, session_id})
 
-  @doc "The sessions that have bindings now (for tests and diagnostics)."
+  @doc """
+  The session's evaluator process, started if it has none or its last one
+  died (`:restarted`: the messages that one had are gone).
+  """
+  @spec evaluator(term()) :: {pid(), evaluator_status()}
+  def evaluator(session_id), do: GenServer.call(__MODULE__, {:evaluator, session_id})
+
+  @doc "The sessions the store holds now (for tests and diagnostics)."
   @spec sessions() :: [term()]
   def sessions, do: GenServer.call(__MODULE__, :sessions)
 
@@ -118,27 +132,43 @@ defmodule Operator.Core.EvalKernel do
   @impl true
   def handle_call({:get, id}, _from, s) do
     case s.sessions do
-      %{^id => {session, _at}} ->
-        {:reply, session, put_in(s.sessions[id], {session, now()})}
+      %{^id => entry} ->
+        {:reply, Map.take(entry, [:binding, :env]), touch(s, id, entry)}
 
       _ ->
         {:reply, %{binding: [], env: nil}, s}
     end
   end
 
-  def handle_call({:put, id, session}, _from, s) do
-    sessions = Map.put(s.sessions, id, {session, now()})
-    {:reply, :ok, %{s | sessions: evict(sessions, s.max)}}
+  def handle_call({:put, id, %{binding: binding, env: env}}, _from, s) do
+    entry = %{entry(s, id) | binding: binding, env: env}
+    {:reply, :ok, touch(s, id, entry)}
   end
 
   def handle_call({:reset, id}, _from, s) do
-    n =
-      case s.sessions do
-        %{^id => {%{binding: b}, _}} -> length(b)
-        _ -> 0
+    case s.sessions do
+      %{^id => %{binding: b, pid: nil}} ->
+        {:reply, length(b), %{s | sessions: Map.delete(s.sessions, id)}}
+
+      %{^id => %{binding: b} = entry} ->
+        {:reply, length(b), touch(s, id, %{entry | binding: [], env: nil})}
+
+      _ ->
+        {:reply, 0, s}
+    end
+  end
+
+  def handle_call({:evaluator, id}, _from, s) do
+    entry = entry(s, id)
+
+    {pid, status} =
+      cond do
+        entry.pid && Process.alive?(entry.pid) -> {entry.pid, :running}
+        entry.pid -> {Evaluator.start(self(), @max_heap_bytes), :restarted}
+        true -> {Evaluator.start(self(), @max_heap_bytes), :new}
       end
 
-    {:reply, n, %{s | sessions: Map.delete(s.sessions, id)}}
+    {:reply, {pid, status}, touch(s, id, %{entry | pid: pid})}
   end
 
   def handle_call(:sessions, _from, s), do: {:reply, Map.keys(s.sessions), s}
@@ -147,17 +177,31 @@ defmodule Operator.Core.EvalKernel do
   def handle_info(:sweep, s) do
     {now_ms, _} = now()
     cutoff = now_ms - s.idle_ms
-    sessions = for {id, {_, {at, _}} = v} <- s.sessions, at >= cutoff, into: %{}, do: {id, v}
+    {keep, drop} = Map.split_with(s.sessions, fn {_, %{used: {at, _}}} -> at >= cutoff end)
+    Enum.each(drop, &stop_evaluator/1)
     Process.send_after(self(), :sweep, s.sweep_ms)
-    {:noreply, %{s | sessions: sessions}}
+    {:noreply, %{s | sessions: keep}}
+  end
+
+  def handle_info(_msg, s), do: {:noreply, s}
+
+  defp entry(s, id), do: Map.get(s.sessions, id, %{binding: [], env: nil, pid: nil, used: nil})
+
+  defp touch(s, id, entry) do
+    sessions = Map.put(s.sessions, id, %{entry | used: now()})
+    %{s | sessions: evict(sessions, s.max)}
   end
 
   defp evict(sessions, max) when map_size(sessions) <= max, do: sessions
 
   defp evict(sessions, max) do
-    {oldest, _} = Enum.min_by(sessions, fn {_, {_, used}} -> used end)
+    {oldest, _} = old = Enum.min_by(sessions, fn {_, %{used: used}} -> used end)
+    stop_evaluator(old)
     sessions |> Map.delete(oldest) |> evict(max)
   end
+
+  defp stop_evaluator({_id, %{pid: pid}}) when is_pid(pid), do: Process.exit(pid, :kill)
+  defp stop_evaluator(_), do: true
 
   # When a session was last used: the millisecond (for the idle sweep) and
   # a tick that orders uses within one (for least recently used).
@@ -167,39 +211,31 @@ defmodule Operator.Core.EvalKernel do
   # ── evaluation ──
 
   @doc """
-  Evaluates `code` with `session`'s bindings in a fresh process, with
-  `tool` bound to `call_tool/3` under `ctx`. Answers `{:ok, text,
-  session}` (what to keep for the next call; nil when there is nothing
-  to keep) or `{:error, text, nil}`. Runs in the caller, which waits up to
-  `timeout_ms`, or until it gets `{:operator_core_stop, loop}` (the user
-  stopped the run). Options (tests): `:max_heap_bytes`,
-  `:max_binding_bytes`.
+  Evaluates `code` with `session`'s bindings, with `tool` bound to
+  `call_tool/3` under `ctx`, in the evaluator `opts[:evaluator]` (a
+  session's, from `evaluator/1`), or in a throwaway one when none is
+  given. Answers `{:ok, text, session}` (what to keep for the next call;
+  nil when there is nothing to keep) or `{:error, text, nil}`. Runs in
+  the caller, which waits up to `timeout_ms`, or until it gets
+  `{:operator_core_stop, loop}` (the user stopped the run). Other options:
+  `:notes` (lines to show with the result), and for tests
+  `:max_heap_bytes`, `:max_binding_bytes`.
   """
   @spec evaluate(String.t(), session(), map(), pos_integer(), keyword()) :: result()
   def evaluate(code, session, ctx, timeout_ms, opts \\ []) do
-    caller = self()
     ref = make_ref()
     {:ok, capture} = GenServer.start(Capture, @max_stdout_bytes)
     binding = Keyword.put(session.binding, :tool, &call_tool(&1, &2, ctx))
     env = session.env || Code.env_for_eval(file: "eval", line: 1)
     heap_bytes = Keyword.get(opts, :max_heap_bytes, @max_heap_bytes)
     binding_bytes = Keyword.get(opts, :max_binding_bytes, @max_binding_bytes)
+    {pid, kept?} = evaluator_for(opts[:evaluator], heap_bytes)
+    mon = Process.monitor(pid)
+    watcher = watch(self(), [pid, capture])
 
-    {pid, mon} =
-      spawn_monitor(fn ->
-        Process.group_leader(self(), capture)
-
-        Process.flag(:max_heap_size, %{
-          size: div(heap_bytes, :erlang.system_info(:wordsize)),
-          kill: true,
-          error_logger: false,
-          include_shared_binaries: true
-        })
-
-        send(caller, {ref, run(code, binding, env, binding_bytes)})
-      end)
-
-    watcher = watch(caller, [pid, capture])
+    Evaluator.request(pid, ref, capture, heap_bytes, fn ->
+      run(code, binding, env, binding_bytes)
+    end)
 
     outcome =
       receive do
@@ -208,22 +244,38 @@ defmodule Operator.Core.EvalKernel do
           outcome
 
         {:DOWN, ^mon, :process, ^pid, reason} ->
-          {:error, exit_text(reason, heap_bytes), [], nil}
+          {:error, exit_text(reason, heap_bytes) <> lost(kept?), [], nil}
 
         {:operator_core_stop, _loop} ->
           kill(pid, mon, ref)
-          {:error, "Stopped by the user.", [], nil}
+          {:error, "Stopped by the user." <> lost(kept?), [], nil}
       after
         timeout_ms ->
           kill(pid, mon, ref)
-          {:error, "Evaluation timed out after #{timeout_ms} ms and was killed.", [], nil}
+
+          {:error, "Evaluation timed out after #{timeout_ms} ms and was killed." <> lost(kept?),
+           [], nil}
       end
 
+    unless kept?, do: Process.exit(pid, :kill)
     {out, total} = Capture.contents(capture)
     GenServer.stop(capture)
     send(watcher, :done)
-    outcome |> assemble(out, total) |> redact()
+    outcome |> with_notes(Keyword.get(opts, :notes, [])) |> assemble(out, total) |> redact()
   end
+
+  defp evaluator_for(nil, heap_bytes), do: {Evaluator.start(nil, heap_bytes), false}
+  defp evaluator_for(pid, _heap_bytes) when is_pid(pid), do: {pid, true}
+
+  defp lost(false), do: ""
+
+  defp lost(true),
+    do:
+      " Its session's process went with it: messages it had received are lost; " <>
+        "the next call starts a fresh one (bindings are kept)."
+
+  defp with_notes({kind, text, warnings, session}, notes),
+    do: {kind, text, notes ++ warnings, session}
 
   defp kill(pid, mon, ref) do
     Process.exit(pid, :kill)
@@ -262,6 +314,7 @@ defmodule Operator.Core.EvalKernel do
           quoted =
             code
             |> Code.string_to_quoted!(file: "eval", line: 1, columns: true)
+            |> resolve_inbox(code)
             |> resolve_dyn(code)
 
           {value, binding, env} = Code.eval_quoted_with_env(quoted, binding, env)
@@ -272,6 +325,7 @@ defmodule Operator.Core.EvalKernel do
       end)
 
     warnings = for %{severity: :warning} = d <- diagnostics, do: diagnostic(d)
+    warnings = warnings ++ dropped_note()
     errors = for %{severity: :error} = d <- diagnostics, do: diagnostic(d)
 
     case outcome do
@@ -304,6 +358,28 @@ defmodule Operator.Core.EvalKernel do
         {:error, text |> String.trim_trailing() |> cap(@max_value_bytes), warnings, nil}
     end
   end
+
+  defp dropped_note do
+    case Evaluator.take_dropped() do
+      nil -> []
+      n -> ["the inbox kept the newest 200 messages: #{n} older ones were dropped"]
+    end
+  end
+
+  # `inbox.()` and `inbox.(timeout_ms)` call `Evaluator.inbox/1` (one
+  # anonymous function can't take both arities, so `inbox` is a name the
+  # code can't rebind, like `tool`).
+  defp resolve_inbox(quoted, code) do
+    if code =~ "inbox", do: Macro.prewalk(quoted, &inbox_call/1), else: quoted
+  end
+
+  defp inbox_call({{:., dot, [{:inbox, _, context}]}, meta, []}) when is_atom(context),
+    do: {{:., dot, [Evaluator, :inbox]}, meta, []}
+
+  defp inbox_call({{:., dot, [{:inbox, _, context}]}, meta, [timeout]}) when is_atom(context),
+    do: {{:., dot, [Evaluator, :inbox]}, meta, [timeout]}
+
+  defp inbox_call(other), do: other
 
   # Dyn code names its modules `Operator.Dyn.Menu`; they are compiled as
   # `Operator.Dyn.G<n>.Menu` (`Operator.Core.Dyn.Compiler.rewrite/2`). An

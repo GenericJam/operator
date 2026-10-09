@@ -87,7 +87,12 @@ defmodule Operator.Core.Tools.EvalTest do
     """
 
     assert {:error, text} = eval(code, ctx, %{"timeout_ms" => 100})
-    assert text == "stdout:\nstarted\nerror:\nEvaluation timed out after 100 ms and was killed."
+
+    assert text ==
+             "stdout:\nstarted\nerror:\nEvaluation timed out after 100 ms and was killed. " <>
+               "Its session's process went with it: messages it had received are lost; " <>
+               "the next call starts a fresh one (bindings are kept)."
+
     assert_received {:evaluator, pid}
     refute Process.alive?(pid)
   end
@@ -110,7 +115,7 @@ defmodule Operator.Core.Tools.EvalTest do
 
     assert_receive {:evaluator, pid}
     send(caller, {:operator_core_stop, self()})
-    assert_receive {:result, {:error, "Stopped by the user."}}
+    assert_receive {:result, {:error, "Stopped by the user. Its session's process" <> _}}
     refute Process.alive?(pid)
   end
 
@@ -122,6 +127,61 @@ defmodule Operator.Core.Tools.EvalTest do
     assert {:ok, "1"} = Task.await(slow)
     assert {:ok, "2"} = Task.await(fast)
     assert {:ok, "{1, 2}"} = eval("{a, b}", ctx)
+  end
+
+  test "a session's calls share one process: later calls get what plugins sent it", %{
+    ctx: ctx
+  } do
+    Process.register(self(), :eval_test_parent)
+    assert {:ok, _} = eval("send(:eval_test_parent, {:evaluator, self()}); me = self()", ctx)
+    assert_received {:evaluator, pid}
+
+    # Between calls, as a NIF answering the caller would.
+    send(pid, {:frame, 1, "jpeg"})
+    send(pid, {:frame, 2, "jpeg"})
+
+    assert {:ok, ~s|{true, [{:frame, 1, "jpeg"}, {:frame, 2, "jpeg"}]}|} =
+             eval("{self() == me, inbox.()}", ctx)
+
+    assert {:ok, "[]"} = eval("inbox.()", ctx)
+
+    # inbox.(ms) waits for one; a plain receive sees what arrives during the call.
+    assert {:ok, "[:late]"} = eval("Process.send_after(self(), :late, 50); inbox.(1_000)", ctx)
+    assert {:ok, "[]"} = eval("inbox.(10)", ctx)
+
+    assert {:ok, ":got"} =
+             eval("Process.send_after(self(), :x, 20); receive do: (:x -> :got)", ctx)
+
+    assert Process.alive?(pid)
+  end
+
+  test "the inbox keeps the newest 200 messages and says how many it dropped", %{ctx: ctx} do
+    Process.register(self(), :eval_test_parent)
+    assert {:ok, _} = eval("send(:eval_test_parent, {:evaluator, self()})", ctx)
+    assert_received {:evaluator, pid}
+    for n <- 1..205, do: send(pid, n)
+
+    assert {:ok, text} = eval("msgs = inbox.(); {length(msgs), hd(msgs), List.last(msgs)}", ctx)
+
+    assert text ==
+             "warnings:\nthe inbox kept the newest 200 messages: 5 older ones were dropped\n" <>
+               "result:\n{200, 6, 205}"
+  end
+
+  test "after a timeout kill the next call runs in a fresh process, bindings kept", %{
+    ctx: ctx
+  } do
+    Process.register(self(), :eval_test_parent)
+    assert {:ok, _} = eval("x = 1; send(:eval_test_parent, {:evaluator, self()})", ctx)
+    assert_received {:evaluator, old}
+    assert {:error, _} = eval("Process.sleep(:infinity)", ctx, %{"timeout_ms" => 50})
+    refute Process.alive?(old)
+
+    assert {:ok, text} = eval("send(:eval_test_parent, {:evaluator, self()}); x", ctx)
+    assert text =~ ~r/\Awarnings:\na new process for this session: .*\nresult:\n1\z/
+    assert_received {:evaluator, new}
+    assert new != old
+    assert {:ok, "1"} = eval("x", ctx)
   end
 
   test "tool.() runs another tool with the call's context, never eval", %{ctx: ctx} do
@@ -230,17 +290,22 @@ defmodule Operator.Core.Tools.EvalTest do
 
     :ok = EvalKernel.put("a", session)
     :ok = EvalKernel.put("b", session)
+    {pid_b, :new} = EvalKernel.evaluator("b")
+    ref = Process.monitor(pid_b)
     _ = EvalKernel.get("a")
     :ok = EvalKernel.put("c", session)
 
     assert Enum.sort(EvalKernel.sessions()) == ["a", "c"]
+    assert_receive {:DOWN, ^ref, :process, ^pid_b, :killed}
   end
 
-  test "idle sessions are swept" do
+  test "idle sessions are swept, their process with them" do
     stop_supervised!(EvalKernel)
     start_supervised!({EvalKernel, idle_ms: 0, sweep_ms: 10})
     :ok = EvalKernel.put("a", %{binding: [a: 1], env: nil})
-    Process.sleep(50)
+    {pid, :new} = EvalKernel.evaluator("a")
+    ref = Process.monitor(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 500
     assert EvalKernel.sessions() == []
   end
 

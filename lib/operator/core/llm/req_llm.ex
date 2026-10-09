@@ -355,5 +355,9 @@ defmodule Operator.Core.LLM.ReqLLM do
 
   def normalize(%{__exception__: true} = e), do: {:other, Exception.message(e)}
   def normalize({:http_task_failed, reason}), do: normalize(reason)
+  # A stream that stalls past req_llm's receive timeout ends as a bare
+  # `:timeout`: the connection, not the request, so the loop retries it.
+  def normalize(:timeout), do: {:transport, :timeout}
+  def normalize({:timeout, _} = reason), do: {:transport, reason}
   def normalize(other), do: {:other, inspect(other, limit: 20, printable_limit: 500)}
 end
