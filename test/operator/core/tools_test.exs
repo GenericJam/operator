@@ -4,6 +4,7 @@ defmodule Operator.Core.ToolsTest do
   alias Operator.Core.Phone
   alias Operator.Core.ToolRegistry
   alias Operator.Core.Tools.Clipboard
+  alias Operator.Core.Tools.Friction
   alias Operator.Core.Tools.HttpGet
   alias Operator.Core.Tools.Notes
   alias Operator.Core.Tools.PickPhotos
@@ -21,6 +22,38 @@ defmodule Operator.Core.ToolsTest do
     assert {:error, _} = Notes.run(%{"action" => "append"}, ctx)
     assert {:error, _} = Notes.run(%{"action" => "delete"}, ctx)
     assert Notes.selftest() == :ok
+  end
+
+  test "friction: entries survive across sessions; open first, resolved on request", %{
+    tmp_dir: dir
+  } do
+    a = %{data_dir: dir, session_id: "s1"}
+    b = %{data_dir: dir, session_id: "s2"}
+    log = &Friction.run(Map.put(&1, "action", "log"), &2)
+
+    assert {:ok, "Logged as #1. 1 open."} =
+             log.(%{"what" => "guide swaps args", "would_help" => "fix it"}, a)
+
+    assert {:ok, "Logged as #2. 2 open."} = log.(%{"what" => "no cube mesh"}, b)
+
+    assert {:ok, "#1 resolved."} =
+             Friction.run(%{"action" => "resolve", "id" => 1, "how" => "helper"}, b)
+
+    assert {:ok, open} = Friction.run(%{"action" => "list"}, a)
+    assert open =~ "#2" and open =~ "no cube mesh"
+    refute open =~ "#1"
+    assert {:ok, all} = Friction.run(%{"action" => "list", "all" => true}, a)
+    assert all =~ "#1" and all =~ "[resolved: helper]" and all =~ "(would help: fix it)"
+
+    assert [%{"session" => "s1", "resolved" => "helper"}, %{"session" => "s2"} = second] =
+             Friction.entries(dir)
+
+    refute Map.has_key?(second, "resolved")
+
+    assert {:error, "no entry #9"} =
+             Friction.run(%{"action" => "resolve", "id" => 9, "how" => "x"}, a)
+
+    assert {:error, _} = log.(%{"what" => ""}, a)
   end
 
   test "looks up core tools and takes new ones at runtime" do

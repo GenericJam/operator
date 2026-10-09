@@ -79,9 +79,10 @@ defmodule Operator.Core.Dyn.Keeper do
   (`{module, function, args}` run in its own process when a launch
   reaches stable, or `nil`), and the compile / selftest limits
   (`:compile_timeout_ms`, `:compile_max_heap_mb`, `:selftest_timeout_ms`,
-  `:selftest_max_heap_mb`); a background rebuild's compile gets
+  `:selftest_max_heap_mb`); a background rebuild's compile, and loading a
+  generation that isn't loaded (a revert to an older one), get
   `:rebuild_timeout_ms` (300 000: it compiles the whole generation, which
-  can take minutes on a slow phone, and nobody waits for it).
+  can take minutes on a slow phone).
   """
   use GenServer
 
@@ -875,11 +876,16 @@ defmodule Operator.Core.Dyn.Keeper do
   # The generation as loaded: a rebuild for a new runtime changes it.
   defp ensure_loaded(%{mode: :safe} = s, gen), do: {:ok, s, gen}
 
+  # Loading a generation that isn't loaded (a revert to an older one, built
+  # for another Core) compiles all of it, like a background rebuild: give it
+  # that time. A proposal's compile is incremental and keeps the short limit.
   defp ensure_loaded(s, gen) do
     if gen.n == 0 or Map.has_key?(s.loaded, gen.n) do
       {:ok, s, gen}
     else
-      case Compiler.load_generation(s.dir, gen, s.build) do
+      build = Keyword.put(s.build, :compile_timeout_ms, s.opts.rebuild_timeout_ms)
+
+      case Compiler.load_generation(s.dir, gen, build) do
         {:ok, mods, gen} -> {:ok, %{s | loaded: Map.put(s.loaded, gen.n, mods)}, gen}
         {:error, reason} -> {:error, {:load_failed, reason}}
       end

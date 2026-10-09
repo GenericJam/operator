@@ -13,7 +13,10 @@ defmodule Operator.Core do
   (reads updates aloud).
 
   Config (`config :operator, ...`): `:default_model` (a req_llm spec,
-  default `#{inspect("anthropic:claude-haiku-4-5")}`), `:max_tokens` (4096).
+  default `#{inspect("anthropic:claude-haiku-4-5")}`), `:max_tokens` (16,000
+  per model call: a whole screen is one `dyn_write`), `:max_iterations`
+  (100 model calls per run: a build reads, writes, proposes and fixes; the
+  user stops a run any time, and the daily cost cap still holds).
   """
   use Supervisor
 
@@ -55,7 +58,10 @@ defmodule Operator.Core do
   def default_model, do: Application.get_env(:operator, :default_model, @default_model)
 
   @spec max_tokens() :: pos_integer()
-  def max_tokens, do: Application.get_env(:operator, :max_tokens, 4096)
+  def max_tokens, do: Application.get_env(:operator, :max_tokens, 16_000)
+
+  @spec max_iterations() :: pos_integer()
+  def max_iterations, do: Application.get_env(:operator, :max_iterations, 100)
 
   @doc "The loop of the session on screen (resuming the latest, or a new one)."
   @spec current() :: pid()
@@ -112,6 +118,13 @@ defmodule Operator.Core do
     file). Permissions are asked at first use, by your tools or a screen; the user may \
     refuse, or miss the prompt: say what to allow and try again. A long tool output is cut; \
     `read_artifact` reads the rest.
+    - Friction: when something in this environment costs you time (a guide or doc that is \
+    missing, wrong or unclear, an error you can't read, a tool you lack, a guess that \
+    failed), log it with `friction` right away, one entry each: what happened and what \
+    would have helped. Then work around it, and if you can remove it yourself (a helper \
+    module or a note in your Dyn layer), do, and `resolve` the entry. Look at `friction` \
+    `list` before a bigger build: the open entries are known traps. The user's Mac reads \
+    the log to fix what only it can.
     - Other phones: `cluster` reaches the Operators this phone is paired with on the local \
     network (the user pairs them in [menu] › cluster). Ask their agent something and get its \
     answer, run one of their tools on that phone (its location, sensors, a notification \
@@ -341,6 +354,7 @@ defmodule Operator.Core.Current do
           session: session,
           entries: entries,
           max_tokens: Operator.Core.max_tokens(),
+          max_iterations: Operator.Core.max_iterations(),
           budget: budget
         ],
         s.loop_opts

@@ -60,23 +60,27 @@ alias MobRapier.{Dice, Physics}
 # One world, driven by name so agents / IEx can talk to it over dist.
 :ok = Physics.new_world("dice_tray")
 
-# A ground plane and four walls (per-wall extents; a wall is a cuboid).
-_ground_id = Physics.add_static_cuboid_in("dice_tray", 1.0, 0.05, 1.0, 0.0, -0.05, 0.0)
+# Four walls around the origin (static cuboids: position, then half-extents).
+# `new_world/1` already has a ground plane at y = 0.
+for {x, z, hx, hz} <- [{0.3, 0.0, 0.02, 0.3}, {-0.3, 0.0, 0.02, 0.3},
+                       {0.0, 0.3, 0.3, 0.02}, {0.0, -0.3, 0.3, 0.02}] do
+  Physics.add_static_cuboid_in("dice_tray", x, 0.05, z, hx, 0.05, hz)
+end
 
-# A d6, dropped from 20 cm above the origin.
-die_id = Physics.add_cuboid_in("dice_tray", 0.015, 0.015, 0.015, 0.0, 0.20, 0.0)
+# A d6 with 1.5 cm half-extents, dropped from 20 cm above the origin.
+die_id = Physics.add_cuboid_in("dice_tray", 0.0, 0.20, 0.0, 0.015, 0.015, 0.015)
 
 # Kick it — the impulses' scale assumes the physics_tuning defaults
-# (density 1000 kg/m³ → ~30 g die).
-:ok = Physics.apply_impulse(       "dice_tray", die_id, 0.010, 0.000, 0.008)
-:ok = Physics.apply_torque_impulse("dice_tray", die_id, 5.0e-4, 0.0,   3.0e-4)
+# (density 1000 kg/m³ → ~27 g die).
+:ok = Physics.apply_impulse_in(       "dice_tray", die_id, 0.010, 0.010, 0.008)
+:ok = Physics.apply_torque_impulse_in("dice_tray", die_id, 5.0e-4, 0.0,   3.0e-4)
 
 # Tick and read back until it stops moving; then decode which face is up.
 :ok = Physics.step_in("dice_tray", 1.0 / 30.0)
 
-case Physics.transforms_in("dice_tray") do
-  [{^die_id, _pos, {qx, qy, qz, qw}}] -> Dice.face_up_d6({qx, qy, qz, qw})
-  _ -> nil
+case Enum.find(Physics.transforms_in("dice_tray"), &(elem(&1, 0) == die_id)) do
+  {^die_id, _pos, quat} -> Dice.face_up_d6(quat)
+  nil -> nil
 end
 ```
 

@@ -30,6 +30,8 @@ defmodule Operator.Boot do
       tz_data: fn -> :ok = Operator.TzData.install!() end,
       llm_catalog: fn -> :ok = Operator.LLMCatalog.install!() end,
       certs: fn -> :ok = Operator.Certs.install!() end,
+      # The 3D models front screens load by name (Mob.Scene3d's asset root).
+      scene3d_assets: fn -> :ok = Operator.Scene3dAssets.install!() end,
       # Mob doesn't start transitive Applications on device: start the
       # agent stack explicitly (jido_ai pulls jido, jido_signal, req_llm,
       # llm_db, finch, req).

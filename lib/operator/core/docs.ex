@@ -10,29 +10,32 @@ defmodule Operator.Core.Docs do
   prompt lists the guides.
   """
 
-  # Read at compile time and embedded, like Operator.Core.Dyn.Seed.
+  # Read at compile time and embedded, like Operator.Core.Dyn.Seed: the
+  # generated set (`mix operator.docs`, priv/docs) and Operator's own,
+  # written by hand for this app (priv/guides), listed first: they say how
+  # things work here, where a plugin's README is written for other hosts.
   # credo:disable-for-next-line
-  @dir Path.expand("../../../priv/docs", __DIR__)
-  @external_resource Path.join(@dir, "index.md")
-  @index (case File.read(Path.join(@dir, "index.md")) do
-            {:ok, text} ->
-              for line <- String.split(text, "\n"),
-                  [name, about] <- [String.split(line, ": ", parts: 2)],
-                  not String.starts_with?(name, "<!--"),
-                  do: {name, about}
-
-            {:error, _} ->
-              []
-          end)
-  @guides (for {name, _} <- @index, into: %{} do
-             path = Path.join(@dir, name <> ".md")
+  @guides_dir Path.expand("../../../priv/guides", __DIR__)
+  # credo:disable-for-next-line
+  @docs_dir Path.expand("../../../priv/docs", __DIR__)
+  @dirs [@guides_dir, @docs_dir]
+  @index for dir <- @dirs,
+             index = Path.join(dir, "index.md"),
+             @external_resource(index),
+             {:ok, text} <- [File.read(index)],
+             line <- String.split(text, "\n"),
+             [name, about] <- [String.split(line, ": ", parts: 2)],
+             not String.starts_with?(name, "<!--"),
+             do: {name, about, dir}
+  @guides (for {name, _, dir} <- @index, into: %{} do
+             path = Path.join(dir, name <> ".md")
              @external_resource path
              {name, File.read!(path)}
            end)
 
   @doc "Every guide's name and what it covers, in the index's order."
   @spec index() :: [{String.t(), String.t()}]
-  def index, do: @index
+  def index, do: for({name, about, _} <- @index, do: {name, about})
 
   @spec names() :: [String.t()]
   def names, do: Enum.map(@index, &elem(&1, 0))
@@ -88,8 +91,9 @@ defmodule Operator.Core.Docs do
     (`:camera`), `MobLocation` (`:location`), `MobPhotos` (`:media`), `MobScanner` (`:camera`), \
     `MobNotify` (`:notifications`), `MobBluetooth` (`:bluetooth_connect`), `MobBiometric`, \
     `MobTouch`, `MobVideo`, `MobScreencast`, `MobSms` (composer), `MobVision` (OCR of an \
-    image file), `MobNfc`, `MobMidi`, `MobAudioCapture` (Android), `Mob.Scene3d` (the \
-    `<Scene3d>` 3D viewport), `MobRapier.Physics` (3D physics), `Nx` (Eigen backend), Ash \
+    image file), `MobNfc`, `MobMidi`, `MobAudioCapture` (Android), `Mob.Scene3d` (a 3D \
+    viewport, `Mob.Scene3d.viewport/1`) and `MobRapier.Physics` (3D physics): read \
+    `3d_physics` first, `Nx` (Eigen backend), Ash \
     resources on `Ash.DataLayer.Ets` with `MobAsh.navigate/3`, `Mob.Speech`, `Mob.Haptic`, \
     `Mob.Clipboard`, `Mob.Share`, `Mob.Alert`, `Mob.Device.open_url/1` (browser, `tel:`, \
     `geo:`), `Req` for HTTP. E.g. `MobLocation.get_once(socket)` → \
@@ -104,7 +108,7 @@ defmodule Operator.Core.Docs do
     """
     ## Guides (`read_guide` name)
 
-    #{Enum.map_join(@index, "\n", fn {name, about} -> "#{name}: #{about}" end)}
+    #{Enum.map_join(@index, "\n", fn {name, about, _} -> "#{name}: #{about}" end)}
     """
   end
 

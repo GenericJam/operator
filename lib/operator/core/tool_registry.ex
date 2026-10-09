@@ -16,6 +16,7 @@ defmodule Operator.Core.ToolRegistry do
   @table __MODULE__
   @core_tools [
     Operator.Core.Tools.Notes,
+    Operator.Core.Tools.Friction,
     Operator.Core.Tools.ReadArtifact,
     Operator.Core.Tools.HttpGet,
     Operator.Core.Tools.Clipboard,
