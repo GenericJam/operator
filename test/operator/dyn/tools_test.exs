@@ -81,6 +81,30 @@ defmodule Operator.Core.Dyn.ToolsTest do
     assert {:ok, "Staging reset to generation G0 (0 files)."} = DynReset.run(%{}, ctx)
   end
 
+  test "edits of one file made in parallel (one model turn's tool calls) all land", %{
+    tmp_dir: dir
+  } do
+    start_keeper(dir)
+    lines = for i <- 1..20, do: "line #{i}\n"
+    :ok = Dyn.stage_put("many.ex", Enum.join(lines))
+
+    results =
+      1..20
+      |> Enum.map(fn i ->
+        Task.async(fn ->
+          DynEdit.run(
+            %{"path" => "many.ex", "old_text" => "line #{i}\n", "new_text" => "L#{i}\n"},
+            %{}
+          )
+        end)
+      end)
+      |> Task.await_many()
+
+    assert Enum.all?(results, &match?({:ok, "Edited many.ex at line " <> _}, &1))
+    assert {:ok, after_edits} = Dyn.stage_read("many.ex")
+    assert after_edits == Enum.map_join(1..20, &"L#{&1}\n")
+  end
+
   test "with approve all on, the agent is told activation is automatic", %{tmp_dir: dir} do
     start_keeper(dir)
     on_exit(fn -> AutoApprove.disable() end)

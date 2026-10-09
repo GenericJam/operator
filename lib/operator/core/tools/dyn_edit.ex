@@ -36,10 +36,13 @@ defmodule Operator.Core.Tools.DynEdit do
       when is_binary(path) and is_binary(old) and old != "" and is_binary(new) do
     keeper = DynTool.keeper(ctx)
 
-    with {:ok, source} <- Dyn.stage_read(path, keeper),
-         {:ok, at} <- unique(source, old, path),
-         edited = String.replace(source, old, new),
-         :ok <- Dyn.stage_put(path, edited, keeper) do
+    # One read-modify-write: parallel edits of the same file both land.
+    edit = fn source ->
+      with {:ok, _at} <- unique(source, old, path), do: {:ok, String.replace(source, old, new)}
+    end
+
+    with {:ok, source} <- Dyn.stage_update(path, edit, keeper) do
+      {:ok, at} = unique(source, old, path)
       {:ok, "Edited #{path} at line #{line_of(source, at)}."}
     else
       {:error, text} when is_binary(text) -> {:error, text}

@@ -117,6 +117,30 @@ defmodule Operator.Core.Dyn do
     with {:ok, %{dir: dir}} <- Registry.config(keeper), do: Store.stage_read(dir, path)
   end
 
+  @doc """
+  Reads `path` from staging, passes its source to `fun` and writes back what
+  `fun` returns as `{:ok, new_source}` (anything else is returned and nothing
+  is written), as one step: edits of the same file never interleave, so two
+  `dyn_edit` calls the model makes in parallel both land. Returns
+  `{:ok, old_source}` after writing.
+  """
+  @spec stage_update(String.t(), (String.t() -> {:ok, String.t()} | term()), atom()) ::
+          {:ok, String.t()} | term()
+  def stage_update(path, fun, keeper \\ @keeper) do
+    with {:ok, %{dir: dir}} <- Registry.config(keeper) do
+      # A lock on this node only, per staged file.
+      lock = {{__MODULE__, :stage, dir, path}, self()}
+      :global.trans(lock, fn -> update(dir, path, fun) end, [node()])
+    end
+  end
+
+  defp update(dir, path, fun) do
+    with {:ok, source} <- Store.stage_read(dir, path),
+         {:ok, edited} <- fun.(source),
+         :ok <- Store.stage_put(dir, path, edited),
+         do: {:ok, source}
+  end
+
   # ── proposals ──
 
   @doc """
@@ -557,7 +581,9 @@ defmodule Operator.Core.Dyn do
 
     The cycle: `dyn_propose` (with a one-line rationale) checks, compiles and selftests the \
     staging copy as a new generation and shows its diff. Nothing changes yet: the human \
-    approves it on the phone with the screen lock; you can't activate it yourself. Once active \
+    approves it on the phone with the screen lock; you can't activate it yourself (if the \
+    user turned approve all on in [menu], it activates as soon as it passes: the result says \
+    which). Once active \
     it is on probation: 3 crashes within 60 s, or an app launch that dies, revert it to the \
     previous generation automatically. `dyn_status` shows what runs, the pending proposal and \
     recent crash reports: read them, fix the sources, propose again.
