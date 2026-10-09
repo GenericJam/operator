@@ -6,11 +6,19 @@ defmodule Operator.Cluster.Remote do
     * `"operator.tool"`: runs one of this phone's agent tools
       (`{:tool, name, args}`) and answers with its result, so a member's
       agent can read this phone's location or sensors, post a notification
-      here, read or write files here. Tools that would change this phone's
-      Dyn layer or front, or that only make sense in one session, are not
-      run for a peer (`remote?/1`), and neither is `cluster` itself, so one
-      request can't fan out. Pictures a tool returns stay on this phone: a
-      Bus reply is at most 64 KiB.
+      here, read or write files here. Only the Core tools on an allowlist
+      are run for a peer (`remote?/1`): the phone's senses, notifications,
+      notes and friction, files, `http_get`, the docs, and looking at (not
+      changing) the Dyn layer and the front. Everything else only runs for
+      this phone's own agent: tools that change the Dyn layer or drive the
+      front, that only make sense in one session (`read_artifact`, `todo`,
+      `task`), that reach into the app itself (`eval`, `logs`) or rewrite
+      the agent's own instructions (`instructions`, `skill`), `cluster`
+      (so one request can't fan out), and any Core tool added later until
+      it is put on the list. The current Dyn generation's own tools are run
+      for peers, as they always were: the agent built them, and Dyn code is
+      held to the Dyn sandbox. Pictures a tool returns stay on this phone:
+      a Bus reply is at most 64 KiB.
     * `"operator.message"`: shows a member's message (`{:message, text}`)
       in this phone's terminal, as a notice the agent here also reads on
       its next call, and as a notification. It doesn't start a run.
@@ -26,6 +34,7 @@ defmodule Operator.Cluster.Remote do
 
   alias Operator.Cluster.Ask
   alias Operator.Cluster.Bus
+  alias Operator.Core.Dyn
   alias Operator.Core.Loop
   alias Operator.Core.Phone
   alias Operator.Core.Tool
@@ -42,8 +51,11 @@ defmodule Operator.Cluster.Remote do
   # A Bus message is at most 64 KiB; leave room for the tuple around it.
   @max_reply 60_000
   @max_message 4_000
-  @local_only ~w(cluster read_artifact dyn_write dyn_edit dyn_copy dyn_delete dyn_reset
-                 dyn_propose front_open)
+  # The Core tools a peer may run; anything else Core is this agent's only.
+  @peer_tools ~w(notes friction http_get clipboard location notify camera_photo camera_snap
+                 pick_photos photos_recent sensors file_list file_read file_write file_copy
+                 file_delete file_pick dyn_files dyn_read dyn_status front_screens
+                 front_screenshot read_guide read_doc)
 
   @spec tool_service() :: String.t()
   def tool_service, do: @tool_service
@@ -69,9 +81,19 @@ defmodule Operator.Cluster.Remote do
   @spec max_message() :: pos_integer()
   def max_message, do: @max_message
 
-  @doc "May a peer run tool `name` here?"
+  @doc """
+  May a peer run tool `name` here? A Core tool on the allowlist, or one
+  of the current Dyn generation's (a Core tool's name always wins).
+  """
   @spec remote?(String.t()) :: boolean()
-  def remote?(name), do: name not in @local_only
+  def remote?(name), do: name in @peer_tools or dyn_tool?(name)
+
+  defp dyn_tool?(name) do
+    case Dyn.lookup({:tool, name}) do
+      {:ok, module} -> ToolRegistry.lookup(name) == {:ok, module}
+      :error -> false
+    end
+  end
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)

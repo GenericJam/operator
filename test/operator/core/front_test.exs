@@ -28,6 +28,9 @@ defmodule Operator.Core.FrontTest do
   alias Operator.Core.Tools.FrontOpen
   alias Operator.Core.Tools.FrontScreens
   alias Operator.Core.Tools.FrontScreenshot
+  alias Operator.Core.Tools.FrontScroll
+  alias Operator.Core.Tools.FrontSend
+  alias Operator.Core.Tools.FrontState
   alias Operator.Core.Tools.FrontTap
 
   @moduletag :tmp_dir
@@ -714,7 +717,10 @@ defmodule Operator.Core.FrontTest do
 
     assert {:error, text} = FrontTap.run(%{"tag" => "nope"}, %{})
     assert text =~ "no tag nope. Its tappable tags:\n- reset (Start over)"
-    assert {:ok, "Tapped reset on Second."} = FrontTap.run(%{"tag" => "reset"}, %{})
+
+    assert {:ok, "Tapped reset on Second; it re-rendered."} =
+             FrontTap.run(%{"tag" => "reset"}, %{})
+
     await_view("second 9")
 
     send(second.host, {:tap, :back})
@@ -747,5 +753,295 @@ defmodule Operator.Core.FrontTest do
 
     failing = %{front_capture: fn _ -> {:error, "the screenshot failed: :no_window"} end}
     assert {:error, "the screenshot failed: :no_window"} = FrontScreenshot.run(%{}, failing)
+
+    # Another app's window over Operator: the shot looks normal, the text says so.
+    covered = %{front_capture: capture, foreground?: fn -> false end}
+
+    assert {:ok, {:image, _, _, "Screenshot of the front, showing Home.\n\nWarning: " <> warning}} =
+             FrontScreenshot.run(%{}, covered)
+
+    assert warning =~ "Operator isn't the focused app right now"
+    assert warning =~ "Back"
+    assert Front.cover_warning(true) == nil
+    assert Front.app_foreground?()
+  end
+
+  @cam """
+  defmodule Operator.Dyn.Cam do
+    use Mob.Screen
+    alias Operator.Core.Files
+
+    def mount(_params, _session, socket), do: {:ok, Mob.Socket.assign(socket, :shown, "none")}
+
+    def render(assigns) do
+      %{type: :column, props: %{}, children: [
+        %{type: :text, props: %{text: "cam \#{assigns.shown}"}, children: []},
+        %{type: :button, props: %{text: "Same", on_tap: {self(), :same}}, children: []}
+      ]}
+    end
+
+    def handle_info({:camera, :photo, %{path: path}}, socket) do
+      shown =
+        with {:ok, kept} <- Files.keep(path, "shot.jpg"),
+             {:ok, bytes} <- Files.read(kept) do
+          "kept \#{Path.basename(kept)} \#{bytes}"
+        else
+          _ -> "refused"
+        end
+
+      {:noreply, Mob.Socket.assign(socket, :shown, shown)}
+    end
+
+    def handle_info({:tap, :boom}, _socket), do: raise("cam boom")
+    def handle_info(_message, socket), do: {:noreply, socket}
+  end
+  """
+
+  test "front_tap and front_send say whether the screen re-rendered or crashed; a sent " <>
+         "camera reply reaches the screen as the phone's would",
+       %{settings: settings, tmp_dir: dir} do
+    old_temp = Application.get_env(:operator, :app_temp)
+    old_data = System.get_env("MOB_DATA_DIR")
+    temp = Path.join(dir, "native-temp")
+    data = Path.join(dir, "data")
+    File.mkdir_p!(temp)
+    File.mkdir_p!(Path.join(data, "workspace/inbox"))
+    File.write!(Path.join(data, "workspace/inbox/src.jpg"), "pixels")
+    File.write!(Path.join(temp, "other.jpg"), "someone else's")
+    Application.put_env(:operator, :app_temp, temp)
+    System.put_env("MOB_DATA_DIR", data)
+
+    on_exit(fn ->
+      if old_temp,
+        do: Application.put_env(:operator, :app_temp, old_temp),
+        else: Application.delete_env(:operator, :app_temp)
+
+      if old_data,
+        do: System.put_env("MOB_DATA_DIR", old_data),
+        else: System.delete_env("MOB_DATA_DIR")
+    end)
+
+    activate!(files(%{"cam.ex" => @cam}))
+    start_front(settings)
+    ctx = %{data_dir: data}
+
+    assert {:error, "No front screen is running" <> _} =
+             FrontSend.run(%{"message" => ":ok"}, ctx)
+
+    {:ok, "Cam"} = Front.open("Cam")
+    _ = Front.subscribe()
+    _ = Front.show(@env)
+    await_view("cam none")
+
+    # The tap arrives but changes nothing: said so, not passed off as done.
+    assert {:ok, "Tapped same on Cam; the screen did not re-render within 1 s" <> _} =
+             FrontTap.run(%{"tag" => "same"}, %{})
+
+    # A workspace file named in the reply reaches the screen as a fresh
+    # temporary copy, which Files.keep/2 takes.
+    assert {:ok, "Sent {:camera, :photo, %{" <> rest} =
+             FrontSend.run(
+               %{"message" => ~s|{:camera, :photo, %{path: "inbox/src.jpg", width: 600}}|},
+               ctx
+             )
+
+    assert rest =~ "to Cam; it re-rendered."
+    await_view("cam kept shot.jpg pixels")
+
+    # The screen got them, but another app's window takes the user's touches: said so.
+    covered = Map.put(ctx, :foreground?, fn -> false end)
+
+    assert {:ok, "Tapped same on Cam; the screen did not re-render" <> rest} =
+             FrontTap.run(%{"tag" => "same"}, covered)
+
+    assert rest =~ "front_screenshot.\n\nWarning: Operator isn't the focused app"
+
+    assert {:ok, "Sent {:tap, :same} to Cam" <> rest} =
+             FrontSend.run(%{"message" => "{:tap, :same}"}, covered)
+
+    assert rest =~ "\n\nWarning: Operator isn't the focused app"
+
+    # Only workspace files: a temporary file it names is not staged or granted.
+    assert {:error, text} =
+             FrontSend.run(
+               %{"message" => ~s|{:camera, :photo, %{path: "#{temp}/other.jpg"}}|},
+               ctx
+             )
+
+    assert text =~ "outside the places files may be used"
+
+    assert {:error, "unknown atom front_send_no_such_atom_q7" <> _} =
+             FrontSend.run(%{"message" => "{:front_send_no_such_atom_q7}"}, ctx)
+
+    assert {:error, "`System.halt()` is not a literal" <> _} =
+             FrontSend.run(%{"message" => "{:ok, System.halt()}"}, ctx)
+
+    assert {:error, "Sent {:tap, :boom} to Cam; the screen crashed:\n" <> error} =
+             FrontSend.run(%{"message" => "{:tap, :boom}"}, ctx)
+
+    assert error =~ "cam boom"
+    assert {:error, "No front screen is running" <> _} = FrontTap.run(%{"tag" => "same"}, %{})
+  end
+
+  test "front_send parses literals only" do
+    assert {:ok, {:photos, :picked, [%{path: "a.jpg", size: -1, ratio: 1.5}], [a: nil]}} =
+             FrontSend.parse(
+               ~s|{:photos, :picked, [%{path: "a.jpg", size: -1, ratio: 1.5}], [a: nil]}|
+             )
+
+    assert {:ok, %{"k" => {1, 2, 3}}} = FrontSend.parse(~s|%{"k" => {1, 2, 3}}|)
+    assert {:ok, Operator.Core.Front} = FrontSend.parse("Operator.Core.Front")
+    assert {:error, "`path` is a variable" <> _} = FrontSend.parse("{:camera, :photo, path}")
+    assert {:error, "a pin" <> _} = FrontSend.parse("^x")
+    assert {:error, "`File.rm(\"a\")` is not a literal" <> _} = FrontSend.parse(~s|File.rm("a")|)
+
+    assert {:error, "`%Operator.Core.Front{}` is not a literal" <> _} =
+             FrontSend.parse("%Operator.Core.Front{}")
+
+    assert {:error, "not valid Elixir" <> _} = FrontSend.parse("{:ok,")
+    assert FrontSend.selftest() == :ok
+  end
+
+  # Stands in for mob's scroll NIFs: scroll views by id in the test
+  # process's dictionary (the tool runs them there, `front_show` below).
+  defmodule FakeScrollNif do
+    def scroll_info(id) do
+      case Process.get({:scroll, id}) do
+        nil ->
+          {:error, :scroll_view_not_found}
+
+        y ->
+          JSON.encode!(%{
+            offset_x: 0,
+            offset_y: y,
+            content_w: 400,
+            content_h: 2500,
+            viewport_w: 400,
+            viewport_h: 1000,
+            max_x: 0,
+            max_y: 1500,
+            kind: "pixel"
+          })
+      end
+    end
+
+    def scroll_to(id, x, y) when is_binary(id) and is_float(x) and is_float(y) do
+      Process.put({:scroll, id}, y)
+      :ok
+    end
+  end
+
+  @scrolly """
+  defmodule Operator.Dyn.Scrolly do
+    use Mob.Screen
+
+    def mount(_params, _session, socket),
+      do: {:ok, Mob.Socket.assign(socket, mode: :none, note: String.duplicate("n", 2000))}
+
+    def render(%{mode: mode}) do
+      text = fn t -> %{type: :text, props: %{text: t}, children: []} end
+      scroll = fn props, t -> %{type: :scroll, props: props, children: [text.(t)]} end
+
+      kids =
+        case mode do
+          :none -> [text.("no scroll")]
+          :bare -> [scroll.(%{}, "bare rows")]
+          :one -> [scroll.(%{id: :feed}, "feed rows"), scroll.(%{}, "unnamed")]
+          :two -> [scroll.(%{id: :a}, "rows a"), scroll.(%{id: "b"}, "rows b")]
+        end
+
+      %{type: :column, props: %{}, children: kids}
+    end
+
+    def handle_info({:mode, mode}, socket), do: {:noreply, Mob.Socket.assign(socket, :mode, mode)}
+    def handle_info(_message, socket), do: {:noreply, socket}
+  end
+  """
+
+  test "front_state shows the open screen's assigns, all or the keys asked for",
+       %{settings: settings} do
+    activate!(files(%{"scrolly.ex" => @scrolly}))
+    start_front(settings)
+
+    assert {:error, "No front screen is running" <> _} = FrontState.run(%{}, %{})
+
+    {:ok, "Scrolly"} = Front.open("Scrolly")
+    _ = Front.subscribe()
+    _ = Front.show(@env)
+    await_view("no scroll")
+    {:ok, "Scrolly", :rendered} = Front.deliver({:mode, :two})
+
+    assert {:ok, "Scrolly assigns:\n" <> all} = FrontState.run(%{}, %{})
+    assert all =~ "mode: :two"
+    assert all =~ "safe_area:"
+    # Long strings are cut.
+    refute all =~ String.duplicate("n", 600)
+
+    assert {:ok, "Scrolly assigns:\n%{mode: :two}\n(no assign nope; it has: " <> has} =
+             FrontState.run(%{"keys" => ["mode", "nope"]}, %{})
+
+    assert has =~ "mode, note"
+  end
+
+  test "front_scroll finds the screen's one scroll view with an id and scrolls it by page",
+       %{settings: settings} do
+    activate!(files(%{"scrolly.ex" => @scrolly}))
+    start_front(settings)
+
+    shown = fn _front, while_shown ->
+      with {:ok, text} <- while_shown.(), do: {:ok, text, <<0xFF, 0xD8>>}
+    end
+
+    ctx = %{scroll_nif: FakeScrollNif, front_show: shown}
+    scroll = fn args -> FrontScroll.run(args, ctx) end
+
+    assert {:error, "No front screen is running" <> _} = scroll.(%{"to" => "down"})
+
+    {:ok, "Scrolly"} = Front.open("Scrolly")
+    _ = Front.subscribe()
+    _ = Front.show(@env)
+    await_view("no scroll")
+
+    assert {:error, "`to` must be" <> _} = scroll.(%{"to" => "0"})
+    assert {:error, "`to` is required" <> _} = scroll.(%{})
+    assert {:error, "The open front screen has no scroll view" <> _} = scroll.(%{"to" => "down"})
+
+    {:ok, _, :rendered} = Front.deliver({:mode, :bare})
+
+    assert {:error, "The open front screen's scroll view has no `id`" <> _} =
+             scroll.(%{"to" => "down"})
+
+    {:ok, _, :rendered} = Front.deliver({:mode, :two})
+
+    assert {:error, "The open front screen has several scroll views; give `id`:\n" <> listed} =
+             scroll.(%{"to" => "down"})
+
+    assert listed == "- a (rows a)\n- b (rows b)"
+
+    {:ok, _, :rendered} = Front.deliver({:mode, :one})
+    Process.put({:scroll, "feed"}, 0)
+
+    assert {:ok, {:image, "image/jpeg", <<0xFF, 0xD8>>, text}} = scroll.(%{"to" => "down"})
+    assert text =~ "Scrolled feed: page 2 of 3, offset 1000 of 1500 px"
+
+    assert {:ok, {:image, _, _, text}} = scroll.(%{"to" => "down"})
+    assert text =~ "page 3 of 3, offset 1500 of 1500"
+    assert {:ok, {:image, _, _, text}} = scroll.(%{"to" => "bottom"})
+    assert text =~ "It was already at the bottom."
+    assert {:ok, {:image, _, _, text}} = scroll.(%{"to" => "2"})
+    assert text =~ "page 2 of 3, offset 1000"
+    assert {:ok, {:image, _, _, text}} = scroll.(%{"to" => "top"})
+    assert text =~ "page 1 of 3, offset 0"
+
+    assert {:ok, {:image, _, _, text}} =
+             FrontScroll.run(%{"to" => "down"}, Map.put(ctx, :foreground?, fn -> false end))
+
+    assert text =~ "Screenshot of the front:\n\nWarning: Operator isn't the focused app"
+
+    assert {:error, "No scroll view with id gone is on screen" <> _} =
+             scroll.(%{"to" => "down", "id" => "gone"})
+
+    assert FrontScroll.selftest() == :ok
+    assert FrontState.selftest() == :ok
   end
 end

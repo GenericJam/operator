@@ -15,6 +15,9 @@ defmodule Operator.Core.Settings do
     * `front_stack`: the front screens open when the app last ran
       (`Operator.Core.Front`), the top one first, by their Dyn names
       (`"Showcase.GalleryScreen"`); none by default.
+    * `fallback_model`: the model a run continues on when its own is rate
+      limited past waiting (`Operator.Core.Loop`), a req_llm spec such as
+      `"openai_codex:gpt-5"`; none by default.
   """
 
   @file_name "settings.json"
@@ -73,6 +76,20 @@ defmodule Operator.Core.Settings do
   @spec put_front_stack([String.t()], String.t()) :: :ok
   def put_front_stack(names, dir \\ Operator.Paths.data_dir()) when is_list(names),
     do: write(dir, Map.put(read(dir), "front_stack", names))
+
+  @spec fallback_model(String.t()) :: String.t() | nil
+  def fallback_model(dir \\ Operator.Paths.data_dir()) do
+    case read(dir) do
+      %{"fallback_model" => model} when is_binary(model) and model != "" -> model
+      _ -> nil
+    end
+  end
+
+  @doc "Sets the fallback model (a req_llm spec); nil removes it."
+  @spec put_fallback_model(String.t() | nil, String.t()) :: :ok
+  def put_fallback_model(model, dir \\ Operator.Paths.data_dir())
+      when is_binary(model) or is_nil(model),
+      do: write(dir, Map.put(read(dir), "fallback_model", model))
 
   defp read(dir) do
     with {:ok, json} <- File.read(Path.join(dir, @file_name)),

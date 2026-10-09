@@ -53,10 +53,16 @@ defmodule Operator.Core.Front do
   @settings_timeout_ms 2_000
   @settings_max_heap_words 1_000_000
   @max_error_bytes 6_000
+  @render_wait_ms 1_000
 
   @type toggle :: :dial | {:text, String.t()}
   @type view :: {:tree, map()} | {:error, String.t()} | {:note, String.t()}
   @type snapshot :: %{view: view(), host: pid() | nil}
+  @typedoc """
+  What a tap or delivered message did: the screen drew a new view, it
+  crashed (the error), or neither happened within the wait.
+  """
+  @type outcome :: :rendered | {:crashed, String.t()} | :no_render
 
   # ── API ──
 
@@ -130,13 +136,57 @@ defmodule Operator.Core.Front do
   is `"roll"`; a non-atom tag by its `inspect/1`): sends the screen the
   `{:tap, tag}` a finger's tap does. Only tags on the screen now: an
   unknown one returns the screen's tappable tags, each with its text.
+
+  Then waits up to `wait_ms` for what it did (`t:outcome/0`): the screen
+  drew a new view, crashed, or did neither in time (it hadn't handled the
+  tap yet, or the tap changed nothing visible).
   """
-  @spec tap(String.t(), GenServer.server()) ::
-          {:ok, String.t()}
+  @spec tap(String.t(), GenServer.server(), non_neg_integer()) ::
+          {:ok, String.t(), outcome()}
           | {:error, :not_running}
           | {:error, {:unknown_tag, [{String.t(), String.t()}]}}
-  def tap(name, server \\ __MODULE__) when is_binary(name),
-    do: GenServer.call(server, {:tap, name})
+  def tap(name, server \\ __MODULE__, wait_ms \\ @render_wait_ms) when is_binary(name),
+    do: GenServer.call(server, {:tap, name, wait_ms}, wait_ms + 5_000)
+
+  @doc """
+  Delivers `message` to the open front screen's `handle_info/2` the way the
+  phone's capabilities do (`Operator.ShellScreen` forwards their replies
+  like this): the paths in a `{:camera, :photo, ...}`,
+  `{:photos, :picked, ...}`, ... are granted to the screen, so
+  `Operator.Core.Files.keep/2` takes them. Only pass paths that
+  `Operator.Core.Files.stage_capability/2` staged. Waits like `tap/3`.
+  """
+  @spec deliver(term(), GenServer.server(), non_neg_integer()) ::
+          {:ok, String.t(), outcome()} | {:error, :not_running}
+  def deliver(message, server \\ __MODULE__, wait_ms \\ @render_wait_ms),
+    do: GenServer.call(server, {:deliver, message, wait_ms}, wait_ms + 5_000)
+
+  @doc """
+  The open front screen's name and its assigns (its state), read from its
+  process without running screen code: `{:ok, "Home", %{count: 3, ...}}`,
+  or `{:error, :not_running}` (none runs, or it is busy for 2 s).
+  """
+  @spec assigns(GenServer.server()) :: {:ok, String.t(), map()} | {:error, :not_running}
+  def assigns(server \\ __MODULE__) do
+    with {:ok, host} <- GenServer.call(server, :host),
+         {:ok, {module, assigns}} <- Host.assigns(host) do
+      {:ok, name(module), assigns}
+    end
+  end
+
+  @doc """
+  The scroll views (`type: :scroll`, or a list's `:lazy_list`) in the open
+  front screen's view, in order, each as `%{id: id_or_nil, text: text}`,
+  `text` the start of what is in it; `{:error, :not_running}` without a view.
+  """
+  @spec scroll_views(GenServer.server()) ::
+          {:ok, [%{id: term(), text: String.t()}]} | {:error, :not_running}
+  def scroll_views(server \\ __MODULE__) do
+    case GenServer.call(server, :view) do
+      {:tree, tree} -> {:ok, scrolls(tree)}
+      _ -> {:error, :not_running}
+    end
+  end
 
   @doc "Re-reads the front's settings and screens (after the seed, say)."
   @spec refresh(GenServer.server()) :: :ok
@@ -148,6 +198,36 @@ defmodule Operator.Core.Front do
   @doc "The toggle's symbol (no process call: screens draw it on every render)."
   @spec toggle() :: toggle()
   def toggle, do: :persistent_term.get(@toggle_key, :dial)
+
+  @doc """
+  Whether Operator's activity is the one in front and taking touches
+  (`Mob.Device.foreground?/0`: resumed, on Android from `onResume` to
+  `onPause`). Any activity started over it pauses it, an invisible one
+  too (a composer that failed to open can leave a 1×1 window that takes
+  every touch), while screenshots of Operator's own window still look
+  normal. True where there is no native side (tests, the Mac).
+  """
+  @spec app_foreground?() :: boolean()
+  def app_foreground? do
+    Mob.Device.foreground?()
+  rescue
+    _ in [UndefinedFunctionError, ErlangError] -> true
+  end
+
+  @doc """
+  The warning the front tools add to what they report while another
+  app's window is over Operator (`app_foreground?/0` is false), else nil.
+  """
+  @spec cover_warning(boolean()) :: String.t() | nil
+  def cover_warning(foreground?)
+  def cover_warning(true), do: nil
+
+  def cover_warning(false) do
+    "Warning: Operator isn't the focused app right now: another app's window is on top " <>
+      "and gets the user's touches. It may be invisible (a composer, picker or dialog your " <>
+      "screen opened), so a screenshot of Operator still looks normal. It usually closes " <>
+      "with Back: ask the user, or wait."
+  end
 
   @doc """
   Navigates the app (mob's router, as `Mob.Test` does) from outside a
@@ -186,7 +266,13 @@ defmodule Operator.Core.Front do
     `front_open` switches the front to a screen (when asked, or when a screen has no way to \
     it), `front_screenshot` shows you the front: look at it after a change is active. \
     `front_tap` taps a button on the open screen by its `on_tap` tag, so you can try what \
-    you built (tap, then screenshot) instead of making a screen act on its own to test it.
+    you built (tap, then screenshot) instead of making a screen act on its own to test it. \
+    `front_send` delivers a message to the open screen's `handle_info/2` as a plugin or \
+    timer would: with it you test a camera, photo picker, scanner or any other result path \
+    with no one at the phone. Both say whether the screen re-rendered. `front_state` shows \
+    the open screen's assigns, to check what they did without a screenshot; `front_scroll` \
+    scrolls a scroll view that has an `id` prop and shows you the result, to see below the \
+    fold.
 
     `Operator.Dyn.Front.start/0` is the screen the front opens on: by default \
     `Operator.Dyn.WelcomeScreen`, which links to the terminal and to the component library \
@@ -230,7 +316,10 @@ defmodule Operator.Core.Front do
       view: {:note, ""},
       visible: false,
       env: nil,
-      theme: nil
+      theme: nil,
+      # Callers of tap/3 and deliver/3 waiting for the next view:
+      # ref => {from, screen, timer}.
+      waiters: %{}
     }
 
     {:ok, %{s | stack: Settings.front_stack(s.dir)}}
@@ -282,6 +371,13 @@ defmodule Operator.Core.Front do
     {:reply, s.screens |> Map.keys() |> Enum.sort(), s}
   end
 
+  def handle_call(:host, _from, %{host: host} = s) when is_pid(host),
+    do: {:reply, {:ok, host}, s}
+
+  def handle_call(:host, _from, s), do: {:reply, {:error, :not_running}, s}
+
+  def handle_call(:view, _from, s), do: {:reply, s.view, s}
+
   def handle_call(:status, _from, s) do
     view =
       case s.view do
@@ -293,28 +389,50 @@ defmodule Operator.Core.Front do
      %{stack: s.stack, view: view, visible: s.visible, toggle: toggle(), generation: s.gen}, s}
   end
 
-  def handle_call({:tap, name}, _from, %{host: host, view: {:tree, tree}} = s)
+  def handle_call({:tap, name, wait_ms}, from, %{host: host, view: {:tree, tree}} = s)
       when is_pid(host) do
     taps = taps(tree, host)
 
     case Enum.find(taps, fn {tag, _text} -> tag_name(tag) == name end) do
       {tag, _text} ->
         send(host, {:tap, tag})
-        {:reply, {:ok, List.first(s.stack) || "the open screen"}, s}
+        {:noreply, await_render(s, from, wait_ms)}
 
       nil ->
         {:reply, {:error, {:unknown_tag, for({tag, text} <- taps, do: {tag_name(tag), text})}}, s}
     end
   end
 
-  def handle_call({:tap, _name}, _from, s), do: {:reply, {:error, :not_running}, s}
+  def handle_call({:tap, _name, _wait_ms}, _from, s), do: {:reply, {:error, :not_running}, s}
+
+  # As Operator.ShellScreen forwards a capability's reply: with the key, so
+  # the host grants the result's paths to the screen.
+  def handle_call({:deliver, message, wait_ms}, from, %{host: host, capability_key: key} = s)
+      when is_pid(host) and is_reference(key) do
+    send(host, {Host, :native, key, message})
+    {:noreply, await_render(s, from, wait_ms)}
+  end
+
+  def handle_call({:deliver, _message, _wait_ms}, _from, s),
+    do: {:reply, {:error, :not_running}, s}
 
   @impl true
   def handle_cast(:refresh, s), do: {:noreply, s |> sync() |> restart_if_running()}
 
   @impl true
   def handle_info({:operator_front_host, host, {:view, tree}}, %{host: host} = s),
-    do: {:noreply, broadcast(%{s | view: {:tree, tree}})}
+    do: {:noreply, %{s | view: {:tree, tree}} |> broadcast() |> reply_waiters(:rendered)}
+
+  def handle_info({:render_wait, ref}, s) do
+    case Map.pop(s.waiters, ref) do
+      {{from, screen, _timer}, waiters} ->
+        GenServer.reply(from, {:ok, screen, :no_render})
+        {:noreply, %{s | waiters: waiters}}
+
+      {nil, _} ->
+        {:noreply, s}
+    end
+  end
 
   def handle_info({:operator_front_host, host, {:stack, mods}}, %{host: host} = s) do
     names = Enum.map(mods, &name/1)
@@ -325,15 +443,12 @@ defmodule Operator.Core.Front do
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{mon: ref} = s) do
     Logger.warning("[front] the front screen stopped: #{inspect(reason, limit: 10)}")
+    text = crash_text(reason)
 
     {:noreply,
-     broadcast(%{
-       s
-       | host: nil,
-         mon: nil,
-         capability_key: nil,
-         view: {:error, crash_text(reason)}
-     })}
+     %{s | host: nil, mon: nil, capability_key: nil, view: {:error, text}}
+     |> broadcast()
+     |> reply_waiters({:crashed, text})}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, s) do
@@ -369,6 +484,26 @@ defmodule Operator.Core.Front do
     do: {:noreply, %{s | gen: nil} |> sync() |> restart_if_running()}
 
   def handle_info(_message, s), do: {:noreply, s}
+
+  # The tap or message went to the host: the caller gets the screen it went
+  # to and what came of it (the next view, a crash, or nothing in wait_ms).
+  defp await_render(s, from, wait_ms) do
+    screen = List.first(s.stack) || "the open screen"
+    ref = make_ref()
+    timer = Process.send_after(self(), {:render_wait, ref}, wait_ms)
+    %{s | waiters: Map.put(s.waiters, ref, {from, screen, timer})}
+  end
+
+  defp reply_waiters(%{waiters: waiters} = s, _outcome) when waiters == %{}, do: s
+
+  defp reply_waiters(s, outcome) do
+    for {_ref, {from, screen, timer}} <- s.waiters do
+      Process.cancel_timer(timer)
+      GenServer.reply(from, {:ok, screen, outcome})
+    end
+
+    %{s | waiters: %{}}
+  end
 
   # Not yet shown: the host starts when the front is.
   defp restart_if_running(%{host: nil, visible: false} = s), do: s
@@ -599,6 +734,15 @@ defmodule Operator.Core.Front do
   end
 
   defp taps(_other, _host), do: []
+
+  # The view's scroll views, in order (one inside another too).
+  defp scrolls(%{type: type, props: props} = node) when type in [:scroll, :lazy_list] do
+    [%{id: Map.get(props, :id), text: node |> label() |> String.slice(0, 60)}] ++
+      Enum.flat_map(children(node), &scrolls/1)
+  end
+
+  defp scrolls(%{} = node), do: Enum.flat_map(children(node), &scrolls/1)
+  defp scrolls(_other), do: []
 
   defp children(node), do: node |> Map.get(:children, []) |> List.wrap() |> List.flatten()
 

@@ -133,6 +133,86 @@ defmodule Operator.MenuScreenTest do
       assert view |> render_info({:tap, :components}) |> navigated_to() == Operator.ShellScreen
       assert %{stack: ["Showcase.GalleryScreen", "Home"]} = Front.status()
     end
+
+    test "yours: the agent's menu rows open their front screens; a new generation updates them",
+         %{tmp_dir: dir} do
+      Operator.Test.Dyn.purge_all()
+      on_exit(&Operator.Test.Dyn.purge_all/0)
+      Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn"))
+      Operator.Test.Dyn.activate!(%{"home.ex" => Operator.Test.Dyn.screen("Home", "home")})
+      settings = Path.join(dir, "settings")
+      File.mkdir_p!(settings)
+      start_supervised!({Operator.Core.Front, dir: settings})
+      %{view: view} = mount_menu(dir, :main)
+      refute text(view) =~ "── yours"
+
+      Operator.Test.Dyn.activate!(%{
+        "scanner.ex" => Operator.Test.Dyn.screen("Plugins.Scanner", "scanner"),
+        "menu.ex" =>
+          menu("""
+          [%{label: "text scanner", detail: "read text", screen: "Scanner"},
+           %{label: "gone", screen: "Nowhere"}]
+          """)
+      })
+
+      # The activation reaches the open page: no remount needed.
+      assert_receive {:operator_dyn, %{type: :activated}} = activated
+      view = render_info(view, activated)
+      shown = text(view)
+      assert shown =~ "── yours"
+      assert shown =~ "text scanner"
+      assert shown =~ "read text"
+      assert shown =~ "no screen Nowhere"
+
+      view = render_info(view, {:tap, {:yours, "Nowhere"}})
+      assert nav(view) == nil
+      assert text(view) =~ "Couldn't open Nowhere"
+
+      assert view |> render_info({:tap, {:yours, "Scanner"}}) |> navigated_to() ==
+               Operator.ShellScreen
+
+      assert %{stack: ["Plugins.Scanner", "Home"]} = Front.status()
+    end
+
+    test "yours: a menu module that raises, hangs or returns junk costs only its section",
+         %{tmp_dir: dir} do
+      Operator.Test.Dyn.purge_all()
+      on_exit(&Operator.Test.Dyn.purge_all/0)
+      Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn"))
+
+      for {body, says} <- [
+            {~s|raise "boom"|, "items/0 raised: boom"},
+            {":not_a_list", "returned :not_a_list, not a list"},
+            {"Process.sleep(5_000)", "took over"},
+            {"Enum.to_list(1..10_000_000)", "items/0 died"},
+            {~s|[%{label: "ok", screen: "S"}, %{label: 1}, "x"] ++ List.duplicate(%{label: "n", screen: "S"}, 30)|,
+             "2 skipped"}
+          ] do
+        Operator.Test.Dyn.activate!(%{"menu.ex" => menu(body)})
+        %{view: view} = mount_menu(dir, :main)
+        assert_renderable(view)
+        shown = text(view)
+        assert shown =~ says
+        assert shown =~ "diagnostics"
+        assert shown =~ "approvals"
+      end
+
+      # Of the first 20, 18 rows; the 13 past the cap are dropped and said so.
+      %{view: view} = mount_menu(dir, :main)
+      shown = text(view)
+      assert shown =~ "13 more not shown (at most 20)"
+      assert Enum.count(Regex.scan(~r/no screen S/, shown)) == 18
+    end
+  end
+
+  defp menu(items) do
+    """
+    defmodule Operator.Dyn.Menu do
+      def items do
+        #{items}
+      end
+    end
+    """
   end
 
   describe "approvals" do

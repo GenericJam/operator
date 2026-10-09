@@ -113,6 +113,30 @@ defmodule Operator.Core.Front.Host do
     :ok
   end
 
+  @doc """
+  The open screen's module and its assigns, `{:ok, {module, assigns}}`, or
+  `{:error, :not_running}` if the host is gone or doesn't answer within
+  `timeout` (it is busy in screen code).
+  """
+  @spec assigns(pid(), timeout()) :: {:ok, {module(), map()}} | {:error, :not_running}
+  def assigns(host, timeout \\ 2_000) when is_pid(host) do
+    ref = Process.monitor(host)
+    send(host, {__MODULE__, :assigns, self(), ref})
+
+    receive do
+      {^ref, reply} ->
+        Process.demonitor(ref, [:flush])
+        {:ok, reply}
+
+      {:DOWN, ^ref, :process, ^host, _reason} ->
+        {:error, :not_running}
+    after
+      timeout ->
+        Process.demonitor(ref, [:flush])
+        {:error, :not_running}
+    end
+  end
+
   defp loop(s) do
     remember(s)
 
@@ -129,6 +153,12 @@ defmodule Operator.Core.Front.Host do
 
       {__MODULE__, :env, env} ->
         s |> Map.put(:env, env) |> loop()
+
+      # Read only: no screen code runs and nothing repaints.
+      {__MODULE__, :assigns, from, ref} when is_pid(from) and is_reference(ref) ->
+        [top | _] = s.stack
+        send(from, {ref, {top.module, top.socket.assigns}})
+        loop(s)
 
       # A native view's component changed: its props go out with the next view.
       {:component_changed, _id, _module} ->

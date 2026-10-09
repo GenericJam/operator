@@ -274,23 +274,39 @@ end
 defmodule Operator.Core.Library do
   @moduledoc """
   The component library's catalogue, for the system prompt: one line per
-  widget page of the seed (`showcase/components/*.ex`, the Mishka widgets,
-  and `showcase/phone/*.ex`, the phone capability widgets), so the agent
-  knows what exists and where before it writes a screen.
+  widget page of the library (`showcase/components/*.ex`, the Mishka
+  widgets, and `showcase/phone/*.ex`, the phone capability widgets), so
+  the agent knows what exists and where before it writes a screen.
 
-  It is built at compile time from `Operator.Core.Dyn.Seed.sources/0`, by
-  parsing each page (never running it), so it can't drift from the library.
-  A page gives its `entry/0` map, its Mishka alias (the tag), the names of
-  its `props/0` and the opening tag of its first example: the usage line.
-  A page without examples or props still gets its line.
+  It is built by parsing each page's source (never running it), so it
+  can't drift from the library. A page gives its `entry/0` map, its
+  Mishka alias (the tag), the names of its `props/0` and the opening tag
+  of its first example: the usage line. A page without examples or props
+  still gets its line.
+
+  The library is Dyn code the agent changes (a new phone widget, say), so
+  `catalogue/1` parses the current generation's sources
+  (`Operator.Core.Dyn.sources/2`), once per generation: the prompt is
+  rebuilt on every model call, and the text is kept (in
+  `:persistent_term`) until another generation runs. With no generation
+  or no library pages in it, it is the seed's catalogue
+  (`Operator.Core.Dyn.Seed.sources/0`), built at compile time; so it is
+  when reading them fails, which is logged and tried again on the next
+  call rather than kept.
 
   The whole section stays within 6 KB, as it goes into every request:
   each line lists a few more props and cuts its usage at an attribute, and
   the more pages there are, the fewer props and the shorter the usage.
   """
 
+  alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.Registry
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Library.Pages
+
+  require Logger
+
+  @cache_key {__MODULE__, :catalogue}
 
   @typedoc "One library page."
   @type entry :: %{
@@ -320,9 +336,42 @@ defmodule Operator.Core.Library do
   @spec entries() :: [entry()]
   def entries, do: @entries
 
-  @doc "The system prompt section listing the seed's library."
-  @spec catalogue() :: String.t()
-  def catalogue, do: @catalogue
+  @doc "The seed's catalogue section (built at compile time)."
+  @spec seed_catalogue() :: String.t()
+  def seed_catalogue, do: @catalogue
+
+  @doc """
+  The system prompt section listing the library of the generation that
+  runs (the Keeper `keeper`'s), or the seed's (see the moduledoc).
+  """
+  @spec catalogue(atom()) :: String.t()
+  def catalogue(keeper \\ Dyn.Keeper) do
+    with {:ok, %{dir: dir}} <- Registry.config(keeper),
+         n when n > 0 <- Registry.generation(keeper) do
+      case :persistent_term.get(@cache_key, nil) do
+        {{^dir, ^n}, text} -> text
+        _ -> generation_catalogue({dir, n}, keeper)
+      end
+    else
+      _ -> @catalogue
+    end
+  end
+
+  defp generation_catalogue({_dir, n} = key, keeper) do
+    text =
+      case parse(Dyn.sources(n, keeper)) do
+        [] -> @catalogue
+        entries -> Pages.render(entries)
+      end
+
+    # One entry, the running generation's: replaced once per generation.
+    :persistent_term.put(@cache_key, {key, text})
+    text
+  rescue
+    e ->
+      Logger.warning("[library] generation #{n}'s catalogue: #{Exception.message(e)}")
+      @catalogue
+  end
 
   @doc "The longest usage line a catalogue line carries."
   @spec usage_cap() :: pos_integer()

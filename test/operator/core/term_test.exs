@@ -308,7 +308,19 @@ defmodule Operator.Core.TermTest do
 
       assert Term.stamp(entry, ms) == time
       assert Term.stamp(entry, ms + 3 * 86_400_000) =~ ~r/^[A-Z][a-z]{2} \d{1,2} #{time}$/
-      assert [^time, "› hi"] = Term.rows_text(Term.stamped_rows(entry, "m1", nil))
+
+      # stamped_rows/3 stamps against the real clock: an entry from now has
+      # no date in front of its time.
+      now = System.os_time(:millisecond)
+
+      today = %{
+        entry
+        | "timestamp" => now |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
+      }
+
+      now_time = Term.stamp(today, now)
+      assert [^now_time, "› hi"] = Term.rows_text(Term.stamped_rows(today, "m1", nil))
+      assert now_time =~ ~r/^\d{2}:\d{2}:\d{2}$/
     end
 
     test "no stamp without a time, or for an entry that renders nothing" do

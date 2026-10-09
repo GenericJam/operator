@@ -5,7 +5,9 @@ defmodule Operator.Core.Tool do
   which is how step 2's Dyn generations will add tools.
 
   `run/2` gets the decoded JSON arguments (string keys) and a context map
-  (`:session_id`, `:call_id`, `:data_dir`). It returns `{:ok, output}` or
+  (`:session_id`, `:call_id`, `:data_dir`; from a loop also `:loop`, its
+  pid, and `:withheld`, the tool names that loop doesn't offer, so read it
+  with `Map.get(ctx, :withheld, [])`). It returns `{:ok, output}` or
   `{:error, reason}`; non-binary values are JSON-encoded (or inspected) for
   the model. A raise, exit or timeout becomes an error result; it never
   takes the loop down.

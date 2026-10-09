@@ -26,6 +26,7 @@ defmodule Operator.Core do
   alias Operator.Core.DynTheme
   alias Operator.Core.Front
   alias Operator.Core.Library
+  alias Operator.Core.SelfKnowledge
 
   @default_model "anthropic:claude-haiku-4-5"
 
@@ -41,6 +42,8 @@ defmodule Operator.Core do
       DynTheme,
       Operator.Core.Front,
       Operator.Core.ToolRegistry,
+      # The `eval` tool's per-session bindings.
+      Operator.Core.EvalKernel,
       Operator.Core.Usage,
       {Task.Supervisor, name: Operator.Core.TaskSup},
       {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
@@ -105,6 +108,21 @@ defmodule Operator.Core do
     the air on the home network. The Dyn layer is yours: screens, tools, the theme. A Dyn \
     change compiles here (20-40 s), takes the user's screen-lock approval and runs on \
     probation, reverting itself if it crashes.
+    - Look before you build: `eval` runs Elixir on this phone's BEAM, with bindings that \
+    stick for the session (`reset: true` clears them). Use it to call a plugin or mob API and \
+    see what it really returns before you write a screen on it, to inspect a misbehaving \
+    screen's process and state (`Process.info`, `:sys.get_state`), ETS and \
+    `Application.get_env`, and to drive your other tools from code \
+    (`tool.("notes", %{"action" => "read"})`). It has full power over the app: don't kill or \
+    crash processes you didn't start. `logs` is the phone's recent Logger output: read it \
+    right after a crash, a screen or tool that fails silently, or a plugin error, filtered by \
+    `level` and `grep`, before guessing at the cause.
+    - Subagents: `task` runs up to 4 helpers at once, each a fresh session on your model \
+    and tools (not `task`), and returns each one's final answer. Use it for independent \
+    research or inspection in parallel: reading several guides or docs, probing different \
+    plugin APIs, reviewing a proposal. A helper sees only the `context` and `prompt` you give \
+    it, so make them complete. They share the phone and your Dyn staging copy: never give two \
+    of them edits to the same file. Each one costs tokens like its own session.
     - The app has a front (the screens you build with the user) and a back (this terminal); \
     the logo in the front's upper left corner goes to the terminal, `[frontend]` in the \
     terminal's top bar goes to the front. The terminal's `[menu]` is where the user signs \
@@ -125,6 +143,17 @@ defmodule Operator.Core do
     module or a note in your Dyn layer), do, and `resolve` the entry. Look at `friction` \
     `list` before a bigger build: the open entries are known traps. The user's Mac reads \
     the log to fix what only it can.
+    - Teaching yourself: `friction` is for what only the user's Mac can fix; what you can \
+    fix yourself, write down so your next session knows it. `instructions` edits your own \
+    AGENTS.md, which is shown below in every prompt: durable lessons, the user's conventions, \
+    the fix for a trap you keep hitting. Keep it short and current, and replace stale text \
+    instead of appending. `skill` saves a procedure you worked out (how to build and test a \
+    kind of screen or tool, how to get around a trap) with a one-line description. Your \
+    skills are listed below; when a task matches one, `skill` read it first. For any job of \
+    three or more steps, set a `todo` list first and tick items off as you go; don't stop \
+    with items open unless you're blocked or need the user.
+    - You can add rows to the user's `[menu]`: `Operator.Dyn.Menu.items/0` in the Dyn \
+    layer, one row per front screen (see the Dyn guide below).
     - Other phones: `cluster` reaches the Operators this phone is paired with on the local \
     network (the user pairs them in [menu] › cluster). Ask their agent something and get its \
     answer, run one of their tools on that phone (its location, sensors, a notification \
@@ -162,7 +191,20 @@ defmodule Operator.Core do
       Docs.agent_guide() <>
       "\n" <>
       Front.agent_guide() <>
-      "\n" <> Library.catalogue() <> "\n" <> Docs.guide_index()
+      "\n" <>
+      Library.catalogue() <>
+      "\n" <>
+      Docs.guide_index() <>
+      self_knowledge()
+  end
+
+  # The agent's own AGENTS.md and skills (written with `instructions` and
+  # `skill`), read on every model call so an edit counts from the next one.
+  defp self_knowledge do
+    case SelfKnowledge.prompt_section(Operator.Paths.data_dir()) do
+      "" -> ""
+      section -> "\n\n" <> section
+    end
   end
 end
 

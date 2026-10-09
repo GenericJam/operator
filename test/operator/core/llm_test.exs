@@ -54,7 +54,9 @@ defmodule Operator.Core.LLMTest do
       assert opts[:provider_options] == [
                auth_mode: :oauth,
                access_token: "at-1",
-               with_claude_subscription: true
+               with_claude_subscription: true,
+               anthropic_prompt_cache: true,
+               anthropic_cache_messages: -1
              ]
     end
 
@@ -96,6 +98,107 @@ defmodule Operator.Core.LLMTest do
                Adapter.options(request("openai:gpt-5"), signed_in(:anthropic, "x"))
 
       assert message =~ "can't call openai:gpt-5"
+    end
+
+    # The request req_llm would send, built offline from our options.
+    defp body(model, provider, account \\ nil) do
+      tool =
+        ReqLLM.Tool.new!(
+          name: "echo",
+          description: "e",
+          parameter_schema: [x: [type: :string]],
+          callback: fn _ -> {:ok, ""} end
+        )
+
+      req = request(model, %{tools: [tool], session_id: "s-1"})
+      {:ok, opts} = Adapter.options(req, signed_in(provider, "tok", account))
+      context = ReqLLM.Context.new([ReqLLM.Context.system("SYS"), ReqLLM.Context.user("hi")])
+      {:ok, model} = ReqLLM.model(model)
+      {:ok, mod} = ReqLLM.provider(model.provider)
+      {:ok, finch} = mod.attach_stream(model, context, opts, nil)
+      Jason.decode!(finch.body)
+    end
+
+    test "anthropic requests carry cache breakpoints on tools, system and the last message; codex's don't" do
+      body = body("anthropic:claude-haiku-4-5", :anthropic)
+      cache = %{"type" => "ephemeral"}
+      assert [%{"cache_control" => ^cache}] = body["tools"]
+      assert %{"text" => "SYS", "cache_control" => ^cache} = List.last(body["system"])
+      assert [%{"content" => [%{"text" => "hi", "cache_control" => ^cache}]}] = body["messages"]
+
+      codex = body("openai_codex:gpt-5", :openai_codex, "acct")
+      refute Jason.encode!(codex) =~ "cache_control"
+      assert codex["prompt_cache_key"] == "s-1"
+    end
+  end
+
+  describe "rate limits" do
+    @now 1_800_000_000
+    @model "anthropic:claude-haiku-4-5"
+    @throttle {:http, 429, "This request would exceed your account's rate limit."}
+
+    test "a throttle carries its retry-after, in seconds, ms or as a date" do
+      assert {:rate_limited, %{retry_after_ms: 7_000, resets_at: nil, provider: :anthropic}} =
+               Adapter.limit(@throttle, @model, [{"retry-after", "7"}], nil, %{}, @now)
+
+      assert {:rate_limited, %{retry_after_ms: 1_500}} =
+               Adapter.limit(@throttle, @model, %{"retry-after-ms" => ["1500"]}, nil, %{}, @now)
+
+      date =
+        @now
+        |> Kernel.+(30)
+        |> DateTime.from_unix!()
+        |> Calendar.strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+      assert {:rate_limited, %{retry_after_ms: 30_000}} =
+               Adapter.limit(@throttle, @model, [{"Retry-After", date}], nil, %{}, @now)
+
+      assert LLM.describe(Adapter.limit(@throttle, @model, [], nil, %{}, @now)) =~
+               "429 (rate limited)"
+    end
+
+    test "a used-up window: from the response's headers, a Codex body, else what Usage recorded" do
+      at = @now + 4 * 3600
+
+      headers = [
+        {"anthropic-ratelimit-unified-5h-utilization", "1.0"},
+        {"anthropic-ratelimit-unified-5h-reset", "#{at}"},
+        {"anthropic-ratelimit-unified-7d-utilization", "0.4"}
+      ]
+
+      assert {:rate_limited, %{resets_at: ^at, window: "5 hours"}} =
+               Adapter.limit(@throttle, @model, headers, nil, %{}, @now)
+
+      codex = {:http, 429, "The usage limit has been reached"}
+      body = %{"error" => %{"type" => "usage_limit_reached", "resets_at" => at}}
+
+      assert {:rate_limited, %{resets_at: ^at, provider: :openai_codex}} =
+               Adapter.limit(codex, "openai_codex:gpt-5", [], body, %{}, @now)
+
+      # Anthropic's 5-hour window at 100 % answers like a throttle: the
+      # windows the earlier calls recorded tell.
+      state = %{
+        "limits" => %{
+          "anthropic" => %{
+            "windows" => %{"5h" => %{"label" => "5 hours", "used" => 100.0, "resets_at" => at}}
+          }
+        }
+      }
+
+      assert {:rate_limited, %{resets_at: ^at, window: "5 hours"}} =
+               Adapter.limit(@throttle, @model, [], nil, state, @now)
+
+      # A recent short 429 is a throttle, not a used-up window.
+      short = %{"rate_limited" => %{"anthropic" => %{"resets_at" => @now + 7}}}
+
+      assert {:rate_limited, %{resets_at: nil}} =
+               Adapter.limit(@throttle, @model, [], nil, short, @now)
+
+      # Overloaded is never a used-up window; other errors pass through.
+      assert {:rate_limited, %{status: 529, resets_at: nil}} =
+               Adapter.limit({:http, 529, "Overloaded"}, @model, [], nil, state, @now)
+
+      assert Adapter.limit({:http, 500, "x"}, @model, [], nil, state, @now) == {:http, 500, "x"}
     end
   end
 end

@@ -587,6 +587,18 @@ defmodule Operator.Core.Dyn do
     it is on probation: 3 crashes within 60 s, or an app launch that dies, revert it to the \
     previous generation automatically. `dyn_status` shows what runs, the pending proposal and \
     recent crash reports: read them, fix the sources, propose again.
+
+    A menu row for a screen: [menu] lists, under `yours`, the rows `Operator.Dyn.Menu.items/0` \
+    returns (at most 20), each `%{label: ..., detail: ..., screen: ...}` (strings; `screen` is a \
+    front screen's name below `Operator.Dyn.`); tapping one opens that screen in the front. \
+    The menu reads it again when a generation activates. A raise, a bad row or a screen that \
+    doesn't exist shows there (and in the log) without breaking the menu:
+
+        defmodule Operator.Dyn.Menu do
+          def items do
+            [%{label: "text scanner", detail: "read text with the camera", screen: "Scanner"}]
+          end
+        end
     """
   end
 

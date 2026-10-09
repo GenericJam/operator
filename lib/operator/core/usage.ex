@@ -92,6 +92,26 @@ defmodule Operator.Core.Usage do
   @spec rate_limited(map(), atom()) :: map() | nil
   def rate_limited(state, provider), do: get_in(state, ["rate_limited", to_string(provider)])
 
+  @doc """
+  Is `provider`'s subscription used up at `now`: a window at 100 % that
+  resets later (the latest such reset), else a 429 recorded with a reset
+  still ahead? `%{window: label | nil, resets_at: unix s}` or nil.
+  """
+  @spec exhausted(map(), atom(), integer()) ::
+          %{window: String.t() | nil, resets_at: integer()} | nil
+  def exhausted(state, provider, now \\ now()) do
+    full =
+      for {_id, %{"used" => used, "resets_at" => at} = w} <- windows(state, provider),
+          is_number(used) and used >= 100 and is_integer(at) and at > now,
+          do: %{window: w["label"], resets_at: at}
+
+    case {full, rate_limited(state, provider)} do
+      {[_ | _], _} -> Enum.max_by(full, & &1.resets_at)
+      {[], %{"resets_at" => at}} when is_integer(at) and at > now -> %{window: nil, resets_at: at}
+      _ -> nil
+    end
+  end
+
   @doc "Counters per model for `date` (`:total` for all time)."
   @spec by_model(map(), Date.t() | :total) :: %{String.t() => map()}
   def by_model(state, :total), do: state["total"] || %{}

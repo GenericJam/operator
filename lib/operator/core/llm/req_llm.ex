@@ -5,7 +5,12 @@ defmodule Operator.Core.LLM.ReqLLM do
   from `Operator.Auth` (fetched, and refreshed when due, per call):
 
     * `anthropic:` → `auth_mode: :oauth`, `access_token`,
-      `with_claude_subscription: true` (Claude Code's betas and identity)
+      `with_claude_subscription: true` (Claude Code's betas and identity),
+      and prompt caching (`anthropic_prompt_cache: true`,
+      `anthropic_cache_messages: -1`): req_llm puts a `cache_control`
+      breakpoint on the last tool, the system prompt and the last message,
+      so each call reads the previous one's prefix from the cache instead
+      of paying (and spending rate limit on) the whole prompt again
     * `openai_codex:` → `auth_mode: :oauth`, `access_token`,
       `chatgpt_account_id`, and the session id as `session_id` (the prompt
       cache key)
@@ -17,6 +22,13 @@ defmodule Operator.Core.LLM.ReqLLM do
   Every call that reached the provider is recorded with
   `Operator.Core.Usage.record/3`: its tokens and cost, the subscription
   windows its response headers report, and a 429's reset.
+
+  A 429 (or a 529 overloaded) comes back as `{:rate_limited, limit}`
+  (`t:Operator.Core.LLM.limit/0`, `limit/6`): its `retry-after`, and when
+  a usage window is used up, which one and until when: from the response's
+  headers, a Codex usage-limit body, else the windows
+  `Operator.Core.Usage` recorded from earlier calls (an Anthropic 5-hour
+  window at 100 % answers with the same message as a short throttle).
   """
   @behaviour Operator.Core.LLM
 
@@ -68,8 +80,131 @@ defmodule Operator.Core.LLM.ReqLLM do
     message = with {:http, _status, message} <- error, do: message
     message = if is_binary(message), do: message, else: nil
     record(model, %{status: status, headers: headers, body: body, error: message || "failed"})
-    {:error, error}
+    # Read before this call's record lands: the earlier calls' windows.
+    state =
+      if match?({:http, 429, _}, error), do: Usage.load(Operator.Paths.data_dir()), else: %{}
+
+    {:error, limit(error, model, headers, body, state, System.os_time(:second))}
   end
+
+  @doc false
+  # A 429 / 529 as `{:rate_limited, limit}` (see the moduledoc); `state` is
+  # Operator.Core.Usage's, `now` unix seconds. Other errors are returned as
+  # they are.
+  @spec limit(Operator.Core.LLM.error(), String.t(), term(), term(), map(), integer()) ::
+          Operator.Core.LLM.error()
+  def limit({:http, status, message}, model, headers, body, state, now)
+      when status in [429, 529] do
+    h = header_map(headers)
+
+    provider =
+      case Auth.provider_for_model(model) do
+        {:ok, provider} -> provider
+        :error -> nil
+      end
+
+    used_up = if status == 429 and provider, do: used_up(provider, h, body, state, now)
+
+    {:rate_limited,
+     %{
+       status: status,
+       message: message,
+       provider: provider,
+       retry_after_ms: retry_after_ms(h, now),
+       resets_at: used_up && used_up.resets_at,
+       window: used_up && used_up.window
+     }}
+  end
+
+  def limit(error, _model, _headers, _body, _state, _now), do: error
+
+  # A window this response reports at 100 %, else a Codex usage-limit body,
+  # else a window the earlier calls left at 100 % (or a recorded 429 more
+  # than a minute from lifting: a shorter one is a throttle).
+  defp used_up(provider, h, body, state, now) do
+    full =
+      for {_id, %{"used" => used, "resets_at" => at} = w} <- Usage.from_headers(provider, h),
+          used >= 100 and is_integer(at) and at > now,
+          do: %{window: w["label"], resets_at: at}
+
+    cond do
+      full != [] ->
+        Enum.max_by(full, & &1.resets_at)
+
+      at = codex_reset(body, now) ->
+        %{window: nil, resets_at: at}
+
+      true ->
+        case Usage.exhausted(state, provider, now) do
+          %{window: nil, resets_at: at} when at <= now + 60 -> nil
+          other -> other
+        end
+    end
+  end
+
+  defp codex_reset(%{"error" => %{} = error}, now), do: codex_reset(error, now)
+
+  defp codex_reset(%{} = error, now) do
+    cond do
+      is_integer(error["resets_at"]) and error["resets_at"] > now -> error["resets_at"]
+      is_integer(error["resets_in_seconds"]) -> now + error["resets_in_seconds"]
+      true -> nil
+    end
+  end
+
+  defp codex_reset(_body, _now), do: nil
+
+  # `retry-after-ms`, else `retry-after` in seconds or as an HTTP date.
+  defp retry_after_ms(h, now) do
+    case number(h["retry-after-ms"]) || retry_after(h["retry-after"], now) do
+      nil -> nil
+      ms -> max(round(ms), 0)
+    end
+  end
+
+  defp retry_after(nil, _now), do: nil
+
+  defp retry_after(value, now) do
+    case number(value) do
+      nil -> http_date_ms(value, now)
+      seconds -> seconds * 1000
+    end
+  end
+
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  # "Fri, 09 Oct 2026 06:26:09 GMT"
+  defp http_date_ms(text, now) do
+    with [_, d, mon, y, hh, mm, ss] <-
+           Regex.run(~r/(\d{1,2}) (\w{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2})/, text),
+         month when month != nil <- Enum.find_index(@months, &(&1 == mon)),
+         [d, y, hh, mm, ss] = Enum.map([d, y, hh, mm, ss], &String.to_integer/1),
+         {:ok, at} <- NaiveDateTime.new(y, month + 1, d, hh, mm, ss) do
+      (at |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_unix()) * 1000 - now * 1000
+    else
+      _ -> nil
+    end
+  end
+
+  defp number(value) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp number(_value), do: nil
+
+  defp header_map(%{} = headers), do: header_map(Map.to_list(headers))
+
+  defp header_map(headers) when is_list(headers) do
+    Map.new(headers, fn
+      {k, [v | _]} -> {String.downcase(to_string(k)), to_string(v)}
+      {k, v} -> {String.downcase(to_string(k)), to_string(v)}
+    end)
+  end
+
+  defp header_map(_headers), do: %{}
 
   # The metadata the stream's handle sent; `%{}` if it stopped without.
   defp metadata(request_id) do
@@ -153,8 +288,15 @@ defmodule Operator.Core.LLM.ReqLLM do
     end
   end
 
-  defp provider_options(:anthropic, auth, _request),
-    do: [auth_mode: :oauth, access_token: auth.token, with_claude_subscription: true]
+  defp provider_options(:anthropic, auth, _request) do
+    [
+      auth_mode: :oauth,
+      access_token: auth.token,
+      with_claude_subscription: true,
+      anthropic_prompt_cache: true,
+      anthropic_cache_messages: -1
+    ]
+  end
 
   defp provider_options(:openai_codex, auth, request) do
     [

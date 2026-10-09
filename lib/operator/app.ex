@@ -15,6 +15,14 @@ defmodule Operator.App do
 
   @impl Mob.App
   def on_start do
+    # The in-memory copy of the Logger output the agent reads (the `logs`
+    # tool), first so boot's own errors are in it.
+    {:ok, _} =
+      Supervisor.start_link([Operator.Core.LogRing],
+        strategy: :one_for_one,
+        name: Operator.Core.LogRing.Supervisor
+      )
+
     # Dist first, so a boot step that fails can still be inspected over rpc.
     # Operator.Cluster starts it in the saved mode, after Mob.Dist's delay:
     # the cluster (TLS on the Wi-Fi address) when it is on, otherwise the

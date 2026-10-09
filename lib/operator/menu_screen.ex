@@ -17,7 +17,8 @@ defmodule Operator.MenuScreen do
       (`Operator.Core.Front.open/3` with `push: true`). Approvals: ask each
       time, or approve all (`Operator.Core.Dyn.AutoApprove`): turning it on
       takes the screen-lock prompt (`Operator.Core.ApproveButton`), off is
-      one tap.
+      one tap. Under `yours`, the rows the agent added for its own front
+      screens (a plugin's screen, say): see "Rows the agent adds" below.
     * `:accounts`: per provider, sign in in the browser (`Operator.Auth.Login`,
       with a field for the `code#state` Anthropic's page shows when it doesn't
       redirect back) or sign out (`Operator.Auth.delete/1`, after a confirm),
@@ -33,6 +34,17 @@ defmodule Operator.MenuScreen do
   the loop), `:page` (default `:main`), `:sessions_dir` (default
   `Operator.Core.Session.dir/0`). The accounts page takes over a sign-in
   still in progress (`Operator.Auth.Login.pending/0`).
+
+  **Rows the agent adds.** The agent writes `Operator.Dyn.Menu` (Dyn
+  code, see `Operator.Core.Dyn.agent_guide/0`) with `items/0` returning
+  `[%{label: "...", detail: "...", screen: "Name.Of.FrontScreen"}]`; each
+  row opens its front screen like `components` opens the library. It is
+  read at mount and again whenever another generation runs (the main page
+  subscribes to `Operator.Core.Dyn`), in a process of its own with a time
+  and heap limit, so a raise, a hang, a bad return or a missing module
+  costs the section, never the menu: the valid rows show (at most
+  20), what was wrong shows (and is logged) below them, and a row whose
+  screen isn't in this generation is dimmed and says so when tapped.
   """
   use Mob.Screen
 
@@ -40,6 +52,7 @@ defmodule Operator.MenuScreen do
   alias Operator.Auth.Login
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
+  alias Operator.Core.Dyn
   alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Front
@@ -50,13 +63,25 @@ defmodule Operator.MenuScreen do
   alias Operator.TermUI, as: UI
   alias Operator.Toggle
 
+  require Logger
+
   @pages [:main, :accounts, :model, :sessions]
   @max_sessions 50
   @library "Showcase.GalleryScreen"
+  # The agent's rows (Operator.Dyn.Menu.items/0): at most this many, read
+  # within this time and heap (in words), with labels cut to these lengths.
+  @max_yours 20
+  @yours_timeout_ms 1_000
+  @yours_heap_words 2_000_000
+  @label_max 48
+  @detail_max 60
+  # Dyn events after which another generation (or none) runs.
+  @generation_events [:activated, :reverted, :loaded, :safe_mode, :load_failed]
 
   def mount(params, _session, socket) do
     page = Map.get(params, :page, :main)
     if page in [:main, :accounts] and Process.whereis(Auth), do: :ok = Auth.subscribe()
+    if page == :main, do: subscribe_dyn()
     dir = Map.get_lazy(params, :sessions_dir, &Session.dir/0)
 
     {:ok,
@@ -74,7 +99,8 @@ defmodule Operator.MenuScreen do
        code: "",
        confirm: nil,
        model_draft: "",
-       auto_approve: page == :main and AutoApprove.on?()
+       auto_approve: page == :main and AutoApprove.on?(),
+       yours: if(page == :main, do: yours(), else: {[], nil})
      )}
   end
 
@@ -142,6 +168,19 @@ defmodule Operator.MenuScreen do
       {:error, _} -> {:noreply, note(socket, library_missing())}
     end
   end
+
+  # A row the agent added (Operator.Dyn.Menu): its front screen, the same way.
+  def handle_info({:tap, {:yours, screen}}, socket) do
+    case open_front(screen) do
+      {:ok, _} -> {:noreply, Toggle.to_front(socket)}
+      {:error, reason} -> {:noreply, note(socket, "Couldn't open #{screen}: #{why(reason)}.")}
+    end
+  end
+
+  # Another generation runs: its menu module may add, change or drop rows.
+  def handle_info({:operator_dyn, %{type: type}}, %{assigns: %{page: :main}} = socket)
+      when type in @generation_events,
+      do: {:noreply, Mob.Socket.assign(socket, :yours, yours())}
 
   # ── approvals (Operator.Core.Dyn.AutoApprove) ──
 
@@ -307,6 +346,127 @@ defmodule Operator.MenuScreen do
           "can go back to the default front's generation, or ask the agent to restore it."
   end
 
+  defp open_front(screen) do
+    Front.open(screen, push: true)
+  catch
+    :exit, _ -> {:error, :no_front}
+  end
+
+  defp why(:unknown_screen), do: "no front screen has that name in this generation"
+  defp why({:ambiguous, names}), do: "it could be #{Enum.join(names, " or ")}"
+  defp why(:no_front), do: "the front isn't running"
+  defp why(other), do: inspect(other)
+
+  defp subscribe_dyn do
+    Dyn.subscribe()
+  catch
+    # The Keeper busy or restarting: the rows still come from this mount.
+    :exit, _ -> :ok
+  end
+
+  # ── the agent's rows (Operator.Dyn.Menu) ──
+
+  # `{rows, problem}`: the valid rows of the current generation's
+  # `Operator.Dyn.Menu.items/0`, each marked with whether its screen is in
+  # that generation, and what was wrong with the rest (or nil).
+  defp yours do
+    case Dyn.lookup({:module, "Menu"}) do
+      {:ok, mod} ->
+        {rows, problem} = read_items(mod)
+        if problem, do: Logger.warning("[menu] Operator.Dyn.Menu: #{problem}")
+        screens = Enum.map(Dyn.screens(), &elem(&1, 0))
+        {Enum.map(rows, &Map.put(&1, :found, screen?(&1.screen, screens))), problem}
+
+      :error ->
+        {[], nil}
+    end
+  end
+
+  # The agent's code runs in a process of its own, with a time and heap
+  # limit, and checks its own result there: only the checked rows (small
+  # strings) come back to the menu's process.
+  defp read_items(mod) do
+    parent = self()
+    tag = make_ref()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        Process.flag(:max_heap_size, %{size: @yours_heap_words, kill: true, error_logger: false})
+        send(parent, {tag, checked_items(mod)})
+      end)
+
+    receive do
+      {^tag, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {[], "items/0 died (#{short(inspect(reason))})"}
+    after
+      @yours_timeout_ms ->
+        Process.exit(pid, :kill)
+        Process.demonitor(ref, [:flush])
+        {[], "items/0 took over #{@yours_timeout_ms} ms"}
+    end
+  end
+
+  defp checked_items(mod) do
+    case mod.items() do
+      items when is_list(items) -> check_items(items)
+      other -> {[], "items/0 returned #{short(inspect(other))}, not a list"}
+    end
+  rescue
+    e -> {[], "items/0 raised: #{short(Exception.message(e))}"}
+  catch
+    kind, reason -> {[], "items/0 failed: #{short(inspect({kind, reason}))}"}
+  end
+
+  defp check_items(items) do
+    {rows, bad} =
+      items
+      |> Enum.take(@max_yours)
+      |> Enum.map(&check_item/1)
+      |> Enum.split_with(&is_map/1)
+
+    over = length(items) - @max_yours
+
+    problems =
+      [
+        bad != [] &&
+          "#{length(bad)} skipped: a row is %{label: string, screen: string, detail: string}",
+        over > 0 && "#{over} more not shown (at most #{@max_yours})"
+      ]
+      |> Enum.filter(&is_binary/1)
+
+    {rows, if(problems == [], do: nil, else: Enum.join(problems, "; "))}
+  end
+
+  defp check_item(%{label: label, screen: screen} = item) do
+    detail = Map.get(item, :detail, "")
+
+    if Enum.all?([label, screen, detail], &(is_binary(&1) and String.valid?(&1))) and
+         String.trim(label) != "" and String.trim(screen) != "" do
+      %{
+        label: String.slice(label, 0, @label_max),
+        detail: String.slice(detail, 0, @detail_max),
+        screen: String.trim(screen)
+      }
+    else
+      :bad
+    end
+  end
+
+  defp check_item(_item), do: :bad
+
+  # As `Operator.Core.Front.open/3` resolves it: the full name below
+  # Operator.Dyn., or its last part(s).
+  defp screen?(screen, screens) do
+    name = String.replace_prefix(screen, "Operator.Dyn.", "")
+    Enum.any?(screens, &(&1 == name or String.ends_with?(&1, "." <> name)))
+  end
+
+  defp short(text), do: String.slice(text, 0, 120)
+
   defp paste_error(:no_login_started),
     do: "Tap sign in first, then paste the code its page shows."
 
@@ -347,7 +507,10 @@ defmodule Operator.MenuScreen do
           UI.heading("usage and devices", t),
           UI.item("usage", "5h / weekly, tokens", :usage, t),
           UI.item("cluster", "pair Operators over local TLS", :cluster, t),
-          UI.item("components", "the component library, in the front", :components, t),
+          UI.item("components", "the component library, in the front", :components, t)
+        ] ++
+        yours_rows(a.yours, t) ++
+        [
           UI.heading("diagnostics", t),
           UI.item("diagnostics", "updates, spend, dyn", :diagnostics, t)
         ] ++ approval_rows(a, t)
@@ -423,6 +586,23 @@ defmodule Operator.MenuScreen do
         items ++ empty
 
     {"menu › sessions", rows}
+  end
+
+  defp yours_rows({[], nil}, _t), do: []
+
+  defp yours_rows({rows, problem}, t) do
+    items =
+      for r <- rows do
+        detail = if r.found, do: r.detail, else: "no screen #{r.screen}"
+        UI.item(r.label, detail, {:yours, r.screen}, t, color: if(r.found, do: "fg", else: "dim"))
+      end
+
+    problem =
+      if problem,
+        do: [UI.line("Operator.Dyn.Menu: " <> problem, t, "error", text_size: t.text_size - 1)],
+        else: []
+
+    [UI.heading("yours", t) | items] ++ problem
   end
 
   defp approval_rows(%{auto_approve: true}, t) do

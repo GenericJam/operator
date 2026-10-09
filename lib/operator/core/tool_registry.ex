@@ -17,6 +17,15 @@ defmodule Operator.Core.ToolRegistry do
   @core_tools [
     Operator.Core.Tools.Notes,
     Operator.Core.Tools.Friction,
+    # Teaching itself: its own AGENTS.md, skills, and a todo list per session.
+    Operator.Core.Tools.Instructions,
+    Operator.Core.Tools.Skill,
+    Operator.Core.Tools.Todo,
+    # Looking at itself: Elixir on this BEAM, and the recent Logger output.
+    Operator.Core.Tools.Eval,
+    Operator.Core.Tools.Logs,
+    # Helpers: fresh sessions that work in parallel and return their answers.
+    Operator.Core.Tools.Subagent,
     Operator.Core.Tools.ReadArtifact,
     Operator.Core.Tools.HttpGet,
     Operator.Core.Tools.Clipboard,
@@ -51,6 +60,9 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.FrontOpen,
     Operator.Core.Tools.FrontScreenshot,
     Operator.Core.Tools.FrontTap,
+    Operator.Core.Tools.FrontSend,
+    Operator.Core.Tools.FrontState,
+    Operator.Core.Tools.FrontScroll,
     # The docs bundled with the app: mob's guides, the plugins, module docs.
     Operator.Core.Tools.ReadGuide,
     Operator.Core.Tools.ReadDoc

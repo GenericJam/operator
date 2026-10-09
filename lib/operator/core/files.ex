@@ -47,6 +47,8 @@ defmodule Operator.Core.Files do
 
   @shared "/storage/emulated/0"
   @capability_grants {__MODULE__, :capability_grants}
+  # Copies front_send staged in the temporary files (stage_capability/2).
+  @staged_kept 20
 
   @doc false
   @spec roots(map()) :: [root()]
@@ -137,11 +139,19 @@ defmodule Operator.Core.Files do
   # ── For Dyn code: File's calls, inside the roots. A refused path is
   # {:error, text}; the file system's own errors stay posix atoms. ──
 
-  @doc "Reads a file (`File.read/1`)."
+  @doc """
+  Reads a file (`File.read/1`), a relative path in the workspace:
+  `{:ok, bytes}`, `{:error, text}` (refused: outside the roots) or
+  `{:error, posix}` (`:enoent`, `:eisdir`).
+  """
   @spec read(String.t()) :: {:ok, binary()} | {:error, atom() | String.t()}
   def read(path), do: with_path(path, :read, &File.read/1)
 
-  @doc "Writes a file, creating its directory (`File.write/3`; `[:append]` to append)."
+  @doc """
+  Writes a file, creating its directory (`File.write/3`; `[:append]` to
+  append). Returns `:ok`, `{:error, text}` (refused: outside the roots, or
+  a read-only one) or `{:error, posix}` (e.g. `:enospc`).
+  """
   @spec write(String.t(), iodata(), [:append]) :: :ok | {:error, atom() | String.t()}
   def write(path, data, modes \\ []) do
     with_path(path, :write, fn abs ->
@@ -149,19 +159,32 @@ defmodule Operator.Core.Files do
     end)
   end
 
-  @doc "A directory's entry names (`File.ls/1`); the workspace without a path."
+  @doc """
+  A directory's entry names (`File.ls/1`), the workspace without a path:
+  `{:ok, ["inbox", "notes.txt"]}` (names only, unsorted; `Path.join/2` them
+  to the dir for a path), `{:error, text}` (refused) or `{:error, posix}`
+  (`:enoent`, `:enotdir`).
+  """
   @spec ls(String.t()) :: {:ok, [String.t()]} | {:error, atom() | String.t()}
   def ls(path \\ "."), do: with_path(path, :read, &File.ls/1)
 
-  @doc "`File.stat/1`."
+  @doc """
+  `File.stat/1`: `{:ok, %File.Stat{size: bytes, type: :regular | :directory,
+  mtime: {{y, m, d}, {h, min, s}}, ...}}`, `{:error, text}` (refused) or
+  `{:error, posix}` (`:enoent`).
+  """
   @spec stat(String.t()) :: {:ok, File.Stat.t()} | {:error, atom() | String.t()}
   def stat(path), do: with_path(path, :read, &File.stat/1)
 
-  @doc "`File.mkdir_p/1`."
+  @doc "`File.mkdir_p/1`: `:ok`, `{:error, text}` (refused) or `{:error, posix}`."
   @spec mkdir_p(String.t()) :: :ok | {:error, atom() | String.t()}
   def mkdir_p(path), do: with_path(path, :write, &File.mkdir_p/1)
 
-  @doc "Deletes a file or an empty directory (`File.rm/1`, `File.rmdir/1`); never a root."
+  @doc """
+  Deletes a file or an empty directory (`File.rm/1`, `File.rmdir/1`); never
+  a root. `:ok`, `{:error, text}` (refused) or `{:error, posix}` (`:enoent`,
+  `:eexist` for a directory that isn't empty).
+  """
   @spec rm(String.t()) :: :ok | {:error, atom() | String.t()}
   def rm(path) do
     with {:ok, abs, root} <- resolve(path, :write) do
@@ -173,17 +196,39 @@ defmodule Operator.Core.Files do
     end
   end
 
-  @doc "The absolute path `path` stands for, if it's inside a root."
+  @doc """
+  The absolute path `path` stands for (a relative one is in the workspace;
+  symlinks and `..` resolved), checked to be inside a root. Returns a tuple,
+  never a bare string, and doesn't check that the file exists:
+
+      {:ok, "/data/user/0/com.genericjam.operator/files/workspace/inbox/a.jpg"} =
+        Files.expand("inbox/a.jpg")
+      {:error, "/etc/hosts is outside the places files may be used (...)."} =
+        Files.expand("/etc/hosts")
+  """
   @spec expand(String.t()) :: {:ok, Path.t()} | {:error, String.t()}
   def expand(path) do
     with {:ok, abs, _root} <- resolve(path, :read), do: {:ok, abs}
   end
 
   @doc """
-  Copies one native capability result into the workspace's `inbox/`, as
-  `name` if given (else its own name; `name-2`, … if taken), and returns its
-  path there. The exact path must first have arrived from native code through
-  `grant_capability/1`; each grant is consumed by one call.
+  Copies one native capability result (the `path` in a `MobCamera`,
+  `MobPhotos`, `Mob.Files` or recording reply, which is in the app's
+  temporary files) into the workspace's `inbox/`, as `name` if given (else
+  its own name; `name-2`, … if taken). Returns `{:ok, kept}`, `kept` the
+  absolute path of the copy (for `read/1` and the file tools), or
+  `{:error, text}`.
+
+  The exact path must have arrived in the screen's own `handle_info/2` from
+  native code (`grant_capability/1`), and each such path can be kept once:
+  keep it when the reply arrives and use `kept` from then on.
+
+      def handle_info({:camera, :photo, %{path: path}}, socket) do
+        case Files.keep(path, "receipt.jpg") do
+          {:ok, kept} -> {:noreply, Mob.Socket.assign(socket, photo: kept)}
+          {:error, why} -> {:noreply, Mob.Socket.assign(socket, error: why)}
+        end
+      end
   """
   @spec keep(String.t(), String.t() | nil) :: {:ok, Path.t()} | {:error, String.t()}
   def keep(path, name \\ nil)
@@ -206,6 +251,90 @@ defmodule Operator.Core.Files do
   def keep(other, _name), do: {:error, "Not a path: #{inspect(other, limit: 5)}."}
 
   @doc false
+  # For the agent's `front_send`: a capability reply it writes to test a
+  # screen names files in the roots (a photo in the workspace, say). Each
+  # one is copied into the app's temporary files, as the phone's own reply
+  # would have it, and the reply returned with the copies' paths, so the
+  # grant it gets on delivery covers fresh copies only, never a temporary
+  # file the agent named. Other messages come back as they are.
+  @spec stage_capability(term(), map()) :: {:ok, term()} | {:error, String.t()}
+  def stage_capability(message, ctx \\ %{})
+
+  def stage_capability({kind, tag, items}, ctx)
+      when {kind, tag} in [{:files, :picked}, {:photos, :picked}] and is_list(items) do
+    with {:ok, items} <- stage_items(items, ctx), do: {:ok, {kind, tag, items}}
+  end
+
+  def stage_capability({kind, tag, item}, ctx)
+      when {kind, tag} in [{:camera, :photo}, {:audio, :recorded}] and is_map(item) do
+    with {:ok, [item]} <- stage_items([item], ctx), do: {:ok, {kind, tag, item}}
+  end
+
+  def stage_capability(message, _ctx), do: {:ok, message}
+
+  defp stage_items(items, ctx) do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
+      case stage_item(item, ctx) do
+        {:ok, item} -> {:cont, {:ok, [item | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, staged} -> {:ok, Enum.reverse(staged)}
+      error -> error
+    end
+  end
+
+  defp stage_item(%{path: path} = item, ctx) when is_binary(path) do
+    with {:ok, src, _root} <- resolve(path, :read, ctx),
+         true <- File.regular?(src) || {:error, "#{path} is not a file."},
+         {:ok, dir} <- staging_dir() do
+      prune(dir, @staged_kept)
+      dest = Path.join(dir, "#{System.unique_integer([:positive])}-#{Path.basename(src)}")
+
+      case File.cp(src, dest) do
+        :ok -> {:ok, %{item | path: dest}}
+        {:error, reason} -> {:error, "Couldn't stage #{path}: " <> FileTool.posix(reason, path)}
+      end
+    end
+  end
+
+  defp stage_item(item, _ctx), do: {:ok, item}
+
+  defp staging_dir do
+    case app_temp() do
+      nil ->
+        {:error, "There are no temporary files here (not on a phone)."}
+
+      temp ->
+        dir = Path.join(temp, "operator-front-send")
+
+        case File.mkdir_p(dir) do
+          :ok -> {:ok, dir}
+          {:error, reason} -> {:error, "Couldn't stage: " <> FileTool.posix(reason, dir)}
+        end
+    end
+  end
+
+  # Keeps the newest `keep - 1` staged files, making room for one more.
+  defp prune(dir, keep) do
+    with {:ok, names} <- File.ls(dir), true <- length(names) >= keep do
+      names
+      |> Enum.map(&Path.join(dir, &1))
+      |> Enum.sort_by(&mtime/1, :desc)
+      |> Enum.drop(keep - 1)
+      |> Enum.each(&File.rm/1)
+    end
+  end
+
+  defp mtime(path) do
+    case File.stat(path, time: :posix) do
+      {:ok, %{mtime: t}} -> t
+      _ -> 0
+    end
+  end
+
+  @doc false
   @spec grant_capability(term()) :: :ok
   def grant_capability(result) do
     granted =
@@ -222,7 +351,14 @@ defmodule Operator.Core.Files do
     :ok
   end
 
-  @doc "Reads and removes a temporary thumbnail of an authorized workspace/shared image."
+  @doc """
+  A JPEG thumbnail of an image inside the roots (`MobPhotos.thumbnail/2`,
+  same options: `max_size:` longest side in pixels, default 1280;
+  `quality:`; `timeout:`), read into memory and its temporary file removed.
+  Returns `{:ok, jpeg_bytes}` (the bytes, not a path), `{:error, text}`
+  (refused: outside the roots) or `MobPhotos`' errors (`{:error, :not_found}`,
+  `{:error, :unsupported}`, `{:error, :permission}`, `{:error, :timeout}`).
+  """
   @spec thumbnail(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   def thumbnail(path, opts \\ []) do
     with {:ok, source, _root} <- resolve(path, :read),
