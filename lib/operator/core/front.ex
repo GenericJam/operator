@@ -192,15 +192,17 @@ defmodule Operator.Core.Front do
     end
   end
 
-  # The front process gone (or never started) is :not_running; one too busy
-  # to answer within the call's 5 s, :busy.
+  # The front process gone (or never started) is :not_running. The call waits
+  # as long as it takes: Front answers :lock_tools at once (grant or queue),
+  # and a caller that gave up while Front still granted it would hold a lock
+  # it never knew about (a long-lived eval process would keep it for good).
+  # A Front that hangs is caught by the tool's own timeout.
   defp lock_tools(server, wait_ms) do
-    case GenServer.call(server, :lock_tools) do
+    case GenServer.call(server, :lock_tools, :infinity) do
       {:ok, token} -> {:ok, token}
       {:queued, token} -> await_tools(server, token, wait_ms)
     end
   catch
-    :exit, {:timeout, _call} -> {:error, :busy}
     :exit, _reason -> {:error, :not_running}
   end
 
