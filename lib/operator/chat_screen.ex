@@ -57,7 +57,10 @@ defmodule Operator.ChatScreen do
   A proposed self-change shows with its diff; on the phone its approve chip
   is `Operator.Core.ApproveButton` (the system prompt: fingerprint or face,
   or the screen lock's PIN, pattern, password or passcode), whose pass
-  activates it.
+  activates it. With approve all on (`Operator.Core.Dyn.AutoApprove`, set in
+  [menu]) a candidate activates as it arrives, through the same
+  confirmation and activation, with a notice and `auto` in the status line;
+  if that fails the approval bar shows with the reason.
 
   `operator://` links scanned on the Mac's QR codes (`Operator.Links`)
   come here: a handoff's parts are collected, and the last one switches to
@@ -72,6 +75,7 @@ defmodule Operator.ChatScreen do
   alias Operator.Core.ApproveButton
   alias Operator.Core.Attachments
   alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.DynTheme
   alias Operator.Core.Loop
   alias Operator.Core.Models
@@ -147,6 +151,7 @@ defmodule Operator.ChatScreen do
        mic_down_at: nil,
        notifications_asked: false,
        proposal: pending_proposal(),
+       auto_approve: AutoApprove.on?(),
        activated: nil,
        phone: %{},
        foreground: true,
@@ -544,9 +549,11 @@ defmodule Operator.ChatScreen do
   # The approval bar takes its room from the transcript once laid out, after
   # repaint's own stick: a following list sticks again then.
   def handle_info({:operator_dyn, %{type: :candidate, gen: n}}, socket) do
-    socket = socket |> Mob.Socket.assign(:proposal, proposal(n)) |> repaint()
-    if socket.assigns.following, do: Process.send_after(self(), :stick, @attach_stick_ms)
-    {:noreply, socket}
+    socket = Mob.Socket.assign(socket, :auto_approve, AutoApprove.on?())
+
+    if socket.assigns.auto_approve,
+      do: {:noreply, auto_activate(socket, n)},
+      else: {:noreply, show_proposal(socket, n)}
   end
 
   def handle_info({:operator_dyn, event}, socket) do
@@ -642,6 +649,9 @@ defmodule Operator.ChatScreen do
     do: handle_info({:open_session, path}, socket)
 
   def handle_info({:operator_menu, :renderer}, socket), do: {:noreply, rerender(socket)}
+
+  def handle_info({:operator_menu, :auto_approve}, socket),
+    do: {:noreply, Mob.Socket.assign(socket, :auto_approve, AutoApprove.on?())}
 
   def handle_info({:operator_auth, :changed}, socket),
     do: {:noreply, socket |> Mob.Socket.assign(:signed_in, signed_in?()) |> refresh()}
@@ -1353,18 +1363,61 @@ defmodule Operator.ChatScreen do
 
   defp proposal_message(_socket), do: []
 
+  defp show_proposal(socket, n) do
+    socket = socket |> Mob.Socket.assign(:proposal, proposal(n)) |> repaint()
+    if socket.assigns.following, do: Process.send_after(self(), :stick, @attach_stick_ms)
+    socket
+  end
+
+  # Approve all (`AutoApprove`): the same confirmation and activation as the
+  # approve chip's pass; a failure shows the approval bar with the reason.
+  defp auto_activate(socket, n) do
+    subject = {:activate, n}
+
+    with {:confirm, :ok} <- {:confirm, Native.impl().confirm_approval(subject)},
+         {:ok, socket} <- do_activate(socket, n) do
+      toast(
+        socket,
+        "Generation #{n} activated automatically (approve all is on; [menu] to turn off)"
+      )
+    else
+      {:confirm, {:error, reason}} -> fallback(socket, n, inspect(reason))
+      {:error, why} -> fallback(socket, n, why)
+    end
+  end
+
+  defp fallback(socket, n, why) do
+    socket
+    |> show_proposal(n)
+    |> not_activated(n, "approve all couldn't activate it: #{why}")
+  end
+
   defp activate(socket, n) do
+    case do_activate(socket, n) do
+      {:ok, socket} ->
+        toast(
+          socket,
+          "Generation #{n} is live, on probation: it reverts by itself if it keeps crashing"
+        )
+
+      {:error, why} ->
+        not_activated(socket, n, why)
+    end
+  end
+
+  defp do_activate(socket, n) do
     with {:ok, token} <- Dyn.request_approval({:activate, n}),
          {:ok, _gen} <- Dyn.activate(n, token) do
-      socket
-      |> Mob.Socket.assign(proposal: nil, activated: n)
-      |> toast("Generation #{n} is live, on probation: it reverts by itself if it keeps crashing")
+      {:ok, Mob.Socket.assign(socket, proposal: nil, activated: n)}
     else
       {:error, :approval_required} ->
-        not_activated(socket, n, "it needs approving through the phone's screen-lock prompt")
+        {:error, "it needs approving through the phone's screen-lock prompt"}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
 
       {:error, reason} ->
-        not_activated(socket, n, inspect(reason))
+        {:error, inspect(reason)}
     end
   end
 
@@ -1435,7 +1488,12 @@ defmodule Operator.ChatScreen do
 
     queued = if a.queued > 0, do: " · #{a.queued} queued", else: ""
     cost = :erlang.float_to_binary(a.totals.cost, decimals: 4)
-    fields = ["#{a.status}#{queued}"] ++ limits(a) ++ ["$#{cost}", "#{tokens} tok", model]
+    # Approve all stays in sight while it's on.
+    auto = if a.auto_approve, do: ["auto"], else: []
+
+    fields =
+      ["#{a.status}#{queued}"] ++ auto ++ limits(a) ++ ["$#{cost}", "#{tokens} tok", model]
+
     line = Enum.join(fields, " · ")
 
     UI.top_bar(t, [

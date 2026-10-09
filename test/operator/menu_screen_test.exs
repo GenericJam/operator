@@ -7,6 +7,7 @@ defmodule Operator.MenuScreenTest do
 
   alias Operator.Auth
   alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Front
   alias Operator.Core.Loop
   alias Operator.Core.Models
@@ -131,6 +132,57 @@ defmodule Operator.MenuScreenTest do
 
       assert view |> render_info({:tap, :components}) |> navigated_to() == Operator.ShellScreen
       assert %{stack: ["Showcase.GalleryScreen", "Home"]} = Front.status()
+    end
+  end
+
+  describe "approvals" do
+    setup %{tmp_dir: dir} do
+      Operator.Test.Dyn.purge_all()
+      on_exit(&Operator.Test.Dyn.purge_all/0)
+      on_exit(fn -> AutoApprove.disable() end)
+      start_supervised!(Operator.Core.Dyn.Approval.Biometric)
+
+      Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn"),
+        approval: Operator.Core.Dyn.Approval.Biometric
+      )
+
+      # The real confirmation path, into Biometric.
+      Application.put_env(:operator, :chat_native, Operator.ChatScreen.Native)
+      on_exit(fn -> Application.delete_env(:operator, :chat_native) end)
+    end
+
+    test "approve all goes on only through the screen-lock prompt; off is one tap", %{
+      tmp_dir: dir
+    } do
+      %{view: view} = mount_menu(dir, :main)
+      assert text(view) =~ "ask each time"
+
+      # No prompt passed: stays off.
+      view = render_info(view, {:tap, :auto_approve_on})
+      refute AutoApprove.on?()
+      assert text(view) =~ "needs the phone's screen-lock prompt"
+
+      # A pass for another subject doesn't count either.
+      view = render_info(view, {:approval, "approved", %{"subject" => {:activate, 1}}})
+      view = render_info(view, {:tap, :auto_approve_on})
+      refute AutoApprove.on?()
+
+      view = render_info(view, {:approval, "failed", %{"reason" => "canceled"}})
+      refute AutoApprove.on?()
+      assert text(view) =~ "Approve all stays off"
+
+      view =
+        render_info(view, {:approval, "approved", %{"subject" => AutoApprove.subject()}})
+
+      assert AutoApprove.on?()
+      assert_received {:operator_menu, :auto_approve}
+      assert text(view) =~ "on · tap to turn off"
+
+      view = render_info(view, {:tap, :auto_approve_off})
+      refute AutoApprove.on?()
+      assert text(view) =~ "ask each time"
+      refute text(view) =~ "tap to turn off"
+      assert nav(view) == nil
     end
   end
 

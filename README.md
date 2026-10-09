@@ -27,9 +27,12 @@ Operator is an Android (and, in progress, iOS) app with two sides:
   and diagnostics. `[attach]` sends photos and files with a message.
 
 Every change the agent makes to the app is compiled and self-tested on the
-phone, then waits for **your screen lock** (fingerprint, face or PIN). New code
-runs on probation and reverts itself if it keeps crashing. The terminal never
-runs front code, so a broken front screen can't take it down.
+phone, then waits for **your screen lock** (fingerprint, face or PIN). Tired of
+approving? [menu] › approvals › **approve all** (itself confirmed with the
+screen lock; off in one tap) activates each change as it arrives, with `auto`
+in the status line while it's on. New code runs on probation and reverts
+itself if it keeps crashing. The terminal never runs front code, so a broken
+front screen can't take it down.
 
 It is built on [mob](https://github.com/GenericJam/mob), which runs Elixir
 on the phone's own BEAM, and is a sibling of

@@ -2,11 +2,14 @@ defmodule Operator.Core.Tools.DynPropose do
   @moduledoc """
   Core tool: turn the Dyn staging copy into a candidate generation
   (`Operator.Core.Dyn.propose/2`: static check, compile, selftests). It
-  never activates anything: the human approves on the phone.
+  never activates anything itself: the human approves on the phone, or has
+  turned approve all on (`Operator.Core.Dyn.AutoApprove`), when the chat
+  screen activates it as it arrives. Description and result say which.
   """
   @behaviour Operator.Core.Tool
 
   alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Dyn.Check
   alias Operator.Core.Tools.DynTool
 
@@ -19,8 +22,17 @@ defmodule Operator.Core.Tools.DynPropose do
   def description do
     "Propose the staged Dyn sources as a new generation: they are checked, compiled and " <>
       "selftested, and the result (diff, tests, or every error with file:line) comes back. " <>
-      "It does NOT activate anything: the human must approve it on the phone with the screen " <>
-      "lock (fingerprint, face, PIN, pattern, password or passcode)."
+      activation_note()
+  end
+
+  defp activation_note do
+    if AutoApprove.on?(),
+      do:
+        "The human has turned approve all on, so a passing proposal is activated " <>
+          "automatically, on probation; don't ask them to approve it.",
+      else:
+        "It does NOT activate anything: the human must approve it on the phone with the " <>
+          "screen lock (fingerprint, face, PIN, pattern, password or passcode)."
   end
 
   @impl true
@@ -65,9 +77,7 @@ defmodule Operator.Core.Tools.DynPropose do
     """
     Proposed generation G#{p.n} (on top of G#{p.parent}): #{p.rationale}
 
-    It is NOT active. The human has to approve it on the phone with the screen lock; you can't \
-    activate it yourself. Once approved it runs on probation and is reverted automatically if \
-    it keeps crashing.
+    #{approval_text()}
 
     Compiled in #{p.compile_ms} ms. Selftests:
     #{tests}#{warnings}
@@ -76,6 +86,18 @@ defmodule Operator.Core.Tools.DynPropose do
     ```diff
     #{cut(p.diff)}```
     """
+  end
+
+  defp approval_text do
+    if AutoApprove.on?(),
+      do:
+        "The human has approve all on: the phone activates it automatically, without " <>
+          "asking; don't ask them to approve it. It runs on probation and is reverted " <>
+          "automatically if it keeps crashing.",
+      else:
+        "It is NOT active. The human has to approve it on the phone with the screen lock; " <>
+          "you can't activate it yourself. Once approved it runs on probation and is " <>
+          "reverted automatically if it keeps crashing."
   end
 
   defp cut(diff) when byte_size(diff) <= @diff_max, do: diff

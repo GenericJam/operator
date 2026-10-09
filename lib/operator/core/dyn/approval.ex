@@ -23,7 +23,8 @@ defmodule Operator.Core.Dyn.Approval do
   Tests configure their own (`approval:` option of the Keeper).
   """
 
-  @type subject :: {:activate, pos_integer()} | {:revert_to, non_neg_integer()}
+  @type subject ::
+          {:activate, pos_integer()} | {:revert_to, non_neg_integer()} | {:auto_approve, :on}
   @type token :: term()
 
   @doc "A token for `subject`, if the human approved it."

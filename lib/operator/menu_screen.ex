@@ -14,7 +14,10 @@ defmodule Operator.MenuScreen do
       `Operator.DiagnosticsScreen`. The library is a front screen
       (`Operator.Dyn.Showcase.GalleryScreen`, from the Dyn seed): the menu
       opens it in the front, over the front's own screens
-      (`Operator.Core.Front.open/3` with `push: true`).
+      (`Operator.Core.Front.open/3` with `push: true`). Approvals: ask each
+      time, or approve all (`Operator.Core.Dyn.AutoApprove`): turning it on
+      takes the screen-lock prompt (`Operator.Core.ApproveButton`), off is
+      one tap.
     * `:accounts`: per provider, sign in in the browser (`Operator.Auth.Login`,
       with a field for the `code#state` Anthropic's page shows when it doesn't
       redirect back) or sign out (`Operator.Auth.delete/1`, after a confirm),
@@ -35,6 +38,9 @@ defmodule Operator.MenuScreen do
 
   alias Operator.Auth
   alias Operator.Auth.Login
+  alias Operator.ChatScreen.Native
+  alias Operator.Core.ApproveButton
+  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Front
   alias Operator.Core.Loop
@@ -67,7 +73,8 @@ defmodule Operator.MenuScreen do
        pending: if(page == :accounts and Process.whereis(Login), do: Login.pending()),
        code: "",
        confirm: nil,
-       model_draft: ""
+       model_draft: "",
+       auto_approve: page == :main and AutoApprove.on?()
      )}
   end
 
@@ -135,6 +142,28 @@ defmodule Operator.MenuScreen do
       {:error, _} -> {:noreply, note(socket, library_missing())}
     end
   end
+
+  # ── approvals (Operator.Core.Dyn.AutoApprove) ──
+
+  # On takes the screen lock: the approve chip's pass, confirmed like an activation.
+  def handle_info({:approval, "approved", %{"subject" => {:auto_approve, :on} = subject}}, socket) do
+    result =
+      with :ok <- Native.impl().confirm_approval(subject), do: AutoApprove.enable()
+
+    {:noreply, set_auto_approve(socket, result)}
+  end
+
+  def handle_info({:approval, event, payload}, socket) when event in ["failed", "unavailable"],
+    do: {:noreply, note(socket, "Approve all stays off: " <> ApproveButton.why(event, payload))}
+
+  def handle_info({:approval, _event, _payload}, socket), do: {:noreply, socket}
+
+  # Off the phone there's no prompt: only an approval needing no confirmation grants it.
+  def handle_info({:tap, :auto_approve_on}, socket),
+    do: {:noreply, set_auto_approve(socket, AutoApprove.enable())}
+
+  def handle_info({:tap, :auto_approve_off}, socket),
+    do: {:noreply, set_auto_approve(socket, AutoApprove.disable())}
 
   # ── model ──
 
@@ -254,6 +283,22 @@ defmodule Operator.MenuScreen do
 
   defp note(socket, text), do: Mob.Socket.assign(socket, :note, text)
 
+  defp set_auto_approve(socket, result) do
+    send(socket.assigns.chat, {:operator_menu, :auto_approve})
+    socket = Mob.Socket.assign(socket, :auto_approve, AutoApprove.on?())
+
+    case result do
+      :ok ->
+        note(socket, nil)
+
+      {:error, :approval_required} ->
+        note(socket, "Approve all stays off: it needs the phone's screen-lock prompt.")
+
+      {:error, reason} ->
+        note(socket, "Couldn't change approvals: #{inspect(reason)}")
+    end
+  end
+
   defp library_missing do
     if Seed.running?(),
       do: "The front is still being prepared (about half a minute); try again shortly.",
@@ -305,7 +350,7 @@ defmodule Operator.MenuScreen do
           UI.item("components", "the component library, in the front", :components, t),
           UI.heading("diagnostics", t),
           UI.item("diagnostics", "updates, spend, dyn", :diagnostics, t)
-        ]
+        ] ++ approval_rows(a, t)
 
     {"menu", rows}
   end
@@ -378,6 +423,47 @@ defmodule Operator.MenuScreen do
         items ++ empty
 
     {"menu › sessions", rows}
+  end
+
+  defp approval_rows(%{auto_approve: true}, t) do
+    [
+      UI.heading("approvals", t),
+      UI.item("approve all", "on · tap to turn off", :auto_approve_off, t, color: "accent"),
+      UI.line("self-changes activate without asking (still on probation)", t, "dim",
+        text_size: t.text_size - 1
+      )
+    ]
+  end
+
+  defp approval_rows(_a, t) do
+    [
+      UI.heading("approvals", t),
+      UI.line("ask each time", t),
+      UI.line("approve all activates each self-change without asking", t, "dim",
+        text_size: t.text_size - 1
+      ),
+      UI.actions(t, [auto_approve_chip(t)])
+    ]
+  end
+
+  # Turning approve all on takes the screen lock (a native view on the phone).
+  defp auto_approve_chip(t) do
+    if Term.platform() in [:android, :ios] do
+      Mob.UI.native_view(ApproveButton,
+        id: :auto_approve_on,
+        notify: self(),
+        subject: AutoApprove.subject(),
+        label: "approve all",
+        title: "Approve all self-changes",
+        subtitle: "Operator activates its own code changes without asking",
+        text_color: Term.color(t, "user"),
+        background: Term.color(t, "code_bg"),
+        text_size: t.text_size - 1,
+        font: Term.markdown_props(t).font_regular
+      )
+    else
+      UI.link("approve all", :auto_approve_on, t)
+    end
   end
 
   defp account_actions(provider, %{confirm: provider}, t) do

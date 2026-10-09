@@ -372,7 +372,13 @@ Sloppy Joe there's no Mac-side Control Node or MCP in the loop.
    superseding proposal closes the open prompt and its pass approves
    nothing). Each prompt is bound to its proposal: the chip carries
    `request`, the native views tag every answer with it, and
-   `Operator.Core.ApproveButton` drops answers for any other request. The theme artifact is done (`Operator.Dyn.Theme`
+   `Operator.Core.ApproveButton` drops answers for any other request.
+   Approve all (`Operator.Core.Dyn.AutoApprove`, in the secure store so
+   file tools can't flip it): [menu] turns it on with the screen lock (subject
+   `{:auto_approve, :on}`), off in one tap; while on the chat activates each
+   candidate as it arrives (same path: probation, revert-on-crash), says so,
+   and shows `auto` in the status line; `dyn_propose` tells the agent.
+   Reverts and cluster joins still ask. The theme artifact is done (`Operator.Dyn.Theme`
    with `overrides/0`, applied by `Operator.Core.DynTheme`; a warm theme
    proposed, fingerprint-approved and drawn on the emulator), and automatic
    revert was seen on the emulator (a Dyn tool crashing 3 times through

@@ -5,6 +5,7 @@ defmodule Operator.Core.Dyn.ToolsTest do
   import Operator.Test.Dyn
 
   alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Tools.DynDelete
   alias Operator.Core.Tools.DynEdit
   alias Operator.Core.Tools.DynFiles
@@ -78,6 +79,26 @@ defmodule Operator.Core.Dyn.ToolsTest do
 
     assert {:error, _} = DynDelete.run(%{"path" => "weather.ex"}, ctx)
     assert {:ok, "Staging reset to generation G0 (0 files)."} = DynReset.run(%{}, ctx)
+  end
+
+  test "with approve all on, the agent is told activation is automatic", %{tmp_dir: dir} do
+    start_keeper(dir)
+    on_exit(fn -> AutoApprove.disable() end)
+    :ok = AutoApprove.enable()
+
+    assert DynPropose.description() =~ "activated automatically"
+    refute DynPropose.description() =~ "must approve"
+
+    :ok = Dyn.stage_put("sunny.ex", tool("Sunny", "sunny"))
+    assert {:ok, text} = DynPropose.run(%{"rationale" => "A sunny tool"}, ctx = %{})
+    assert text =~ "the phone activates it automatically"
+    refute text =~ "It is NOT active"
+
+    :ok = AutoApprove.disable()
+    assert DynPropose.description() =~ "the human must approve it"
+    :ok = Dyn.stage_put("sunny.ex", tool("Sunny", "sunny", run: ~s|{:ok, "warm"}|))
+    assert {:ok, text} = DynPropose.run(%{"rationale" => "warmer"}, ctx)
+    assert text =~ "It is NOT active"
   end
 
   test "a refused proposal lists every error with file and line", %{tmp_dir: dir} do

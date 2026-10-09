@@ -12,6 +12,7 @@ defmodule Operator.ChatScreenTest do
   alias Operator.ChatScreen
   alias Operator.ChatScreen.Follow
   alias Operator.Core.ApproveButton
+  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Loop
   alias Operator.Core.Phone
   alias Operator.Core.Session
@@ -1008,6 +1009,33 @@ defmodule Operator.ChatScreenTest do
       %{view: view} = mount_chat(dir, [])
       assert text(view) =~ "proposal G#{n}"
     end
+
+    test "approve all on: a candidate activates by itself; off: the bar is back", %{
+      tmp_dir: dir
+    } do
+      on_exit(fn -> AutoApprove.disable() end)
+      :ok = AutoApprove.enable()
+      %{view: view} = mount_chat(dir, [])
+      assert text(view) =~ "idle · auto"
+
+      %{n: n} = propose("auto1")
+      view = render_info(view, dyn_event(:candidate))
+      assert_received {:confirmed, {:activate, ^n}}
+      assert %{generation: ^n, status: :probation} = Operator.Core.Dyn.status()
+      refute button?(view, "approve")
+
+      assert text(view) =~
+               "Generation #{n} activated automatically (approve all is on; [menu] to turn off)"
+
+      :ok = AutoApprove.disable()
+      view = render_info(view, {:operator_menu, :auto_approve})
+      refute text(view) =~ " · auto"
+
+      %{n: m} = propose("auto2")
+      view = render_info(view, dyn_event(:candidate))
+      assert button?(view, "approve")
+      assert %{generation: ^n, pending: ^m} = Operator.Core.Dyn.status()
+    end
   end
 
   describe "with the production approval" do
@@ -1033,6 +1061,25 @@ defmodule Operator.ChatScreenTest do
       %{view: view} = mount_chat(dir, [])
       view = render_info(view, {:tap, :approve_proposal})
       assert text(view) =~ "Generation #{n} not activated: it needs approving"
+      assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
+    end
+
+    test "approve all that can't activate falls back to the approval bar with the reason", %{
+      tmp_dir: dir
+    } do
+      on_exit(fn -> AutoApprove.disable() end)
+      :ok = Operator.SecureStore.put("dyn:auto_approve", "on")
+      %{view: view} = mount_chat(dir, [])
+
+      %{n: n} =
+        Operator.Test.Dyn.propose!(
+          %{"held.ex" => Operator.Test.Dyn.tool("Held", "held")},
+          "add the held tool"
+        )
+
+      view = render_info(view, {:operator_dyn, %{type: :candidate, gen: n}})
+      assert button?(view, "approve")
+      assert text(view) =~ "Generation #{n} not activated: approve all couldn't activate it"
       assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
     end
   end
