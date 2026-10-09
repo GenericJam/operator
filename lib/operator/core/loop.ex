@@ -22,7 +22,12 @@ defmodule Operator.Core.Loop do
   per run (12), explicit `:max_tokens` (4096), up to `:max_retries` (2)
   retries with exponential backoff on 5xx / transport errors, and
   with `:budget` (a data dir) the per-day cost cap (`Operator.Core.Budget`):
-  checked before each model call, each reply's cost recorded.
+  checked before each model call, each reply's cost recorded. A run at
+  `:max_iterations` doesn't just stop: a notice asks the model for a short
+  status (what's done, what's in progress or broken, the next steps) and
+  it gets exactly one more call, with no tools offered, before the run
+  ends (`:max_iterations`), so the user and the next run know where
+  things stand.
 
   Rate limits (a 429 or a 529 overloaded, `Operator.Core.LLM.rate_limit/1`)
   are waited out more patiently, as omp does: up to `:rate_limit_retries`
@@ -386,6 +391,7 @@ defmodule Operator.Core.Loop do
           waited_ms: 0,
           fallback_from: nil,
           todo_reminded: false,
+          wrap_up: false,
           stream: nil,
           compaction: nil
         }
@@ -395,23 +401,42 @@ defmodule Operator.Core.Loop do
     begin_turn(s, inputs)
   end
 
+  # At the limit: one last call, with no tools, for a status; then the run
+  # ends. Messages queued for this turn aren't sent (the notice says so).
   defp begin_turn(%{run: %{iteration: n}} = s, inputs) when n >= s.opts.max_iterations do
-    dropped =
-      for %{"message" => m} <- inputs do
-        case Session.typed(m) do
-          "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
-          text -> text
-        end
-      end
-
-    text =
-      "Stopped after #{n} model calls in one run (max_iterations)." <>
-        if(dropped == [], do: "", else: " Not sent: " <> Enum.join(dropped, " / "))
-
-    s |> notice(:notice, text) |> finish(:max_iterations)
+    if s.run.wrap_up,
+      do: finish_wrap_up(s, dropped(inputs)),
+      else:
+        s |> put_run(wrap_up: true) |> notice(:notice, wrap_up(n, dropped(inputs))) |> turn([])
   end
 
-  defp begin_turn(s, inputs) do
+  defp begin_turn(s, inputs), do: turn(s, inputs)
+
+  defp dropped(inputs) do
+    for %{"message" => m} <- inputs do
+      case Session.typed(m) do
+        "" -> Enum.map_join(Session.attachments(m), ", ", & &1["name"])
+        text -> text
+      end
+    end
+  end
+
+  defp wrap_up(n, dropped) do
+    "You've reached the limit of #{n} model calls for this run (max_iterations). Don't " <>
+      "call tools. Reply with a short status for the user: what's done and verified, " <>
+      "what's in progress or broken (and whether the live generation is safe), and the " <>
+      "next steps to continue." <> not_sent(dropped)
+  end
+
+  defp finish_wrap_up(s, []), do: finish(s, :max_iterations)
+
+  defp finish_wrap_up(s, dropped),
+    do: s |> notice(:notice, String.trim_leading(not_sent(dropped))) |> finish(:max_iterations)
+
+  defp not_sent([]), do: ""
+  defp not_sent(dropped), do: " Not sent: " <> Enum.join(dropped, " / ")
+
+  defp turn(s, inputs) do
     run = s.run
 
     s =
@@ -508,7 +533,7 @@ defmodule Operator.Core.Loop do
       session_id: s.session.id,
       system_prompt: s.opts[:system_prompt] || Operator.Core.system_prompt(),
       messages: Session.context(entries, inputs(s)),
-      tools: s |> tools() |> Map.values() |> Enum.map(&Tool.to_req_llm/1),
+      tools: s |> offered() |> Map.values() |> Enum.map(&Tool.to_req_llm/1),
       max_tokens: s.opts.max_tokens
     }
   end
@@ -516,14 +541,19 @@ defmodule Operator.Core.Loop do
   # What the model takes (pictures, PDFs); the `:inputs` option overrides it.
   defp inputs(s), do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model)]
 
+  # The tools the next call offers: none for the wrap-up at the limit.
+  defp offered(%{run: %{wrap_up: true}}), do: %{}
+  defp offered(s), do: tools(s)
+
   defp tools(%{opts: %{tools: :registry}} = s),
     do: ToolRegistry.list() |> Map.new(&{&1.name(), &1}) |> Map.drop(s.opts.withhold_tools)
 
   defp tools(%{opts: %{tools: modules}} = s),
     do: modules |> Map.new(&{&1.name(), &1}) |> Map.drop(s.opts.withhold_tools)
 
+  # A wrap-up reply's tool calls (none were offered) are dropped, not run.
   defp handle_reply(s, reply) do
-    calls = reply.tool_calls || []
+    calls = if s.run.wrap_up, do: [], else: reply.tool_calls || []
 
     stop_reason =
       cond do
@@ -683,7 +713,8 @@ defmodule Operator.Core.Loop do
 
     emit(s, %{type: :turn_end, turn: s.run.turn, entry: entry, tool_results: [], error: message})
 
-    finish(s, :error)
+    # A failed wrap-up still ends a run that hit the limit.
+    finish(s, if(s.run.wrap_up, do: :max_iterations, else: :error))
   end
 
   defp end_turn(s, entry, results) do
@@ -692,6 +723,7 @@ defmodule Operator.Core.Loop do
 
     cond do
       s.run.stopping -> stopped(s)
+      s.run.wrap_up -> finish_wrap_up(s, labels(s.steering) ++ labels(s.follow_up))
       has_calls or s.steering != [] -> drain(s, :steering)
       s.follow_up != [] -> drain(s, :follow_up)
       true -> remind_or_finish(s)

@@ -5,6 +5,7 @@ defmodule Operator.Core.LoopTest do
 
   alias Operator.Core.Loop
   alias Operator.Core.Session
+  alias Operator.Core.Settings
   alias Operator.Core.Term
   alias Operator.Core.ToolRunner
   alias Operator.Test.FakeLLM
@@ -18,6 +19,11 @@ defmodule Operator.Core.LoopTest do
   end
 
   defp text_of(%ReqLLM.Message{content: parts}), do: Enum.map_join(parts, "", & &1.text)
+
+  defp notices(events) do
+    for %{type: :message_end, entry: %{"type" => "custom_message"} = e} <- events,
+        do: e["content"]
+  end
 
   test "a plain reply: pi's event order, streamed deltas, persisted", %{tmp_dir: dir} do
     %{loop: loop} = start_loop(dir, [[{:text, "Hel"}, {:text, "lo"}]])
@@ -407,19 +413,72 @@ defmodule Operator.Core.LoopTest do
     assert [_] = FakeLLM.requests(llm)
   end
 
-  test "max_iterations ends a run that keeps calling tools", %{tmp_dir: dir} do
-    call = [{:tool_call, "c", "echo", %{"text" => "again"}}]
-    %{loop: loop, llm: llm} = start_loop(dir, [call, call, call], max_iterations: 2)
-    :ok = Loop.prompt(loop, "loop forever")
-    events = collect()
+  describe "at max_iterations" do
+    setup do
+      %{call: [{:tool_call, "c", "echo", %{"text" => "again"}}]}
+    end
 
-    assert [_, _] = FakeLLM.requests(llm)
-    assert List.last(events).reason == :max_iterations
+    test "the run gets one last call, with no tools, for a status; then it ends",
+         %{tmp_dir: dir, call: call} do
+      # The wrap-up reply tries a tool anyway; a fourth reply is never asked for.
+      status = [{:text, "Done: A. Broken: B. Next: C."}, {:tool_call, "x", "echo", %{}}]
+      script = [call, call, status, [{:text, "never sent"}]]
+      %{loop: loop, llm: llm} = start_loop(dir, script, max_iterations: 2)
+      :ok = Loop.prompt(loop, "loop forever")
+      events = collect()
 
-    %{entry: notice} =
-      Enum.find(events, &match?(%{type: :message_end, entry: %{"type" => "custom_message"}}, &1))
+      assert List.last(events).reason == :max_iterations
+      assert [first, _, last] = FakeLLM.requests(llm)
+      assert first.tools != []
+      assert last.tools == []
 
-    assert notice["content"] =~ "max_iterations"
+      assert [notice] = notices(events)
+      assert notice =~ "You've reached the limit of 2 model calls for this run"
+      assert notice =~ "Don't call tools."
+      assert last.messages |> List.last() |> text_of() == notice
+
+      # The status is the run's last word, and the tool it asked for never ran.
+      assert for(%{type: :tool_execution_start} = e <- events, do: e.id) == ["c", "c"]
+      %{entries: entries} = Loop.snapshot(loop)
+      assert %{"message" => %{"role" => "assistant"} = m} = List.last(entries)
+      assert Session.text(m["content"]) == "Done: A. Broken: B. Next: C."
+      assert Session.tool_calls(m) == []
+    end
+
+    test "stop during the wrap-up call ends the run as any stop does",
+         %{tmp_dir: dir, call: call} do
+      %{loop: loop, llm: llm} = start_loop(dir, [call, [:block]], max_iterations: 1)
+      :ok = Loop.prompt(loop, "loop forever")
+      assert_receive {:llm_request, %{tools: []}, _worker}
+
+      :ok = Loop.stop(loop)
+      events = collect()
+      assert List.last(events).reason == :stopped
+      assert [_, _] = FakeLLM.requests(llm)
+    end
+
+    test "a failed wrap-up call still ends the run at the limit", %{tmp_dir: dir, call: call} do
+      script = [call, [{:error, {:other, "boom"}}]]
+      %{loop: loop, llm: llm} = start_loop(dir, script, max_iterations: 1)
+      :ok = Loop.prompt(loop, "loop forever")
+
+      assert List.last(collect()).reason == :max_iterations
+      assert [_, _] = FakeLLM.requests(llm)
+    end
+
+    test "the cost cap still holds for the wrap-up call", %{tmp_dir: dir, call: call} do
+      :ok = Settings.put_daily_cap(0.01, dir)
+      costly = [{:usage, %{input_tokens: 10, output_tokens: 5, total_cost: 0.02}} | call]
+      script = [costly, [{:text, "x"}]]
+      %{loop: loop, llm: llm} = start_loop(dir, script, max_iterations: 1, budget: dir)
+      :ok = Loop.prompt(loop, "loop forever")
+      events = collect()
+
+      assert List.last(events).reason == :cost_cap
+      assert [_] = FakeLLM.requests(llm)
+      assert [_wrap_up, cap] = notices(events)
+      assert cap =~ "Daily cost cap reached"
+    end
   end
 
   test "a 429 is retried with backoff, then the reply goes through", %{tmp_dir: dir} do
