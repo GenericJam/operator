@@ -71,7 +71,7 @@ Operator ships these glTF models; name them in a `Model` and they load
 | asset | what | scale |
 |---|---|---|
 | `d6.glb` | a white d6 with black pips, half-extent 1.0; +Y=1, −Y=6, +X=2, −X=5, +Z=3, −Z=4 (matches `Dice.face_up_d6/1`) | scale it by your physics half-extent, e.g. `{0.03, 0.03, 0.03}` |
-| `d12.glb`, `d20.glb` | numbered d12 / d20 from the same generator (faces match `face_up_d12/1`, `face_up_d20/1`; their colliders are `add_convex_hull` with `Dice.dodecahedron_vertices/0` / `icosahedron_vertices/0`) | start like the d6 and check the size with `front_screenshot` |
+| `d12.glb`, `d20.glb` | numbered d12 / d20 from the same generator, unit circumradius (vertices at radius 1.0); faces match `face_up_d12/1`, `face_up_d20/1` | the collider is `add_convex_hull(w, x, y, z, Dice.icosahedron_vertices(), s)` for a d20 (those vertices sit at radius 1.902) or `Dice.dodecahedron_vertices()` for a d12 (radius 1.732): scale the mesh by `1.902 * s` (d20) or `1.732 * s` (d12) so it matches the collider. A d20 about as big as a 6 cm d6: `s = 0.016`, mesh scale `0.0304` |
 | `table.glb` | a flat wooden tabletop, 3 m square, at y = 0 (the ground plane's height) | as is, at the origin |
 
 There are no primitive shapes (no built-in cube or sphere mesh): a body
