@@ -357,8 +357,10 @@ defmodule Operator.Core.Tools.Subagent do
   defp status({:ended, :done}, _entries), do: {"done", nil}
   defp status({:ended, :error}, entries), do: {"failed", last_problem(entries)}
 
-  defp status({:ended, reason}, entries) when reason in [:max_iterations, :cost_cap],
-    do: {"stopped (#{reason})", last_notice(entries)}
+  # At max_iterations the child's last reply is its wrap-up status, shown as
+  # its answer; the notice that asked for it is for the model, not the caller.
+  defp status({:ended, :max_iterations}, _entries), do: {"stopped (max_iterations)", nil}
+  defp status({:ended, :cost_cap}, entries), do: {"stopped (cost_cap)", last_notice(entries)}
 
   defp status({:ended, reason}, _entries), do: {"ended (#{reason})", nil}
 

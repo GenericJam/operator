@@ -541,8 +541,10 @@ defmodule Operator.Core.Loop do
   # What the model takes (pictures, PDFs); the `:inputs` option overrides it.
   defp inputs(s), do: [inputs: s.opts[:inputs] || Models.inputs(s.session.model)]
 
-  # The tools the next call offers: none for the wrap-up at the limit.
-  defp offered(%{run: %{wrap_up: true}}), do: %{}
+  # The tools the next call offers. The wrap-up at the limit keeps them: a
+  # conversation holding tool calls must declare its tools (Anthropic rejects
+  # it otherwise), and they head the cached prompt. Its notice says not to
+  # call them, and handle_reply drops any it calls anyway.
   defp offered(s), do: tools(s)
 
   defp tools(%{opts: %{tools: :registry}} = s),

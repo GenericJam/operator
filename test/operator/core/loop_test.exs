@@ -418,7 +418,7 @@ defmodule Operator.Core.LoopTest do
       %{call: [{:tool_call, "c", "echo", %{"text" => "again"}}]}
     end
 
-    test "the run gets one last call, with no tools, for a status; then it ends",
+    test "the run gets one last call for a status, its tool calls dropped; then it ends",
          %{tmp_dir: dir, call: call} do
       # The wrap-up reply tries a tool anyway; a fourth reply is never asked for.
       status = [{:text, "Done: A. Broken: B. Next: C."}, {:tool_call, "x", "echo", %{}}]
@@ -429,8 +429,10 @@ defmodule Operator.Core.LoopTest do
 
       assert List.last(events).reason == :max_iterations
       assert [first, _, last] = FakeLLM.requests(llm)
+      # The tools stay declared (the conversation holds tool calls, and they
+      # head the cached prompt); the notice and the loop keep them unused.
       assert first.tools != []
-      assert last.tools == []
+      assert Enum.map(last.tools, & &1.name) == Enum.map(first.tools, & &1.name)
 
       assert [notice] = notices(events)
       assert notice =~ "You've reached the limit of 2 model calls for this run"
@@ -449,7 +451,8 @@ defmodule Operator.Core.LoopTest do
          %{tmp_dir: dir, call: call} do
       %{loop: loop, llm: llm} = start_loop(dir, [call, [:block]], max_iterations: 1)
       :ok = Loop.prompt(loop, "loop forever")
-      assert_receive {:llm_request, %{tools: []}, _worker}
+      assert_receive {:llm_request, _first, _worker}
+      assert_receive {:llm_request, _wrap_up, _worker}
 
       :ok = Loop.stop(loop)
       events = collect()
