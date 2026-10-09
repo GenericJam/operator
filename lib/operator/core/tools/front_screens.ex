@@ -37,7 +37,9 @@ defmodule Operator.Core.Tools.FrontScreens do
       {:ok,
        Enum.join(
          [
-           "Open: " <> open(status.stack) <> " (" <> where(status.visible) <> ")",
+           "Open: " <>
+             open(status.stack) <>
+             " (" <> where(status.visible) <> gen(status[:generation]) <> ")",
            view(status.view),
            "#{length(names)} front screens:",
            Enum.join(names, "\n")
@@ -53,6 +55,9 @@ defmodule Operator.Core.Tools.FrontScreens do
 
   defp where(true), do: "the front is on screen"
   defp where(false), do: "the user is in the terminal"
+
+  defp gen(nil), do: ""
+  defp gen(n), do: ", generation G#{n}"
 
   defp view(:running), do: "It runs."
   defp view({:note, note}), do: note

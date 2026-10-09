@@ -50,6 +50,7 @@ defmodule Operator.Core.ToolRegistry do
     Operator.Core.Tools.FrontScreens,
     Operator.Core.Tools.FrontOpen,
     Operator.Core.Tools.FrontScreenshot,
+    Operator.Core.Tools.FrontTap,
     # The docs bundled with the app: mob's guides, the plugins, module docs.
     Operator.Core.Tools.ReadGuide,
     Operator.Core.Tools.ReadDoc

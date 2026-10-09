@@ -41,12 +41,16 @@ defmodule Operator.Core.Tools.DynEdit do
       with {:ok, _at} <- unique(source, old, path), do: {:ok, String.replace(source, old, new)}
     end
 
-    with {:ok, source} <- Dyn.stage_update(path, edit, keeper) do
-      {:ok, at} = unique(source, old, path)
-      {:ok, "Edited #{path} at line #{line_of(source, at)}."}
-    else
-      {:error, text} when is_binary(text) -> {:error, text}
-      {:error, reason} -> DynTool.error(reason, path)
+    case Dyn.stage_update(path, edit, keeper) do
+      {:ok, source} ->
+        {:ok, at} = unique(source, old, path)
+        {:ok, "Edited #{path} at line #{line_of(source, at)}."}
+
+      {:error, text} when is_binary(text) ->
+        {:error, text}
+
+      {:error, reason} ->
+        DynTool.error(reason, path)
     end
   end
 

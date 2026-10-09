@@ -111,15 +111,32 @@ defmodule Operator.Core.Front do
 
   @doc """
   What the front shows: the screen stack (names, top first), `:running`
-  or the error or note on screen, and whether it is on screen.
+  or the error or note on screen, whether it is on screen, and the Dyn
+  generation its screens come from (once known). After an activation the
+  front restarts on the new generation; `generation` is the new one and
+  `view` `{:note, ""}` until the new screen's first view arrives.
   """
   @spec status(GenServer.server()) :: %{
           stack: [String.t()],
           view: :running | {:error, String.t()} | {:note, String.t()},
           visible: boolean(),
-          toggle: toggle()
+          toggle: toggle(),
+          generation: non_neg_integer() | nil
         }
   def status(server \\ __MODULE__), do: GenServer.call(server, :status)
+
+  @doc """
+  Taps what the open front screen tagged `name` (`on_tap={{self(), :roll}}`
+  is `"roll"`; a non-atom tag by its `inspect/1`): sends the screen the
+  `{:tap, tag}` a finger's tap does. Only tags on the screen now: an
+  unknown one returns the screen's tappable tags, each with its text.
+  """
+  @spec tap(String.t(), GenServer.server()) ::
+          {:ok, String.t()}
+          | {:error, :not_running}
+          | {:error, {:unknown_tag, [{String.t(), String.t()}]}}
+  def tap(name, server \\ __MODULE__) when is_binary(name),
+    do: GenServer.call(server, {:tap, name})
 
   @doc "Re-reads the front's settings and screens (after the seed, say)."
   @spec refresh(GenServer.server()) :: :ok
@@ -167,7 +184,9 @@ defmodule Operator.Core.Front do
     A front change is a Dyn change like any other, and the front restarts on the new code. \
     `front_screens` lists the screens and says which is open and whether it crashed, \
     `front_open` switches the front to a screen (when asked, or when a screen has no way to \
-    it), `front_screenshot` shows you the front: look at it after a change is active.
+    it), `front_screenshot` shows you the front: look at it after a change is active. \
+    `front_tap` taps a button on the open screen by its `on_tap` tag, so you can try what \
+    you built (tap, then screenshot) instead of making a screen act on its own to test it.
 
     `Operator.Dyn.Front.start/0` is the screen the front opens on: by default \
     `Operator.Dyn.WelcomeScreen`, which links to the terminal and to the component library \
@@ -270,8 +289,25 @@ defmodule Operator.Core.Front do
         other -> other
       end
 
-    {:reply, %{stack: s.stack, view: view, visible: s.visible, toggle: toggle()}, s}
+    {:reply,
+     %{stack: s.stack, view: view, visible: s.visible, toggle: toggle(), generation: s.gen}, s}
   end
+
+  def handle_call({:tap, name}, _from, %{host: host, view: {:tree, tree}} = s)
+      when is_pid(host) do
+    taps = taps(tree, host)
+
+    case Enum.find(taps, fn {tag, _text} -> tag_name(tag) == name end) do
+      {tag, _text} ->
+        send(host, {:tap, tag})
+        {:reply, {:ok, List.first(s.stack) || "the open screen"}, s}
+
+      nil ->
+        {:reply, {:error, {:unknown_tag, for({tag, text} <- taps, do: {tag_name(tag), text})}}, s}
+    end
+  end
+
+  def handle_call({:tap, _name}, _from, s), do: {:reply, {:error, :not_running}, s}
 
   @impl true
   def handle_cast(:refresh, s), do: {:noreply, s |> sync() |> restart_if_running()}
@@ -550,6 +586,30 @@ defmodule Operator.Core.Front do
   defp snapshot(s), do: %{view: s.view, host: s.host}
 
   defp snapshot(s, _pid), do: Map.put(snapshot(s), :capability_key, s.capability_key)
+
+  # The view's `on_tap={{host, tag}}`s, in order, each with the text under it.
+  defp taps(%{props: props} = node, host) do
+    own =
+      case props do
+        %{on_tap: {^host, tag}} -> [{tag, label(node)}]
+        _ -> []
+      end
+
+    own ++ Enum.flat_map(children(node), &taps(&1, host))
+  end
+
+  defp taps(_other, _host), do: []
+
+  defp children(node), do: node |> Map.get(:children, []) |> List.wrap() |> List.flatten()
+
+  defp label(%{props: %{text: text}}) when is_binary(text), do: text
+
+  defp label(node) do
+    node |> children() |> Enum.map(&label/1) |> Enum.reject(&(&1 == "")) |> Enum.join(" ")
+  end
+
+  defp tag_name(tag) when is_atom(tag), do: Atom.to_string(tag)
+  defp tag_name(tag), do: inspect(tag)
 
   defp broadcast(s) do
     for pid <- Map.keys(s.subs), do: send(pid, {:operator_front, snapshot(s, pid)})

@@ -105,7 +105,8 @@ defmodule Operator.Core.Dyn.ToolsTest do
     assert after_edits == Enum.map_join(1..20, &"L#{&1}\n")
   end
 
-  test "with approve all on, the agent is told activation is automatic", %{tmp_dir: dir} do
+  test "with approve all on, the agent hears once the proposal is live, or that it isn't yet",
+       %{tmp_dir: dir} do
     start_keeper(dir)
     on_exit(fn -> AutoApprove.disable() end)
     :ok = AutoApprove.enable()
@@ -113,10 +114,34 @@ defmodule Operator.Core.Dyn.ToolsTest do
     assert DynPropose.description() =~ "activated automatically"
     refute DynPropose.description() =~ "must approve"
 
+    # Nothing activates it (no chat screen here): it says so, without waiting long.
     :ok = Dyn.stage_put("sunny.ex", tool("Sunny", "sunny"))
-    assert {:ok, text} = DynPropose.run(%{"rationale" => "A sunny tool"}, ctx = %{})
-    assert text =~ "the phone activates it automatically"
+    ctx = %{activation_wait_ms: 200}
+    assert {:ok, text} = DynPropose.run(%{"rationale" => "A sunny tool"}, ctx)
+    assert text =~ "the phone activates it automatically, without asking, but G1 isn't active"
     refute text =~ "It is NOT active"
+
+    # As the chat screen does with approve all on: activate the candidate as it arrives.
+    test = self()
+
+    activator =
+      spawn_link(fn ->
+        :ok = Dyn.subscribe()
+        send(test, :subscribed)
+
+        receive do
+          {:operator_dyn, %{type: :candidate, gen: n}} ->
+            {:ok, token} = Dyn.request_approval({:activate, n})
+            {:ok, _} = Dyn.activate(n, token)
+        end
+      end)
+
+    assert_receive :subscribed
+    :ok = Dyn.stage_put("sunny.ex", tool("Sunny", "sunny", run: ~s|{:ok, "hot"}|))
+    assert {:ok, text} = DynPropose.run(%{"rationale" => "hotter"}, %{activation_wait_ms: 5_000})
+    assert text =~ "Activated: G2 is live (the human has approve all on)"
+    assert Dyn.status().generation == 2
+    refute Process.alive?(activator)
 
     :ok = AutoApprove.disable()
     assert DynPropose.description() =~ "the human must approve it"

@@ -28,6 +28,7 @@ defmodule Operator.Core.FrontTest do
   alias Operator.Core.Tools.FrontOpen
   alias Operator.Core.Tools.FrontScreens
   alias Operator.Core.Tools.FrontScreenshot
+  alias Operator.Core.Tools.FrontTap
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -179,7 +180,12 @@ defmodule Operator.Core.FrontTest do
     def mount(params, _session, socket),
       do: {:ok, Mob.Socket.assign(socket, :n, Map.get(params, :n, 0))}
 
-    def render(assigns), do: %{type: :text, props: %{text: "second \#{assigns.n}"}, children: []}
+    def render(assigns) do
+      %{type: :column, props: %{}, children: [
+        %{type: :text, props: %{text: "second \#{assigns.n}"}, children: []},
+        %{type: :button, props: %{text: "Start over", on_tap: {self(), :reset}}, children: []}
+      ]}
+    end
 
     def handle_info({:tap, :back}, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
 
@@ -704,7 +710,12 @@ defmodule Operator.Core.FrontTest do
     _ = Front.show(@env)
     second = await_view("second 0")
     assert {:ok, listing} = FrontScreens.run(%{}, %{})
-    assert listing =~ "Open: Second (the front is on screen)\nIt runs."
+    assert listing =~ "Open: Second (the front is on screen, generation G1)\nIt runs."
+
+    assert {:error, text} = FrontTap.run(%{"tag" => "nope"}, %{})
+    assert text =~ "no tag nope. Its tappable tags:\n- reset (Start over)"
+    assert {:ok, "Tapped reset on Second."} = FrontTap.run(%{"tag" => "reset"}, %{})
+    await_view("second 9")
 
     send(second.host, {:tap, :back})
     send(second.host, :ignored)

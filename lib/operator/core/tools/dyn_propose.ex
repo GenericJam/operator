@@ -11,6 +11,7 @@ defmodule Operator.Core.Tools.DynPropose do
   alias Operator.Core.Dyn
   alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Dyn.Check
+  alias Operator.Core.Front
   alias Operator.Core.Tools.DynTool
 
   @diff_max 12_000
@@ -56,14 +57,57 @@ defmodule Operator.Core.Tools.DynPropose do
   @impl true
   def run(args, ctx) do
     keeper = DynTool.keeper(ctx)
+    auto? = AutoApprove.on?()
 
     case Dyn.propose(args["rationale"] || "", keeper) do
-      {:ok, proposal} -> {:ok, proposed(proposal)}
-      {:error, reason} -> {:error, refused(reason, keeper)}
+      {:ok, proposal} ->
+        live = if auto?, do: await_live(proposal.n, keeper, ctx), else: :ask
+        {:ok, proposed(proposal, live)}
+
+      {:error, reason} ->
+        {:error, refused(reason, keeper)}
     end
   end
 
-  defp proposed(p) do
+  # Approve all: the chat screen activates the candidate as it arrives, and
+  # the front then restarts on it. Answer once both happened, so the next
+  # front_screenshot shows the new code (`ctx[:activation_wait_ms]`, 15 s).
+  defp await_live(n, keeper, ctx) do
+    deadline = System.monotonic_time(:millisecond) + Map.get(ctx, :activation_wait_ms, 15_000)
+    front = Map.get(ctx, :front, Front)
+    poll_live(n, keeper, front, deadline)
+  end
+
+  defp poll_live(n, keeper, front, deadline) do
+    case {live?(n, keeper, front), System.monotonic_time(:millisecond) >= deadline} do
+      {:waiting, true} ->
+        if Dyn.status(keeper).generation == n, do: :active, else: :pending
+
+      {:waiting, false} ->
+        Process.sleep(100)
+        poll_live(n, keeper, front, deadline)
+
+      {done, _late} ->
+        done
+    end
+  end
+
+  defp live?(n, keeper, front) do
+    if Dyn.status(keeper).generation == n do
+      case Front.status(front) do
+        %{generation: ^n, view: {:note, ""}} -> :waiting
+        %{generation: ^n} -> :live
+        _ -> :waiting
+      end
+    else
+      :waiting
+    end
+  catch
+    # No front running (tests, a launch without one): the activation is it.
+    :exit, _ -> :active
+  end
+
+  defp proposed(p, live) do
     tests =
       Enum.map_join(
         p.selftests,
@@ -77,7 +121,7 @@ defmodule Operator.Core.Tools.DynPropose do
     """
     Proposed generation G#{p.n} (on top of G#{p.parent}): #{p.rationale}
 
-    #{approval_text()}
+    #{approval_text(p.n, live)}
 
     Compiled in #{p.compile_ms} ms. Selftests:
     #{tests}#{warnings}
@@ -88,17 +132,27 @@ defmodule Operator.Core.Tools.DynPropose do
     """
   end
 
-  defp approval_text do
-    if AutoApprove.on?(),
-      do:
-        "The human has approve all on: the phone activates it automatically, without " <>
-          "asking; don't ask them to approve it. It runs on probation and is reverted " <>
-          "automatically if it keeps crashing.",
-      else:
-        "It is NOT active. The human has to approve it on the phone with the screen lock; " <>
-          "you can't activate it yourself. Once approved it runs on probation and is " <>
-          "reverted automatically if it keeps crashing."
-  end
+  @probation "It runs on probation and is reverted automatically if it keeps crashing."
+
+  defp approval_text(n, :live),
+    do:
+      "Activated: G#{n} is live (the human has approve all on) and the front restarted on " <>
+        "it, so front_screenshot shows the new code. #{@probation}"
+
+  defp approval_text(n, :active),
+    do: "Activated: G#{n} is live (the human has approve all on). #{@probation}"
+
+  defp approval_text(n, :pending),
+    do:
+      "The human has approve all on, so the phone activates it automatically, without asking, " <>
+        "but G#{n} isn't active yet: check dyn_status before looking at the front (if " <>
+        "activating failed, the human sees the approval bar with the reason)."
+
+  defp approval_text(_n, :ask),
+    do:
+      "It is NOT active. The human has to approve it on the phone with the screen lock; " <>
+        "you can't activate it yourself. Once approved it runs on probation and is " <>
+        "reverted automatically if it keeps crashing."
 
   defp cut(diff) when byte_size(diff) <= @diff_max, do: diff
 
