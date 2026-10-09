@@ -36,7 +36,9 @@ defmodule Operator.Core.Dyn.Check do
       and trigger a global GC);
     * not the router's name, `:mob_screen`: whatever arrives there is handed
       to the front host as a native reply, so a front screen sending to it
-      could forge a capability grant (a picked file);
+      could forge a capability grant (a picked file); nor `:mob_file_result`,
+      the tag of a raw native file result, which the front host decodes and
+      grants when one arrives;
     * Operator's own modules are off limits except `Operator.Core.Tool`
       (the behaviour a Dyn tool implements), `Operator.Core.Files` (file
       access inside the workspace and, on Android, shared storage),
@@ -202,8 +204,14 @@ defmodule Operator.Core.Dyn.Check do
         "`defimpl Protocol, for: Operator.Dyn.X do`"
   }
 
-  @router :mob_screen
-  @router_why ":mob_screen is the router: native replies reach a front screen only through its host"
+  # Atoms front code could forge a native reply with (a capability grant).
+  @forging %{
+    mob_screen:
+      ":mob_screen is the router: native replies reach a front screen only through its host",
+    mob_file_result:
+      ":mob_file_result is native's own reply: the front host decodes it, so match the " <>
+        "decoded message ({:audio, :recorded, %{path: ...}}, ...)"
+  }
 
   @doc """
   Parses and checks `sources` (`%{relative_path => source}`). Returns the
@@ -255,6 +263,21 @@ defmodule Operator.Core.Dyn.Check do
          impl_of_own?(mod, attributes[:__impl__], own, mods),
        do: [],
        else: ["is outside Operator.Dyn: only a protocol implementation for a Dyn module may be"]
+  end
+
+  @doc """
+  Is `mod` (`bin`) one of generation `n`'s modules, or a protocol
+  implementation for one of the build's (`mods`), named as Elixir names it?
+  """
+  @spec generation_module?(module(), binary(), pos_integer(), MapSet.t(module())) :: boolean()
+  def generation_module?(mod, bin, n, mods) do
+    case :beam_lib.chunks(bin, [:attributes]) do
+      {:ok, {^mod, [attributes: attributes]}} ->
+        beam_name(mod, attributes, "Operator.Dyn.G#{n}.", mods) == []
+
+      _ ->
+        false
+    end
   end
 
   defp impl_of_own?(mod, [protocol: protocol, for: target], own, mods) do
@@ -455,11 +478,13 @@ defmodule Operator.Core.Dyn.Check do
   defp walk({left, right}, ctx, acc), do: walk(right, ctx, walk(left, ctx, acc))
   defp walk(list, ctx, acc) when is_list(list), do: Enum.reduce(list, acc, &walk(&1, ctx, &2))
 
-  # The router's registered name. Whatever reaches it is forwarded to the shell
-  # and from there to the front host as a native reply (a capability grant):
-  # front code sending there could forge one. As a call's argument it's
-  # reported with the call's line (`router_args/4`); anywhere else, here.
-  defp walk(@router, ctx, acc), do: add(acc, ctx, [], @router_why)
+  # The router's registered name, and the raw native result's tag: whatever
+  # carries them reaches the front host as a native reply (a capability
+  # grant), so front code using them could forge one. As a call's argument
+  # they're reported with the call's line (`router_args/4`); anywhere else,
+  # here.
+  defp walk(atom, ctx, acc) when is_map_key(@forging, atom),
+    do: add(acc, ctx, [], @forging[atom])
 
   defp walk(atom, ctx, acc) when is_atom(atom) do
     case resolve_atom(atom) do
@@ -472,9 +497,10 @@ defmodule Operator.Core.Dyn.Check do
   defp walk(_literal, _ctx, acc), do: acc
 
   defp router_args(args, meta, ctx, acc) do
-    if @router in args,
-      do: {Enum.reject(args, &(&1 == @router)), add(acc, ctx, meta, @router_why)},
-      else: {args, acc}
+    case Enum.find(args, &(is_atom(&1) and is_map_key(@forging, &1))) do
+      nil -> {args, acc}
+      atom -> {Enum.reject(args, &(&1 == atom)), add(acc, ctx, meta, @forging[atom])}
+    end
   end
 
   # ── calls ──
@@ -612,26 +638,31 @@ defmodule Operator.Core.Dyn.Check do
   end
 
   # `defimpl`'s `for:`: left out (the module it's in), `__MODULE__`, or a
-  # Dyn module written out (an alias to one included: an alias resolves to
-  # its targets or, out of its scope, to itself, so one Dyn reading is
-  # enough; `beam/2` checks what it compiled to).
+  # Dyn module written out in full. Never through an alias: the file's
+  # aliases ignore scope, so a short name could be a Dyn module's in one
+  # module and a stdlib one (`Atom`) where the defimpl is. `beam/2` checks
+  # what it compiled to, and the compiler undoes anything else it loaded.
   defp impl_target(nil, _meta, _ctx, acc), do: acc
+  defp impl_target({:__MODULE__, _, c}, _meta, _ctx, acc) when is_atom(c), do: acc
 
-  defp impl_target(target, meta, ctx, acc) do
-    if Enum.any?(resolve(target, ctx.aliases), &dyn_module?/1),
-      do: acc,
-      else:
-        add(
-          acc,
-          ctx,
-          meta,
-          "defimpl: a protocol implementation must be for a Dyn module (Operator.Dyn.*)"
-        )
+  defp impl_target({:__aliases__, _, [:Operator, :Dyn, seg | _]}, meta, ctx, acc)
+       when is_atom(seg) do
+    if reserved?(Atom.to_string(seg)) or Map.has_key?(ctx.aliases, :Operator),
+      do: impl_violation(meta, ctx, acc),
+      else: acc
   end
 
-  defp dyn_module?(:dyn), do: true
-  defp dyn_module?({:elixir, "Operator.Dyn." <> _} = target), do: classify(target) == :ok
-  defp dyn_module?(_target), do: false
+  defp impl_target(_target, meta, ctx, acc), do: impl_violation(meta, ctx, acc)
+
+  defp impl_violation(meta, ctx, acc) do
+    add(
+      acc,
+      ctx,
+      meta,
+      "defimpl: a protocol implementation must be for a Dyn module, written out in full " <>
+        "(for: Operator.Dyn.X, for: __MODULE__, or no for: inside the module)"
+    )
+  end
 
   # ── module names ──
 
@@ -826,7 +857,7 @@ defmodule Operator.Core.Dyn.Check do
         do: why
   end
 
-  defp beam_atom(@router, _own), do: @router_why
+  defp beam_atom(atom, _own) when is_map_key(@forging, atom), do: @forging[atom]
 
   defp beam_atom(atom, own) do
     with "Elixir." <> name <- Atom.to_string(atom),

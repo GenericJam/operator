@@ -22,8 +22,16 @@ defmodule Operator.Core.Tool do
   @callback selftest() :: :ok | {:error, term()}
   @doc "Per-call timeout; default `default_timeout_ms/0`."
   @callback timeout_ms() :: pos_integer()
+  @doc """
+  How a call shares its turn with the reply's other calls (omp's tool
+  `concurrency`). `:parallel` (the default) runs alongside them;
+  `:exclusive` is for a tool that acts on or reads something only one
+  call may touch at a time (the front's one screen): a turn with any
+  exclusive call runs all its calls one at a time, in the model's order.
+  """
+  @callback concurrency() :: :parallel | :exclusive
 
-  @optional_callbacks selftest: 0, timeout_ms: 0
+  @optional_callbacks selftest: 0, timeout_ms: 0, concurrency: 0
 
   @default_timeout_ms 30_000
 
@@ -35,6 +43,19 @@ defmodule Operator.Core.Tool do
     if function_exported?(module, :timeout_ms, 0),
       do: module.timeout_ms(),
       else: @default_timeout_ms
+  end
+
+  @doc """
+  `module`'s `concurrency/0`, or `:parallel`. The loop asks it in its own
+  process, so anything but `:exclusive`, a raise included, is `:parallel`.
+  """
+  @spec concurrency(module()) :: :parallel | :exclusive
+  def concurrency(module) do
+    if function_exported?(module, :concurrency, 0) and module.concurrency() == :exclusive,
+      do: :exclusive,
+      else: :parallel
+  catch
+    _, _ -> :parallel
   end
 
   @doc "Is `module` a loaded tool (exports the required callbacks)?"

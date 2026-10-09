@@ -138,7 +138,19 @@ defmodule Operator.Core.FrontTest do
       {:noreply, socket}
     end
 
-    def handle_info(_message, socket), do: {:noreply, socket}
+    # Any other message (a native result, decoded or raw) goes back to the
+    # test, with what keeping its path gives.
+    def handle_info(message, socket) do
+      kept =
+        case message do
+          {_kind, _tag, %{path: path}} -> Files.keep(path)
+          {_kind, :picked, [%{path: path} | _]} -> Files.keep(path)
+          _ -> :nothing
+        end
+
+      send(socket.assigns.owner, {:got, message, kept})
+      {:noreply, socket}
+    end
   end
 
   setup %{tmp_dir: dir} do
@@ -285,6 +297,76 @@ defmodule Operator.Core.FrontTest do
     send(host, {Host, :native, key, event})
     assert_receive {:kept, {:ok, kept}}, 1_000
     assert File.read!(kept) == "picked"
+    assert :ok = Host.stop(host)
+  end
+
+  test "the host decodes a raw native file result as mob does and grants its paths",
+       %{tmp_dir: dir} do
+    old_temp = Application.get_env(:operator, :app_temp)
+    old_data = System.get_env("MOB_DATA_DIR")
+    temp = Path.join(dir, "native-temp")
+    File.mkdir_p!(temp)
+    for name <- ~w(rec.m4a shot.jpg pick.jpg), do: File.write!(Path.join(temp, name), name)
+    Application.put_env(:operator, :app_temp, temp)
+    System.put_env("MOB_DATA_DIR", Path.join(dir, "data"))
+
+    on_exit(fn ->
+      if old_temp,
+        do: Application.put_env(:operator, :app_temp, old_temp),
+        else: Application.delete_env(:operator, :app_temp)
+
+      if old_data,
+        do: System.put_env("MOB_DATA_DIR", old_data),
+        else: System.delete_env("MOB_DATA_DIR")
+    end)
+
+    {host, _monitor, key} =
+      Host.start(self(), [{LifecycleFile, %{owner: self()}}], @env, &(&1 == LifecycleFile))
+
+    assert_receive {:operator_front_host, ^host, {:view, _}}
+    rec = Path.join(temp, "rec.m4a")
+
+    # What Mob.Audio's NIF sends the process that started the recording.
+    send(
+      host,
+      {:mob_file_result, "audio", "recorded",
+       JSON.encode!([%{"path" => rec, "duration" => 1.5, "not_an_atom_qz7" => 1}])}
+    )
+
+    assert_receive {:got, {:audio, :recorded, item}, {:ok, kept}}, 1_000
+    assert %{:path => ^rec, :duration => 1.5, "not_an_atom_qz7" => 1} = item
+    assert File.read!(kept) == "rec.m4a"
+
+    shot = Path.join(temp, "shot.jpg")
+    send(host, {:mob_file_result, "camera", "photo", JSON.encode!([%{path: shot, width: 4}])})
+    assert_receive {:got, {:camera, :photo, %{path: ^shot, width: 4}}, {:ok, _}}, 1_000
+
+    # Through the shell (a result that reached the router), raw or decoded.
+    pick = Path.join(temp, "pick.jpg")
+    raw = {:mob_file_result, "photos", "picked", JSON.encode!([%{path: pick}])}
+    send(host, {Host, :native, key, raw})
+    assert_receive {:got, {:photos, :picked, [%{path: ^pick}]}, {:ok, _}}, 1_000
+
+    # A new result grants its path again (a grant is spent by one keep);
+    # unknown or broken results pass through unchanged.
+    send(host, {:mob_file_result, "audio", "recorded", JSON.encode!([%{path: rec}])})
+    assert_receive {:got, {:audio, :recorded, _}, {:ok, _}}, 1_000
+
+    unknown = {:mob_file_result, "no_such_event_qz7", "done", "[]"}
+    send(host, unknown)
+    assert_receive {:got, ^unknown, :nothing}, 1_000
+    broken = {:mob_file_result, "audio", "recorded", "not json"}
+    send(host, broken)
+    assert_receive {:got, ^broken, :nothing}, 1_000
+
+    assert {:media, :listed, [%{uri: "content://1"}]} =
+             Host.decode_native(
+               {:mob_file_result, "media", "listed", ~s|[{"uri":"content://1"}]|}
+             )
+
+    assert {:scan, :result, %{type: :qr, value: "x"}} =
+             Host.decode_native({:mob_file_result, "scan", "result", ~s|[{"value":"x"}]|})
+
     assert :ok = Host.stop(host)
   end
 

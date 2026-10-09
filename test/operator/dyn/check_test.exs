@@ -85,6 +85,10 @@ defmodule Operator.Core.Dyn.CheckTest do
       {"send(:mob_screen, {:files, :picked, []})", ":mob_screen is the router"},
       {"Process.send(:mob_screen, {:files, :picked, []}, [])", ":mob_screen is the router"},
       {"Process.send_after(:mob_screen, {:camera, :photo, %{}}, 1)", ":mob_screen is the router"},
+      {~s|send(self(), {:mob_file_result, "audio", "recorded", "[]"})|,
+       ":mob_file_result is native's own reply"},
+      {~s|x = {:mob_file_result, "files", "picked", "[]"}|,
+       ":mob_file_result is native's own reply"},
       {":dbg.tracer()", ":dbg"},
       {":erts_debug.df(:m)", ":erts_debug"},
       {":erts_internal.purge_module(:m, :prepare)", ":erts_internal"},
@@ -240,12 +244,11 @@ defmodule Operator.Core.Dyn.CheckTest do
   test "defimpl only for a Dyn module" do
     ok = """
     defmodule Operator.Dyn.Card do
-      alias Operator.Dyn.Deck
       defstruct [:title]
       defimpl String.Chars do
         def to_string(card), do: card.title
       end
-      defimpl Inspect, for: Deck do
+      defimpl Inspect, for: Operator.Dyn.Deck do
         def inspect(_, _), do: "deck"
       end
       defimpl Inspect, for: __MODULE__ do
@@ -256,11 +259,39 @@ defmodule Operator.Core.Dyn.CheckTest do
 
     assert {:ok, _} = Check.run(%{"card.ex" => ok})
 
-    for target <- ["Atom", "Operator.Core.Session", "Operator.Dyn.G3.Card"] do
+    for target <- ["Atom", "Deck", "Operator.Core.Session", "Operator.Dyn.G3.Card"] do
       src = "defmodule Operator.Dyn.P do\n  defimpl Inspect, for: #{target} do\n  end\nend\n"
       assert {:error, violations} = Check.run(%{"p.ex" => src})
       assert Enum.any?(violations, &(&1.line == 2 and &1.message =~ "protocol")), target
     end
+
+    # A short name that is a Dyn module's in one module and Atom's in
+    # another (it would compile to Inspect.Atom, replacing the stdlib's).
+    shadowed = """
+    defmodule Operator.Dyn.A do
+      defmodule Atom do end
+    end
+    defmodule Operator.Dyn.B do
+      defimpl Inspect, for: Atom do
+        def inspect(_a, _o), do: Inspect.Algebra.string("pwned")
+      end
+    end
+    """
+
+    assert {:error, [%{line: 5, message: shadow}]} = Check.run(%{"s.ex" => shadowed})
+    assert shadow =~ "protocol implementation"
+
+    # `Operator` aliased to something else would move `Operator.Dyn.X` out.
+    moved = """
+    defmodule Operator.Dyn.C do
+      alias Kernel, as: Operator
+      defimpl Inspect, for: Operator.Dyn.X do
+      end
+    end
+    """
+
+    assert {:error, violations} = Check.run(%{"m.ex" => moved})
+    assert Enum.any?(violations, &(&1.line == 3))
 
     assert {:error, [%{message: m}]} =
              Check.run(%{"q.ex" => "defimpl Inspect, for: Operator.Dyn.Q do\nend\n"})

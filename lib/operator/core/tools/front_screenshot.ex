@@ -39,6 +39,10 @@ defmodule Operator.Core.Tools.FrontScreenshot do
   @impl true
   def timeout_ms, do: 20_000
 
+  # The front has one screen: no other front call runs alongside.
+  @impl true
+  def concurrency, do: :exclusive
+
   @impl true
   def run(_args, ctx) do
     front = Map.get(ctx, :front, Front)

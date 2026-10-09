@@ -56,6 +56,10 @@ defmodule Operator.Core.Tools.FrontScroll do
   @impl true
   def timeout_ms, do: 20_000
 
+  # The front has one screen: no other front call runs alongside.
+  @impl true
+  def concurrency, do: :exclusive
+
   @impl true
   def run(%{"to" => to} = args, ctx) when is_binary(to) do
     front = Map.get(ctx, :front, Front)

@@ -36,6 +36,10 @@ defmodule Operator.Core.Tools.FrontOpen do
   @impl true
   def timeout_ms, do: 15_000
 
+  # The front has one screen: no other front call runs alongside.
+  @impl true
+  def concurrency, do: :exclusive
+
   @impl true
   def run(%{"screen" => screen}, ctx) when is_binary(screen) do
     case Front.open(screen, [], Map.get(ctx, :front, Front)) do

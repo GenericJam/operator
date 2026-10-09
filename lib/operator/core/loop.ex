@@ -5,7 +5,10 @@ defmodule Operator.Core.Loop do
 
   A run starts with `prompt/2` (or `steer/2` / `follow_up/2` while idle) and
   repeats turns: one model call (streamed), then the reply's tool calls in
-  parallel, until the model stops calling tools and nothing is queued.
+  parallel (up to `:max_tool_concurrency`, 4; one at a time, in the
+  model's order, when any of them is an `:exclusive` tool,
+  `Operator.Core.Tool.concurrency/1`), until the model stops calling tools
+  and nothing is queued.
 
     * `steer/2` while running queues a user message injected at the next
       step boundary: after the current tool batch, before the next model
@@ -949,10 +952,13 @@ defmodule Operator.Core.Loop do
         end
       end)
 
+    queue = Enum.reverse(queue)
+
     batch = %{
       calls: indexed,
       tools: available,
-      queue: Enum.reverse(queue),
+      queue: queue,
+      limit: concurrency_limit(s, queue, indexed, available),
       running: %{},
       results: results
     }
@@ -963,8 +969,15 @@ defmodule Operator.Core.Loop do
     |> maybe_complete()
   end
 
+  # A batch with an exclusive tool (`Operator.Core.Tool.concurrency/1`)
+  # runs one call at a time, in the model's order; else up to the limit.
+  defp concurrency_limit(s, queue, calls, tools) do
+    exclusive? = Enum.any?(queue, &(Tool.concurrency(tools[calls[&1]["name"]]) == :exclusive))
+    if exclusive?, do: 1, else: s.opts.max_tool_concurrency
+  end
+
   defp pump(%{run: %{batch: %{queue: [i | rest], running: running} = batch}} = s)
-       when map_size(running) < s.opts.max_tool_concurrency do
+       when map_size(running) < batch.limit do
     call = batch.calls[i]
     module = batch.tools[call["name"]]
 

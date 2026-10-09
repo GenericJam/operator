@@ -80,13 +80,100 @@ defmodule Operator.Core.Dyn.Compiler do
     end
   end
 
-  @doc "Compiles checked files (`Check.run/1`'s result) into generation `n`."
+  @doc """
+  Compiles checked files (`Check.run/1`'s result) into generation `n`.
+
+  Compiling loads what it compiles at once, VM-wide, before any check of
+  the result can run, so a module the compile created or replaced outside
+  the generation (a library macro's, or one the static check missed) is
+  undone right after it, whatever the outcome: a new one is unloaded, a
+  replaced one reloaded from its file. The generation's modules and its
+  own protocol implementations stay (`Check.generation_module?/4`);
+  `Check.beam/2` then rejects a build that had any other.
+  """
   @spec compile([{String.t(), Macro.t()}], pos_integer(), keyword()) ::
           {:ok, build()} | {:error, {:compile, String.t()}}
   def compile(parsed, n, opts) do
-    if loaded(n) != [],
-      do: {:error, {:compile, "generation #{n} is already loaded"}},
-      else: parsed |> prepare(n, opts) |> isolated(n, opts)
+    if loaded(n) != [] do
+      {:error, {:compile, "generation #{n} is already loaded"}}
+    else
+      before = snapshot()
+      result = parsed |> prepare(n, opts) |> isolated(n, opts)
+      undo_outside(before, kept(result, n))
+      result
+    end
+  end
+
+  # Every loaded module: its md5 and where it was loaded from.
+  defp snapshot do
+    for {mod, from} <- :code.all_loaded(), into: %{}, do: {mod, {md5(mod), from}}
+  end
+
+  defp md5(mod) do
+    mod.module_info(:md5)
+  rescue
+    _ -> nil
+  end
+
+  defp kept({:ok, %{modules: modules}}, n) do
+    mods = MapSet.new(modules, &elem(&1, 0))
+
+    for {mod, bin} <- modules,
+        Check.generation_module?(mod, bin, n, mods),
+        into: MapSet.new(),
+        do: mod
+  end
+
+  defp kept(_failed, _n), do: MapSet.new()
+
+  # Modules loaded from memory (not a file on disk: what a compile loads)
+  # that are new or changed since `before`, other than `kept`. Any module
+  # that existed before and changed is undone. New generation modules are
+  # left: this one's are kept or purged by a failed compile, another's come
+  # from a rebuild running beside it.
+  defp undo_outside(before, kept) do
+    for {mod, from} <- :code.all_loaded(),
+        {was} <- [{before[mod]}],
+        changed?(was, mod),
+        not MapSet.member?(kept, mod),
+        not compiler_temporary?(mod),
+        was != nil or generation_of(mod) == nil,
+        not on_disk?(from) do
+      undo(mod, was)
+    end
+
+    :ok
+  end
+
+  # Elixir's own module-body modules (`:elixir_compiler_<n>`), which it unloads.
+  defp compiler_temporary?(mod),
+    do: String.starts_with?(Atom.to_string(mod), "elixir_compiler_")
+
+  defp on_disk?(from) when is_list(from) and from != [], do: File.regular?(List.to_string(from))
+  defp on_disk?(_from), do: false
+
+  defp changed?(nil, _mod), do: true
+  defp changed?({md5, _from}, mod), do: md5(mod) != md5
+
+  defp undo(mod, before) do
+    purge([mod])
+
+    case before do
+      {_md5, from} when is_list(from) and from != [] ->
+        restored =
+          on_disk?(from) and match?({:module, _}, :code.load_abs(:filename.rootname(from)))
+
+        Logger.warning(
+          "[dyn] a compile replaced #{inspect(mod)}: " <>
+            if(restored, do: "reloaded from its file", else: "unloaded (its file is gone)")
+        )
+
+      {_md5, _in_memory} ->
+        Logger.warning("[dyn] a compile replaced #{inspect(mod)}: unloaded (it had no file)")
+
+      nil ->
+        Logger.warning("[dyn] a compile created #{inspect(mod)} outside its generation: unloaded")
+    end
   end
 
   # `{rel, file, ast}`: rewritten, screens watched, named after their file.
@@ -347,27 +434,24 @@ defmodule Operator.Core.Dyn.Compiler do
 
   @doc """
   The generation a versioned module belongs to, or nil for any other
-  module. A protocol implementation for a Dyn module, which Elixir names
-  `<Protocol>.<module>` (`Inspect.Operator.Dyn.G3.Card`, from a `defimpl`
-  or a library's `use`), belongs to its module's generation; the build
-  only lets one through as that (`Operator.Core.Dyn.Check.beam/2`).
+  module. A loaded protocol implementation for a Dyn module, which Elixir
+  names `<Protocol>.<module>` (`Inspect.Operator.Dyn.G3.Card`, from a
+  `defimpl` or a library's `use`), belongs to its module's generation:
+  what says so is its own `__impl__` attribute (protocol and target, and
+  the name they make), not the name alone. The build only lets one
+  through as that (`Operator.Core.Dyn.Check.beam/2`).
   """
   @spec generation_of(module()) :: pos_integer() | nil
   def generation_of(mod) when is_atom(mod) do
     case Atom.to_string(mod) do
-      "Elixir.Operator.Dyn.G" <> rest -> generation_number(rest)
-      "Elixir." <> name -> impl_generation(name)
-      _ -> nil
-    end
-  end
+      "Elixir.Operator.Dyn.G" <> rest ->
+        generation_number(rest)
 
-  defp impl_generation(name) do
-    case :binary.match(name, ".Operator.Dyn.G") do
-      {at, len} ->
-        name |> binary_part(at + len, byte_size(name) - at - len) |> generation_number()
-
-      :nomatch ->
-        nil
+      _ ->
+        case impl(mod) do
+          {:ok, _protocol, target} -> generation_of(target)
+          :error -> nil
+        end
     end
   end
 
@@ -378,17 +462,39 @@ defmodule Operator.Core.Dyn.Compiler do
     end
   end
 
+  # A loaded implementation of `protocol` for a generation's module,
+  # named as Elixir names it. Its attributes are read, none of its code
+  # run (`module_info/1` is the compiler's own).
+  defp impl(mod) do
+    with true <- String.contains?(Atom.to_string(mod), ".Operator.Dyn.G"),
+         true <- :erlang.module_loaded(mod),
+         [protocol: protocol, for: target] <- mod.module_info(:attributes)[:__impl__],
+         "Elixir.Operator.Dyn.G" <> _ <- Atom.to_string(target),
+         true <- Module.concat(protocol, target) == mod do
+      {:ok, protocol, target}
+    else
+      _ -> :error
+    end
+  end
+
   @doc ~S"""
   The name the agent wrote: `Operator.Dyn.G3.Notes` → `"Operator.Dyn.Notes"`,
-  `Inspect.Operator.Dyn.G3.Card` → `"Inspect.Operator.Dyn.Card"`.
+  a loaded `Inspect.Operator.Dyn.G3.Card` (an implementation, see
+  `generation_of/1`) → `"Inspect.Operator.Dyn.Card"`.
   """
   @spec logical(module()) :: String.t()
   def logical(mod) do
     name = inspect(mod)
 
-    case Regex.run(~r/\A((?:[^.]+\.)*?)Operator\.Dyn\.G\d+\.(.+)\z/, name) do
-      [_, protocol, rest] -> protocol <> "Operator.Dyn." <> rest
-      nil -> name
+    case Regex.run(~r/\AOperator\.Dyn\.G\d+\.(.+)\z/, name) do
+      [_, rest] ->
+        "Operator.Dyn." <> rest
+
+      nil ->
+        case impl(mod) do
+          {:ok, protocol, target} -> inspect(protocol) <> "." <> logical(target)
+          :error -> name
+        end
     end
   end
 

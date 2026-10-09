@@ -60,6 +60,10 @@ defmodule Operator.Core.Tools.FrontSend do
   @impl true
   def timeout_ms, do: 10_000
 
+  # The front has one screen: no other front call runs alongside.
+  @impl true
+  def concurrency, do: :exclusive
+
   @impl true
   def run(%{"message" => text}, ctx) when is_binary(text) do
     with {:ok, message} <- parse(text),

@@ -41,6 +41,10 @@ defmodule Operator.Core.Tools.FrontState do
   @impl true
   def timeout_ms, do: 5_000
 
+  # The front has one screen: no other front call runs alongside.
+  @impl true
+  def concurrency, do: :exclusive
+
   @impl true
   def run(args, ctx) do
     case Front.assigns(Map.get(ctx, :front, Front)) do

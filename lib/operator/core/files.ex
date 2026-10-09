@@ -390,7 +390,9 @@ defmodule Operator.Core.Files do
   defp capability_paths({:photos, :picked, items}) when is_list(items),
     do: paths(items)
 
-  defp capability_paths({:camera, :photo, item}) when is_map(item), do: paths([item])
+  defp capability_paths({:camera, kind, item}) when kind in [:photo, :video] and is_map(item),
+    do: paths([item])
+
   defp capability_paths({:audio, :recorded, item}) when is_map(item), do: paths([item])
   defp capability_paths(_result), do: []
 

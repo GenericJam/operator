@@ -39,6 +39,10 @@ defmodule Operator.Core.Tools.FrontTap do
   @impl true
   def timeout_ms, do: 10_000
 
+  # The front has one screen: no other front call runs alongside.
+  @impl true
+  def concurrency, do: :exclusive
+
   @impl true
   def run(%{"tag" => tag}, ctx) when is_binary(tag) do
     result =

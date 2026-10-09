@@ -175,11 +175,31 @@ defmodule Operator.Core.Front.Host do
          %{capability_key: key} = s,
          {__MODULE__, :native, key, message}
        ) do
+    message = decode_native(message)
     :ok = Files.grant_capability(message)
-    handle(s, message)
+    handle_info(s, message)
   end
 
-  defp handle(%{stack: [top | rest]} = s, message) do
+  # A capability the screen started itself (`Mob.Audio`, `Mob.Files.pick/2`,
+  # ...: the NIF replies to its caller, this process) answers here raw.
+  # Decoded as `Mob.Screen.Server` decodes it, so a front screen gets what
+  # any mob screen gets, and its paths granted. Front code can't forge one:
+  # `Operator.Core.Dyn.Check` keeps `:mob_file_result` out of Dyn code, as
+  # it keeps the router's name out.
+  defp handle(s, {:mob_file_result, _event, _sub, _json} = raw) do
+    case decode_native(raw) do
+      ^raw ->
+        handle_info(s, raw)
+
+      message ->
+        :ok = Files.grant_capability(message)
+        handle_info(s, message)
+    end
+  end
+
+  defp handle(s, message), do: handle_info(s, message)
+
+  defp handle_info(%{stack: [top | rest]} = s, message) do
     socket =
       case top.module.handle_info(message, top.socket) do
         {:noreply, %Mob.Socket{} = socket} ->
@@ -371,6 +391,69 @@ defmodule Operator.Core.Front.Host do
            |> String.replace(".", "_")
            |> String.starts_with?("Operator_"))
   end
+
+  # ── native results ──
+
+  @doc false
+  # `Mob.Screen.Server`'s decoding of `{:mob_file_result, event, sub, json}`
+  # (Android's camera, photos, files, audio and scanner results; private in
+  # mob, so the same rules here). Its atoms are existing ones only: an atom
+  # no code has can't be matched by a screen, so a key stays a string and an
+  # unknown event the raw message. Anything else comes back as it is.
+  @spec decode_native(term()) :: term()
+  def decode_native({:mob_file_result, event, sub, json} = raw)
+      when is_binary(event) and is_binary(sub) and is_binary(json) do
+    file_result(existing_atom(event), existing_atom(sub), items(json), raw)
+  end
+
+  def decode_native(message), do: message
+
+  defp file_result(event, sub, _items, raw) when is_nil(event) or is_nil(sub), do: raw
+
+  defp file_result(_event, _sub, :invalid, raw), do: raw
+
+  defp file_result(event, sub, items, _raw) do
+    first = List.first(items) || %{}
+
+    case {event, sub} do
+      {:camera, kind} when kind in [:photo, :video] -> {:camera, kind, first}
+      {:camera, :cancelled} -> {:camera, :cancelled}
+      {kind, :picked} when kind in [:photos, :files] -> {kind, :picked, items}
+      {:audio, :recorded} -> {:audio, :recorded, first}
+      {:storage, :saved_to_library} -> {:storage, :saved_to_library, first[:path]}
+      {:scan, :result} -> {:scan, :result, scan(first)}
+      _ -> {event, sub, items}
+    end
+  end
+
+  defp items(json) do
+    case JSON.decode(json) do
+      {:ok, list} when is_list(list) -> for item <- list, is_map(item), do: atom_keys(item)
+      {:ok, _other} -> []
+      {:error, _} -> :invalid
+    end
+  end
+
+  defp atom_keys(item), do: Map.new(item, fn {k, v} -> {existing_atom(k) || k, v} end)
+
+  defp scan(item) do
+    type =
+      case item[:type] do
+        nil -> :qr
+        type when is_binary(type) -> existing_atom(type) || type
+        type -> type
+      end
+
+    %{type: type, value: item[:value]}
+  end
+
+  defp existing_atom(name) when is_binary(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp existing_atom(_other), do: nil
 
   defp short(term), do: inspect(term, limit: 10, printable_limit: 200)
 end
