@@ -2,6 +2,7 @@ defmodule Operator.Core.Dyn.CheckTest do
   use ExUnit.Case, async: true
 
   alias Operator.Core.Dyn.Check
+  alias Operator.Core.Dyn.Compiler
   alias Operator.Test.Dyn
 
   defp check(body) do
@@ -233,6 +234,63 @@ defmodule Operator.Core.Dyn.CheckTest do
 
       assert Enum.any?(violations, &(&1.line == line and &1.message =~ expected)),
              "#{inspect(source)}: #{inspect(violations)}"
+    end
+  end
+
+  test "defimpl only for a Dyn module" do
+    ok = """
+    defmodule Operator.Dyn.Card do
+      alias Operator.Dyn.Deck
+      defstruct [:title]
+      defimpl String.Chars do
+        def to_string(card), do: card.title
+      end
+      defimpl Inspect, for: Deck do
+        def inspect(_, _), do: "deck"
+      end
+      defimpl Inspect, for: __MODULE__ do
+        def inspect(_, _), do: "card"
+      end
+    end
+    """
+
+    assert {:ok, _} = Check.run(%{"card.ex" => ok})
+
+    for target <- ["Atom", "Operator.Core.Session", "Operator.Dyn.G3.Card"] do
+      src = "defmodule Operator.Dyn.P do\n  defimpl Inspect, for: #{target} do\n  end\nend\n"
+      assert {:error, violations} = Check.run(%{"p.ex" => src})
+      assert Enum.any?(violations, &(&1.line == 2 and &1.message =~ "protocol")), target
+    end
+
+    assert {:error, [%{message: m}]} =
+             Check.run(%{"q.ex" => "defimpl Inspect, for: Operator.Dyn.Q do\nend\n"})
+
+    assert m =~ "top level"
+  end
+
+  test "compiled modules are the generation's, or protocol implementations for them" do
+    compile = fn src -> src |> Code.compile_string() |> hd() end
+    own = compile.("defmodule Operator.Dyn.G901.Own do\n  defstruct [:a]\nend\n")
+
+    impl =
+      compile.(
+        "defimpl String.Chars, for: Operator.Dyn.G901.Own do\n  def to_string(_), do: \"\"\nend\n"
+      )
+
+    # For another generation's module; named like an implementation, but not one.
+    other =
+      compile.(
+        "defimpl String.Chars, for: Operator.Dyn.G902.Own do\n  def to_string(_), do: \"\"\nend\n"
+      )
+
+    fake = compile.("defmodule Elsewhere.Operator.Dyn.G901.Own do\nend\n")
+    on_exit(fn -> Compiler.purge(Enum.map([own, impl, other, fake], &elem(&1, 0))) end)
+
+    assert Check.beam([own, impl], 901) == :ok
+
+    for outside <- [other, fake] do
+      assert {:error, violations} = Check.beam([own, outside], 901)
+      assert Enum.any?(violations, &(&1.message =~ "is outside Operator.Dyn: only a protocol"))
     end
   end
 

@@ -22,6 +22,7 @@ defmodule Operator.Test.Dyn do
   import ExUnit.Callbacks
 
   alias Operator.Core.Dyn
+  alias Operator.Core.Dyn.Compiler
   alias Operator.Core.Dyn.Keeper
 
   @keeper Operator.Core.Dyn.Keeper
@@ -33,10 +34,14 @@ defmodule Operator.Test.Dyn do
     gc_retry_ms: 50
   ]
 
-  @doc "Purges every loaded `Operator.Dyn.*` module (a fresh VM, as far as Dyn goes)."
+  @doc """
+  Purges every loaded `Operator.Dyn.*` module and every protocol
+  implementation for a generation's module (a fresh VM, as far as Dyn goes).
+  """
   def purge_all do
     for {mod, _} <- :code.all_loaded(),
-        String.starts_with?(Atom.to_string(mod), "Elixir.Operator.Dyn.") do
+        String.starts_with?(Atom.to_string(mod), "Elixir.Operator.Dyn.") or
+          Compiler.generation_of(mod) != nil do
       :code.purge(mod)
       :code.delete(mod)
       :code.purge(mod)

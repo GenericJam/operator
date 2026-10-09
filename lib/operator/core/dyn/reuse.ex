@@ -320,14 +320,16 @@ defmodule Operator.Core.Dyn.Reuse do
     if String.starts_with?(Atom.to_string(term), prefix), do: MapSet.put(acc, term), else: acc
   end
 
-  defp atoms(term, prefix, acc) when is_list(term),
-    do: Enum.reduce(term, acc, &atoms(&1, prefix, &2))
+  # Lists may be improper and maps may be structs (the debug info holds
+  # literals: an Ecto schema's `%Ecto.Schema.Metadata{}`), so not through
+  # Enumerable.
+  defp atoms([head | tail], prefix, acc), do: atoms(tail, prefix, atoms(head, prefix, acc))
 
   defp atoms(term, prefix, acc) when is_tuple(term),
     do: term |> Tuple.to_list() |> atoms(prefix, acc)
 
   defp atoms(term, prefix, acc) when is_map(term),
-    do: Enum.reduce(term, acc, fn {k, v}, acc -> atoms(v, prefix, atoms(k, prefix, acc)) end)
+    do: term |> :maps.to_list() |> atoms(prefix, acc)
 
   defp atoms(_term, _prefix, acc), do: acc
 

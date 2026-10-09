@@ -193,4 +193,76 @@ defmodule Operator.Core.Dyn.EngineTest do
     send(pid, :crash)
     assert %{gen: ^n, module: "Operator.Dyn.Notes", kind: :crash} = await_dyn(:crash)
   end
+
+  test "a protocol implementation for a Dyn module is part of its generation, and goes with it",
+       %{tmp_dir: dir} do
+    start_keeper(dir)
+
+    source = """
+    defmodule Operator.Dyn.Card do
+      defstruct [:title]
+
+      defimpl String.Chars do
+        def to_string(card), do: "card " <> card.title
+      end
+
+      defimpl Inspect, for: Operator.Dyn.Deck do
+        def inspect(_deck, _opts), do: "#Deck<>"
+      end
+    end
+
+    defmodule Operator.Dyn.Deck do
+      defstruct cards: []
+    end
+    """
+
+    %{n: n, modules: modules} = propose!(%{"card.ex" => source})
+    chars = Module.concat(String.Chars, Operator.Dyn.G1.Card)
+    inspect_impl = Module.concat(Inspect, Operator.Dyn.G1.Deck)
+
+    assert Enum.map(modules, & &1.module) |> Enum.sort() == [
+             "Inspect.Operator.Dyn.Deck",
+             "Operator.Dyn.Card",
+             "Operator.Dyn.Deck",
+             "String.Chars.Operator.Dyn.Card"
+           ]
+
+    assert Compiler.generation_of(chars) == n
+    assert chars in Compiler.loaded(n) and inspect_impl in Compiler.loaded(n)
+    assert chars.to_string(struct(Operator.Dyn.G1.Card, title: "ace")) == "card ace"
+
+    # Discarding the proposal unloads the implementations with the rest.
+    assert Dyn.discard(n) == :ok
+    assert Compiler.loaded(n) == []
+    refute :code.is_loaded(chars)
+  end
+
+  test "an Ash resource (a struct with an Ecto schema's metadata and an Inspect implementation) proposes",
+       %{tmp_dir: dir} do
+    start_keeper(dir)
+
+    resource = """
+    defmodule Operator.Dyn.Things.Thing do
+      use Ash.Resource, domain: nil, data_layer: Ash.DataLayer.Ets
+
+      attributes do
+        uuid_primary_key :id
+        attribute :name, :string, public?: true
+      end
+
+      actions do
+        defaults [:read, create: :*]
+      end
+    end
+    """
+
+    assert %{n: n, modules: modules} = propose!(%{"things/thing.ex" => resource})
+    names = Enum.map(modules, & &1.module)
+    assert "Operator.Dyn.Things.Thing" in names
+    assert "Inspect.Operator.Dyn.Things.Thing" in names
+
+    assert Module.concat(Inspect, Module.concat(["Operator.Dyn.G#{n}.Things.Thing"])) in Compiler.loaded(
+             n
+           )
+  end
 end

@@ -235,6 +235,50 @@ defmodule Operator.Core.Dyn.ReuseTest do
     assert %{reused: 0} = propose!(%{"name.ex" => name("three")})
   end
 
+  test "the names a module's code holds are read through struct and improper-list literals",
+       %{dir: dir} do
+    literals = """
+    defmodule Operator.Dyn.Literals do
+      def meta, do: %URI{host: "x", path: Operator.Dyn.Name}
+      def pair, do: [Operator.Dyn.Name | :tail]
+    end
+    """
+
+    one = activate!(%{"name.ex" => name("one"), "literals.ex" => literals})
+    assert Store.deps(dir, one)["refs"]["Operator.Dyn.Literals"] == ["Operator.Dyn.Name"]
+  end
+
+  test "a file that defines a protocol implementation is compiled, not renamed", %{dir: dir} do
+    card = """
+    defmodule Operator.Dyn.Card do
+      defstruct [:title]
+
+      defimpl String.Chars do
+        def to_string(card), do: "card " <> card.title
+      end
+    end
+    """
+
+    plain = "defmodule Operator.Dyn.Plain do\n  def x, do: 1\nend\n"
+    one = activate!(%{"name.ex" => name("one"), "card.ex" => card, "plain.ex" => plain})
+    impl = Module.concat(String.Chars, mod(one, "Card"))
+    assert impl in Compiler.loaded(one)
+
+    assert Store.deps(dir, one)["files"]["card.ex"]["modules"] == [
+             "Operator.Dyn.Card",
+             "String.Chars.Operator.Dyn.Card"
+           ]
+
+    # card.ex and plain.ex are unchanged and need nothing that changed:
+    # plain.ex is reused, card.ex compiled from source.
+    {two, reused} =
+      activate_reused!(%{"name.ex" => name("two"), "card.ex" => card, "plain.ex" => plain})
+
+    assert reused == 1
+    impl = Module.concat(String.Chars, mod(two, "Card"))
+    assert impl.to_string(struct(mod(two, "Card"), title: "x")) == "card x"
+  end
+
   test "plan: unchanged files are reused unless a compile-time need reaches a change" do
     deps = %{
       "files" => %{

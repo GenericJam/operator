@@ -392,7 +392,8 @@ defmodule Operator.Core.Dyn do
       for {mod, bin} <- modules do
         logical = Compiler.logical(mod)
         test = by_module[logical]
-        "Operator.Dyn." <> short = logical
+        # A protocol implementation (`Inspect.Operator.Dyn.Card`) keeps its whole name.
+        short = String.replace_prefix(logical, "Operator.Dyn.", "")
 
         %{
           module: logical,

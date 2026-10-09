@@ -338,31 +338,56 @@ defmodule Operator.Core.Dyn.Compiler do
 
   # ── names ──
 
-  @doc "Every loaded module of generation `n`."
+  @doc """
+  Every loaded module of generation `n`, its protocol implementations
+  (`Inspect.Operator.Dyn.G<n>.Card`) included.
+  """
   @spec loaded(pos_integer()) :: [module()]
-  def loaded(n) do
-    prefix = "Elixir.Operator.Dyn.G#{n}."
-    for {mod, _} <- :code.all_loaded(), String.starts_with?(Atom.to_string(mod), prefix), do: mod
-  end
+  def loaded(n), do: for({mod, _} <- :code.all_loaded(), generation_of(mod) == n, do: mod)
 
-  @doc "The generation a versioned module belongs to, or nil for any other module."
+  @doc """
+  The generation a versioned module belongs to, or nil for any other
+  module. A protocol implementation for a Dyn module, which Elixir names
+  `<Protocol>.<module>` (`Inspect.Operator.Dyn.G3.Card`, from a `defimpl`
+  or a library's `use`), belongs to its module's generation; the build
+  only lets one through as that (`Operator.Core.Dyn.Check.beam/2`).
+  """
   @spec generation_of(module()) :: pos_integer() | nil
   def generation_of(mod) when is_atom(mod) do
-    with "Elixir.Operator.Dyn.G" <> rest <- Atom.to_string(mod),
-         {n, "." <> _} <- Integer.parse(rest) do
-      n
-    else
+    case Atom.to_string(mod) do
+      "Elixir.Operator.Dyn.G" <> rest -> generation_number(rest)
+      "Elixir." <> name -> impl_generation(name)
       _ -> nil
     end
   end
 
-  @doc ~S|The name the agent wrote: `Operator.Dyn.G3.Notes` → `"Operator.Dyn.Notes"`.|
+  defp impl_generation(name) do
+    case :binary.match(name, ".Operator.Dyn.G") do
+      {at, len} ->
+        name |> binary_part(at + len, byte_size(name) - at - len) |> generation_number()
+
+      :nomatch ->
+        nil
+    end
+  end
+
+  defp generation_number(rest) do
+    case Integer.parse(rest) do
+      {n, "." <> _} -> n
+      _ -> nil
+    end
+  end
+
+  @doc ~S"""
+  The name the agent wrote: `Operator.Dyn.G3.Notes` → `"Operator.Dyn.Notes"`,
+  `Inspect.Operator.Dyn.G3.Card` → `"Inspect.Operator.Dyn.Card"`.
+  """
   @spec logical(module()) :: String.t()
   def logical(mod) do
     name = inspect(mod)
 
-    case Regex.run(~r/\AOperator\.Dyn\.G\d+\.(.+)\z/, name) do
-      [_, rest] -> "Operator.Dyn." <> rest
+    case Regex.run(~r/\A((?:[^.]+\.)*?)Operator\.Dyn\.G\d+\.(.+)\z/, name) do
+      [_, protocol, rest] -> protocol <> "Operator.Dyn." <> rest
       nil -> name
     end
   end
@@ -544,9 +569,13 @@ defmodule Operator.Core.Dyn.Compiler do
     end
   end
 
+  # A file that also defines protocol implementations (named
+  # `<Protocol>.Operator.Dyn.G<n>.X`, which renaming doesn't reach) compiles
+  # from source.
   defp recompile_all(mods, reuse, n, file) do
-    Enum.reduce_while(mods, {:ok, []}, fn "Operator.Dyn." <> name, {:ok, acc} ->
-      with {:ok, bin} <- Map.fetch(reuse.beams, "Elixir.Operator.Dyn.G#{reuse.n}.#{name}"),
+    Enum.reduce_while(mods, {:ok, []}, fn name, {:ok, acc} ->
+      with "Operator.Dyn." <> name <- name,
+           {:ok, bin} <- Map.fetch(reuse.beams, "Elixir.Operator.Dyn.G#{reuse.n}.#{name}"),
            {:ok, mod, out} <- Reuse.recompile(bin, reuse.n, n, file) do
         {:cont, {:ok, acc ++ [{mod, out}]}}
       else

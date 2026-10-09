@@ -16,8 +16,10 @@ defmodule Operator.Core.Dyn.Check do
 
     * only `defmodule` at the top level of a file, named `Operator.Dyn.*`
       (`Operator.Dyn.G<n>` is reserved for compiled generations); no
-      `defprotocol` / `defimpl`, macros (`defmacro`, `quote`, `unquote`) or
-      `@on_load`;
+      `defprotocol`, macros (`defmacro`, `quote`, `unquote`) or `@on_load`;
+      `defimpl` only inside a module and for a Dyn module (`for:` left out,
+      or an `Operator.Dyn.*` module), so the implementation is compiled as
+      `<Protocol>.Operator.Dyn.G<n>.X`, which `beam/2` lets through;
     * no calls to, or references of: `:code`, `Code`, `Module`, `Port`,
       `Node`, `Mob.Dist`, `MobDeliver` (the Core's own updates), `File`
       (Dyn code's files go through `Operator.Core.Files`, inside its roots),
@@ -195,7 +197,9 @@ defmodule Operator.Core.Dyn.Check do
     unquote: "uses unquote (macros are not allowed)",
     unquote_splicing: "uses unquote_splicing (macros are not allowed)",
     defprotocol: "defines a protocol",
-    defimpl: "defines a protocol implementation (it would live outside Operator.Dyn)"
+    defimpl:
+      "defines a protocol implementation other than `defimpl Protocol do` or " <>
+        "`defimpl Protocol, for: Operator.Dyn.X do`"
   }
 
   @router :mob_screen
@@ -222,23 +226,43 @@ defmodule Operator.Core.Dyn.Check do
   end
 
   @doc """
-  The backstop on compiled generation `n`: no module of the result may call
-  a forbidden function (import table) or name a forbidden module (atom
-  table), whatever macro produced the code.
+  The backstop on compiled generation `n`: every module of the result is
+  the generation's (`Operator.Dyn.G<n>.*`) or a protocol implementation
+  for one of them, named as Elixir names it (`Inspect.Operator.Dyn.G<n>.X`,
+  from a `defimpl` or a library's `use`), and none may call a forbidden
+  function (import table) or name a forbidden module (atom table),
+  whatever macro produced the code.
   """
   @spec beam([{module(), binary()}], pos_integer()) :: :ok | {:error, [violation()]}
   def beam(binaries, n) do
     own = "Operator.Dyn.G#{n}."
+    mods = MapSet.new(binaries, &elem(&1, 0))
 
     violations =
       for {mod, bin} <- binaries,
-          {:ok, {^mod, [imports: imports, atoms: atoms]}} <-
-            [:beam_lib.chunks(bin, [:imports, :atoms])],
-          message <- beam_atoms(atoms, own) ++ beam_imports(imports),
+          {:ok, {^mod, [imports: imports, atoms: atoms, attributes: attributes]}} <-
+            [:beam_lib.chunks(bin, [:imports, :atoms, :attributes])],
+          message <-
+            beam_name(mod, attributes, own, mods) ++
+              beam_atoms(atoms, own) ++ beam_imports(imports),
           do: %{file: inspect(mod), line: nil, message: message <> " (in the compiled code)"}
 
     if violations == [], do: :ok, else: {:error, violations}
   end
+
+  defp beam_name(mod, attributes, own, mods) do
+    if String.starts_with?(inspect(mod), own) or
+         impl_of_own?(mod, attributes[:__impl__], own, mods),
+       do: [],
+       else: ["is outside Operator.Dyn: only a protocol implementation for a Dyn module may be"]
+  end
+
+  defp impl_of_own?(mod, [protocol: protocol, for: target], own, mods) do
+    MapSet.member?(mods, target) and String.starts_with?(inspect(target), own) and
+      Module.concat(protocol, target) == mod
+  end
+
+  defp impl_of_own?(_mod, _impl, _own, _mods), do: false
 
   @spec format([violation()]) :: String.t()
   def format(violations) do
@@ -395,6 +419,14 @@ defmodule Operator.Core.Dyn.Check do
       targets -> Enum.reduce(targets, acc, &check_call(&1, fun, arity, meta, ctx, &2))
     end
   end
+
+  # An implementation for a Dyn module: compiled as
+  # `<Protocol>.Operator.Dyn.G<n>.X`, inside the generation (`beam/2`).
+  defp walk({:defimpl, meta, [protocol, [do: _] = body]}, ctx, acc),
+    do: walk([protocol, body], ctx, impl_target(nil, meta, ctx, acc))
+
+  defp walk({:defimpl, meta, [protocol, [for: target], [do: _] = body]}, ctx, acc),
+    do: walk([protocol, body], ctx, impl_target(target, meta, ctx, acc))
 
   defp walk({:@, meta, [{:on_load, _, _}]}, ctx, acc),
     do: add(acc, ctx, meta, "@on_load runs code outside the selftest")
@@ -578,6 +610,28 @@ defmodule Operator.Core.Dyn.Check do
       {:partial, _} -> add(acc, ctx, meta, "uses #{name(target)} as a value: call it directly")
     end
   end
+
+  # `defimpl`'s `for:`: left out (the module it's in), `__MODULE__`, or a
+  # Dyn module written out (an alias to one included: an alias resolves to
+  # its targets or, out of its scope, to itself, so one Dyn reading is
+  # enough; `beam/2` checks what it compiled to).
+  defp impl_target(nil, _meta, _ctx, acc), do: acc
+
+  defp impl_target(target, meta, ctx, acc) do
+    if Enum.any?(resolve(target, ctx.aliases), &dyn_module?/1),
+      do: acc,
+      else:
+        add(
+          acc,
+          ctx,
+          meta,
+          "defimpl: a protocol implementation must be for a Dyn module (Operator.Dyn.*)"
+        )
+  end
+
+  defp dyn_module?(:dyn), do: true
+  defp dyn_module?({:elixir, "Operator.Dyn." <> _} = target), do: classify(target) == :ok
+  defp dyn_module?(_target), do: false
 
   # ── module names ──
 
