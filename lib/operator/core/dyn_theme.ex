@@ -19,8 +19,8 @@ defmodule Operator.Core.DynTheme do
   """
   use GenServer
 
-  alias Operator.Core.Dyn
   alias Operator.Core.Term
+  alias Rho.Dyn
 
   require Logger
 
@@ -134,7 +134,7 @@ defmodule Operator.Core.DynTheme do
   end
 
   @impl true
-  def handle_info({:operator_dyn, %{type: type}}, s)
+  def handle_info({:rho_dyn, %{type: type}}, s)
       when type in [:activated, :reverted, :safe_mode, :loaded],
       do: {:noreply, apply_theme(s)}
 

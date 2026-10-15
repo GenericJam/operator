@@ -4,7 +4,7 @@ defmodule Operator.Core.Tools.ReadDoc do
   (`Operator.Core.Docs.module_doc/2`): its moduledoc and public functions,
   or one function's doc in full.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Docs
 

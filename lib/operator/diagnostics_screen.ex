@@ -12,19 +12,18 @@ defmodule Operator.DiagnosticsScreen do
   """
   use Mob.Screen
 
-  alias Operator.Core.Budget
-  alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Samples
   alias Operator.Core.Front
-  alias Operator.Core.Settings
   alias Operator.Core.Term
   alias Operator.Deliver
   alias Operator.TermUI, as: UI
   alias Operator.Toggle
+  alias Rho.Budget
+  alias Rho.Dyn
 
   def mount(params, _session, socket) do
     Dyn.subscribe()
-    data_dir = Map.get(params, :data_dir) || Operator.Paths.data_dir()
+    data_dir = Map.get(params, :data_dir) || Rho.Config.data_dir()
 
     {:ok,
      socket
@@ -87,7 +86,7 @@ defmodule Operator.DiagnosticsScreen do
   def handle_info({:tap, :save_cap}, socket) do
     case Float.parse(String.trim(socket.assigns.cap_draft)) do
       {cap, ""} when cap >= 0 ->
-        :ok = Settings.put_daily_cap(cap, socket.assigns.data_dir)
+        :ok = Rho.Settings.File.put_daily_cap(cap, socket.assigns.data_dir)
         {:noreply, socket |> Mob.Socket.assign(cap_draft: "") |> spend()}
 
       _ ->
@@ -183,7 +182,7 @@ defmodule Operator.DiagnosticsScreen do
 
   def handle_info({:tap, :operator_toggle}, socket), do: {:noreply, Toggle.to_front(socket)}
 
-  def handle_info({:operator_dyn, _event}, socket), do: {:noreply, dyn(socket)}
+  def handle_info({:rho_dyn, _event}, socket), do: {:noreply, dyn(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
@@ -211,7 +210,7 @@ defmodule Operator.DiagnosticsScreen do
   defp spend(socket) do
     dir = socket.assigns.data_dir
     spent = :erlang.float_to_binary(Budget.spent(dir), decimals: 4)
-    cap = :erlang.float_to_binary(Settings.daily_cap(dir), decimals: 2)
+    cap = :erlang.float_to_binary(Rho.Settings.daily_cap(dir), decimals: 2)
     Mob.Socket.assign(socket, :spend_line, "Today $#{spent} of the $#{cap} daily cap")
   end
 

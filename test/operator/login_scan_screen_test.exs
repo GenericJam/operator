@@ -5,12 +5,12 @@ defmodule Operator.LoginScanScreenTest do
 
   import Operator.Test.ObserverHelpers, only: [start_current: 4]
 
-  alias Operator.Auth
   alias Operator.Auth.Transfer
-  alias Operator.Core.Loop
   alias Operator.Handoff
   alias Operator.LoginScanScreen
   alias Operator.Test.FakeScanNative
+  alias Rho.Auth
+  alias Rho.Loop
 
   @moduletag :capture_log
 

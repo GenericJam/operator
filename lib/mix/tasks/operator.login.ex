@@ -25,9 +25,9 @@ defmodule Mix.Tasks.Operator.Login do
   use Mix.Task
 
   alias Mix.Operator.QR
-  alias Operator.Auth.Login, as: AuthLogin
-  alias Operator.Auth.OAuthFlow
   alias Operator.Auth.Transfer
+  alias Rho.Auth.Login, as: AuthLogin
+  alias Rho.Auth.OAuthFlow
 
   @wait_ms 10 * 60_000
   @providers %{

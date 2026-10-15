@@ -18,13 +18,11 @@ defmodule Operator.Core.FrontTest do
 
   import Operator.Test.Dyn
 
-  alias Operator.Core.Dyn
   alias Operator.Core.Front
   alias Operator.Core.Front.Host
   alias Operator.Core.Phone
   alias Operator.Core.Settings
   alias Operator.Core.Terminal
-  alias Operator.Core.ToolRunner
   alias Operator.Core.Tools.FrontOpen
   alias Operator.Core.Tools.FrontScreens
   alias Operator.Core.Tools.FrontScreenshot
@@ -32,6 +30,8 @@ defmodule Operator.Core.FrontTest do
   alias Operator.Core.Tools.FrontSend
   alias Operator.Core.Tools.FrontState
   alias Operator.Core.Tools.FrontTap
+  alias Rho.Dyn
+  alias Rho.ToolRunner
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -535,7 +535,7 @@ defmodule Operator.Core.FrontTest do
 
     # Open restarts the host (kills the old one): never a crash, however often.
     for _ <- 1..3, do: {:ok, _} = Front.open("Home")
-    refute_receive {:operator_dyn, %{type: :crash}}, 200
+    refute_receive {:rho_dyn, %{type: :crash}}, 200
     assert %{generation: ^n, status: :probation} = Dyn.status()
 
     # The host mounts two more screens; its one crash is one crash.
@@ -547,7 +547,7 @@ defmodule Operator.Core.FrontTest do
     second = await_view("second 9")
     Process.exit(second.host, :boom)
     assert %{gen: ^n} = await_dyn(:crash)
-    refute_receive {:operator_dyn, %{type: :crash}}, 200
+    refute_receive {:rho_dyn, %{type: :crash}}, 200
   end
 
   # The latest view once the front is quiet.

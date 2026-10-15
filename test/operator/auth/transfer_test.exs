@@ -1,4 +1,4 @@
-defmodule Operator.Auth.TransferTest do
+defmodule Rho.Auth.TransferTest do
   use ExUnit.Case, async: true
 
   alias Operator.Auth.Transfer

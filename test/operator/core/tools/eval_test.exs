@@ -2,10 +2,10 @@ defmodule Operator.Core.Tools.EvalTest do
   use ExUnit.Case, async: false
 
   alias Operator.Core.EvalKernel
-  alias Operator.Core.ToolRegistry
   alias Operator.Core.Tools.Eval
   alias Operator.Core.Tools.Notes
   alias Operator.Test.Dyn, as: T
+  alias Rho.ToolRegistry
 
   @moduletag :tmp_dir
 
@@ -114,7 +114,7 @@ defmodule Operator.Core.Tools.EvalTest do
     caller = spawn(fn -> send(:eval_test_parent, {:result, eval(code, ctx)}) end)
 
     assert_receive {:evaluator, pid}
-    send(caller, {:operator_core_stop, self()})
+    send(caller, {:rho_stop, self()})
     assert_receive {:result, {:error, "Stopped by the user. Its session's process" <> _}}
     refute Process.alive?(pid)
   end
@@ -226,14 +226,14 @@ defmodule Operator.Core.Tools.EvalTest do
     assert {:ok, ~s|"#{token}"|} == eval(~s|"#{token}"|, ctx)
   end
 
-  test "the live secrets are the stored sign-in tokens, in Operator.Auth's shape" do
+  test "the live secrets are the stored sign-in tokens, in Rho.Auth's shape" do
     access = "sk-ant-oat01-live-access-0123456789"
     refresh = "sk-ant-ort01-live-refresh-0123456789"
-    on_exit(fn -> Operator.SecureStore.delete("auth:anthropic") end)
-    unless Process.whereis(Operator.Auth), do: start_supervised!(Operator.Auth)
+    on_exit(fn -> Rho.CredentialStore.delete("auth:anthropic") end)
+    unless Process.whereis(Rho.Auth), do: start_supervised!(Rho.Auth)
 
     :ok =
-      Operator.Auth.put(:anthropic, %{
+      Rho.Auth.put(:anthropic, %{
         "type" => "oauth",
         "access" => access,
         "refresh" => refresh,

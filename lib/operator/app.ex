@@ -3,10 +3,10 @@ defmodule Operator.App do
 
   use Mob.App
 
-  alias Operator.Core.Dyn
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Front
   alias Operator.Core.Term
+  alias Rho.Dyn
 
   @impl Mob.App
   def navigation(_platform) do

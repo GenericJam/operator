@@ -10,7 +10,7 @@ defmodule Operator.Core.Tools.FrontTap do
   Acts on `ctx[:front]` if given; `ctx[:foreground?]` replaces
   `Front.app_foreground?/0`.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Front
 

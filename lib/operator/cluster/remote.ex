@@ -34,12 +34,12 @@ defmodule Operator.Cluster.Remote do
 
   alias Operator.Cluster.Ask
   alias Operator.Cluster.Bus
-  alias Operator.Core.Dyn
-  alias Operator.Core.Loop
   alias Operator.Core.Phone
-  alias Operator.Core.Tool
-  alias Operator.Core.ToolRegistry
-  alias Operator.Core.ToolRunner
+  alias Rho.Dyn
+  alias Rho.Loop
+  alias Rho.Tool
+  alias Rho.ToolRegistry
+  alias Rho.ToolRunner
 
   require Logger
 
@@ -204,7 +204,7 @@ defmodule Operator.Cluster.Remote do
     ctx = %{
       session_id: "cluster",
       call_id: "cluster-#{System.unique_integer([:positive])}",
-      data_dir: Operator.Paths.data_dir(),
+      data_dir: Rho.Config.data_dir(),
       peer: peer
     }
 

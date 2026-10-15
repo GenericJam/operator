@@ -4,7 +4,7 @@ defmodule Operator.Core.Images do
   file, an Android `content://` URI or an iOS `ph://` asset id) and what
   its EXIF says (when it was taken, where, the camera), through
   `MobPhotos.thumbnail/2`. A tool puts the bytes in its result
-  (`{:ok, {:images, [{mime, bytes}], text}}`, `Operator.Core.ToolRunner`).
+  (`{:ok, {:images, [{mime, bytes}], text}}`, `Rho.ToolRunner`).
 
   Without the NIF (the host, tests) a small JPEG, PNG, GIF or WebP file
   goes as it is. `ctx[:thumbnail]` replaces the call

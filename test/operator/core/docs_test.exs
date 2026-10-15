@@ -1,10 +1,10 @@
 defmodule Operator.Core.DocsTest do
   use ExUnit.Case, async: true
 
-  alias Operator.Core.Artifacts
   alias Operator.Core.Docs
   alias Operator.Core.Tools.ReadDoc
   alias Operator.Core.Tools.ReadGuide
+  alias Rho.Artifacts
 
   describe "read_guide" do
     test "an unknown name lists every guide" do
@@ -147,7 +147,7 @@ defmodule Operator.Core.DocsTest do
     end
 
     test "callbacks of a behaviour are listed" do
-      assert {:ok, text} = ReadDoc.run(%{"module" => "Operator.Core.Tool"}, %{})
+      assert {:ok, text} = ReadDoc.run(%{"module" => "Rho.Tool"}, %{})
       assert text =~ "## Callbacks"
       assert text =~ "- parameter_schema/0 — JSON Schema"
     end

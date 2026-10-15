@@ -5,7 +5,7 @@ defmodule Operator.Core.Tools.FileDelete do
   downloads) a recursive delete is refused, so text the agent read can't
   steer it into wiping DCIM in one call.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Files
   alias Operator.Core.Tools.FileTool

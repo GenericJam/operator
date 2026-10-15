@@ -1,6 +1,6 @@
 defmodule Operator.Core.Tools.FileList do
   @moduledoc "Core tool: the places files may be used, or what's in a directory."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Tools.FileTool
 

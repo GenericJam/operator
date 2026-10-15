@@ -1,9 +1,9 @@
 defmodule Operator.DiagnosticsScreenTest do
   use Mob.ScreenCase, async: false
 
-  alias Operator.Core.Budget
-  alias Operator.Core.Settings
   alias Operator.DiagnosticsScreen
+  alias Rho.Budget
+  alias Rho.Settings
 
   test "mounts and renders a terminal page the native layer can draw; back pops" do
     view = mount_screen(DiagnosticsScreen)

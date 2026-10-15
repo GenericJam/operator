@@ -192,7 +192,7 @@ defmodule Operator.ClusterScreen do
   end
 
   defp show_invite(socket, link) do
-    path = Path.join(Operator.Paths.data_dir(), @qr_file)
+    path = Path.join(Rho.Config.data_dir(), @qr_file)
     :ok = File.mkdir_p(Path.dirname(path))
     png = link |> EQRCode.encode(:m) |> EQRCode.png()
     :ok = File.write(path, png, [:binary])

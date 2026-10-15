@@ -35,6 +35,10 @@ defmodule Operator.MixProject do
       {:eqrcode, "~> 0.2"},
       {:mob_dev, "~> 0.7.16", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18"},
+      # The agent core (loop, sessions, compaction, models, sign-in, tools,
+      # Dyn), shared with Bezalel; Operator plugs in through `config :rho`.
+      # Pinned to a commit until rho is on Hex.
+      {:rho, github: "GenericJam/rho", ref: "03923351245a27f8a6c9112e665ee1bd6c8d583e"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,
       # tool calling) and req_llm (provider clients; Anthropic, OpenAI Codex).
       {:jido, "~> 2.3"},

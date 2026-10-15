@@ -7,7 +7,7 @@ defmodule Operator.Core.Tools.CameraSnap do
   (`Operator.Core.Attachments.snap/3`). The chat screen asks for the
   camera permission the first time (`Operator.Core.Phone`).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Attachments
   alias Operator.Core.Tools.PhoneTool

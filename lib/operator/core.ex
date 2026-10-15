@@ -1,34 +1,78 @@
 defmodule Operator.Core do
   @moduledoc """
   The fixed core (docs/DESIGN.md §1): the agent loop, sessions, core tools.
-  Started by `Operator.Boot`; supervises the approval store and
-  `Operator.Core.Dyn.Keeper` (which Dyn generation runs; `Operator.Boot`
-  then loads it), `Operator.Core.Front` (the front: which Dyn screen shows
-  and the process it runs in), the tool registry,
-  the task supervisor tools run under, the loops, `Operator.Core.Current`
-  (which session the app is showing; the latest one is resumed at boot),
-  `Operator.Handoff.Inbox` (the parts of a handoff scanned so far), and
-  the observers of its runs: `Operator.Core.KeepAlive` (keeps the app
-  running in the background during a run) and `Operator.Core.Voice`
-  (reads updates aloud).
+  Started by `Operator.Boot`; supervises rho (`Rho.Supervisor`: the
+  sign-ins, the Dyn approval store and `Rho.Dyn.Keeper`, which Dyn
+  generation runs, `Operator.Boot` then loads it; the tool registry with
+  Operator's tools, the task supervisor tools run under, the loops),
+  `Operator.Core.Front` (the front: which Dyn screen shows and the process
+  it runs in), `Operator.Core.Current` (which session the app is showing;
+  the latest one is resumed at boot), `Operator.Handoff.Inbox` (the parts
+  of a handoff scanned so far), and the observers of its runs:
+  `Operator.Core.KeepAlive` (keeps the app running in the background
+  during a run) and `Operator.Core.Voice` (reads updates aloud).
 
-  Config (`config :operator, ...`): `:default_model` (a req_llm spec,
-  default `#{inspect("anthropic:claude-haiku-4-5")}`), `:max_tokens` (16,000
-  per model call: a whole screen is one `dyn_write`), `:max_iterations`
-  (100 model calls per run: a build reads, writes, proposes and fixes; the
-  user stops a run any time, and the daily cost cap still holds).
+  Config (`config :operator, ...`): `:max_tokens` (16,000 per model call: a
+  whole screen is one `dyn_write`), `:max_iterations` (100 model calls per
+  run: a build reads, writes, proposes and fixes; the user stops a run any
+  time, and the daily cost cap still holds). The model is rho's
+  (`config :rho, :default_model`, `Rho.Config.default_model/0`).
   """
   use Supervisor
 
   alias Operator.Core.Current
   alias Operator.Core.Docs
-  alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
   alias Operator.Core.Front
   alias Operator.Core.Library
   alias Operator.Core.SelfKnowledge
+  alias Rho.Dyn
 
-  @default_model "anthropic:claude-haiku-4-5"
+  # The agent's tools; rho adds the Dyn layer's (`dyn_*`, then the current
+  # generation's).
+  @tools [
+    Operator.Core.Tools.Notes,
+    Operator.Core.Tools.Friction,
+    # Teaching itself: its own AGENTS.md, skills, and a todo list per session.
+    Operator.Core.Tools.Instructions,
+    Operator.Core.Tools.Skill,
+    Rho.Tools.Todo,
+    # Looking at itself: Elixir on this BEAM, and the recent Logger output.
+    Operator.Core.Tools.Eval,
+    Operator.Core.Tools.Logs,
+    # Helpers: fresh sessions that work in parallel and return their answers.
+    Operator.Core.Tools.Subagent,
+    Rho.Tools.ReadArtifact,
+    Operator.Core.Tools.HttpGet,
+    Operator.Core.Tools.Clipboard,
+    Operator.Core.Tools.Location,
+    Operator.Core.Tools.Notify,
+    Operator.Core.Tools.CameraPhoto,
+    Operator.Core.Tools.CameraSnap,
+    Operator.Core.Tools.PickPhotos,
+    Operator.Core.Tools.PhotosRecent,
+    Operator.Core.Tools.Sensors,
+    # The other Operators paired in the local cluster.
+    Operator.Core.Tools.Cluster,
+    # Files: the workspace, Android's shared storage, the document picker.
+    Operator.Core.Tools.FileList,
+    Operator.Core.Tools.FileRead,
+    Operator.Core.Tools.FileWrite,
+    Operator.Core.Tools.FileCopy,
+    Operator.Core.Tools.FileDelete,
+    Operator.Core.Tools.FilePick,
+    # The front: its screens, which one shows, what it looks like.
+    Operator.Core.Tools.FrontScreens,
+    Operator.Core.Tools.FrontOpen,
+    Operator.Core.Tools.FrontScreenshot,
+    Operator.Core.Tools.FrontTap,
+    Operator.Core.Tools.FrontSend,
+    Operator.Core.Tools.FrontState,
+    Operator.Core.Tools.FrontScroll,
+    # The docs bundled with the app: mob's guides, the plugins, module docs.
+    Operator.Core.Tools.ReadGuide,
+    Operator.Core.Tools.ReadDoc
+  ]
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
@@ -36,17 +80,13 @@ defmodule Operator.Core do
   @impl true
   def init(_opts) do
     children = [
-      Operator.Core.Dyn.Approval.Biometric,
-      Operator.Core.Dyn.Keeper,
+      # Operator.Boot installed the model catalog already (a timed step).
+      {Rho.Supervisor, tools: @tools, llm_catalog: false},
       # After the Keeper, whose events it follows.
       DynTheme,
       Operator.Core.Front,
-      Operator.Core.ToolRegistry,
       # The `eval` tool's per-session bindings.
       Operator.Core.EvalKernel,
-      Operator.Core.Usage,
-      {Task.Supervisor, name: Operator.Core.TaskSup},
-      {DynamicSupervisor, name: Operator.Core.LoopSup, strategy: :one_for_one},
       Operator.Core.Current,
       Operator.Handoff.Inbox,
       # After Current, which they watch for loops (they re-watch if it restarts).
@@ -57,8 +97,16 @@ defmodule Operator.Core do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  @spec default_model() :: String.t()
-  def default_model, do: Application.get_env(:operator, :default_model, @default_model)
+  @doc "Operator's own tools (rho's registry adds the Dyn layer's)."
+  @spec tools() :: [module()]
+  def tools, do: @tools
+
+  @doc """
+  The providers Operator signs in to: the subscriptions (rho's OAuth
+  providers). rho also takes API keys, which Operator has no screen for.
+  """
+  @spec providers() :: [Rho.Auth.provider()]
+  def providers, do: Enum.filter(Rho.Auth.providers(), &(:oauth in Rho.Auth.kinds(&1)))
 
   @spec max_tokens() :: pos_integer()
   def max_tokens, do: Application.get_env(:operator, :max_tokens, 16_000)
@@ -78,7 +126,7 @@ defmodule Operator.Core do
   Starts a fresh session that opens with `entry` and makes it current
   (`Operator.Core.Current.new_session_with/3`).
   """
-  @spec new_session_with(Operator.Core.Session.entry(), keyword()) :: pid()
+  @spec new_session_with(Rho.Session.entry(), keyword()) :: pid()
   def new_session_with(entry, opts \\ []), do: Current.new_session_with(entry, opts)
 
   @doc "Opens a session file (from omp, say) and makes it current (`Operator.Core.Current.open/2`)."
@@ -198,10 +246,44 @@ defmodule Operator.Core do
       self_knowledge()
   end
 
+  @doc """
+  Operator's part of the Dyn guide (`config :rho, :dyn, guide:`, after
+  `Rho.Dyn.agent_guide/0`'s rules): files, the libraries Dyn code may use,
+  the menu rows it adds.
+  """
+  @spec dyn_guide() :: String.t()
+  def dyn_guide do
+    """
+    In Operator:
+    - Files only through `Operator.Core.Files` (`read/1`, `write/3`, `ls/1`, `stat/1`, \
+    `mkdir_p/1`, `rm/1`, `expand/1`): the same places as your `file_*` tools (the workspace; \
+    on Android shared storage once the user allows All files access, which a screen asks for \
+    with `Mob.Permissions.request(socket, :all_files)`); a capability's output in the app's \
+    temporary files (a `Mob.Files.pick/2` pick, a photo, a recording) is copied in with \
+    `keep(path, name)`, to `inbox/`. No `Mob.Storage`. `Operator.Core.Tflite` runs models on \
+    the GPU/NPU and `Operator.Core.Terminal` opens the terminal; `Nx` and `NxTfliteMob` are \
+    fine.
+    - Tools written for older versions say `@behaviour Operator.Core.Tool`: it is \
+    `Rho.Tool` now, change it when you edit the file.
+
+    A menu row for a screen: [menu] lists, under `yours`, the rows `Operator.Dyn.Menu.items/0` \
+    returns (at most 20), each `%{label: ..., detail: ..., screen: ...}` (strings; `screen` is a \
+    front screen's name below `Operator.Dyn.`); tapping one opens that screen in the front. \
+    The menu reads it again when a generation activates. A raise, a bad row or a screen that \
+    doesn't exist shows there (and in the log) without breaking the menu:
+
+        defmodule Operator.Dyn.Menu do
+          def items do
+            [%{label: "text scanner", detail: "read text with the camera", screen: "Scanner"}]
+          end
+        end
+    """
+  end
+
   # The agent's own AGENTS.md and skills (written with `instructions` and
   # `skill`), read on every model call so an edit counts from the next one.
   defp self_knowledge do
-    case SelfKnowledge.prompt_section(Operator.Paths.data_dir()) do
+    case SelfKnowledge.prompt_section(Rho.Config.data_dir()) do
       "" -> ""
       section -> "\n\n" <> section
     end
@@ -224,8 +306,8 @@ defmodule Operator.Core.Current do
   """
   use GenServer
 
-  alias Operator.Core.Loop
-  alias Operator.Core.Session
+  alias Rho.Loop
+  alias Rho.Session
 
   require Logger
 
@@ -275,7 +357,7 @@ defmodule Operator.Core.Current do
        ref: nil,
        session_id: nil,
        watchers: %{},
-       loop_sup: Keyword.get(opts, :loop_sup, Operator.Core.LoopSup),
+       loop_sup: Keyword.get(opts, :loop_sup, Rho.LoopSup),
        loop_opts: Keyword.get(opts, :loop_opts, [])
      }}
   end
@@ -306,7 +388,7 @@ defmodule Operator.Core.Current do
 
   def handle_call({:open, path}, _from, s) do
     with {:ok, path} <- into_dir(path, s.dir),
-         {:ok, session, entries} <- Session.open(path, Operator.Core.default_model()) do
+         {:ok, session, entries} <- Session.open(path, Rho.Config.default_model()) do
       session = %{session | model: usable_model(session.model)}
 
       if s.pid, do: stop_loop(s)
@@ -343,7 +425,7 @@ defmodule Operator.Core.Current do
   def handle_info(_message, s), do: {:noreply, s}
 
   defp open_or_new(%{path: path} = s) when is_binary(path) do
-    case Session.open(path, Operator.Core.default_model()) do
+    case Session.open(path, Rho.Config.default_model()) do
       {:ok, session, entries} ->
         {%{session | model: usable_model(session.model)}, entries}
 
@@ -357,15 +439,15 @@ defmodule Operator.Core.Current do
   end
 
   defp open_or_new(s),
-    do: {Session.new(s.dir, Operator.Core.default_model(), Operator.Paths.data_dir()), []}
+    do: {Session.new(s.dir, Rho.Config.default_model(), Rho.Config.data_dir()), []}
 
   defp usable_model(model) do
-    case Operator.Auth.provider_for_model(model) do
+    case Rho.Auth.provider_for_model(model) do
       {:ok, provider} ->
-        if Operator.Auth.signed_in?(provider), do: model, else: Operator.Core.default_model()
+        if Rho.Auth.signed_in?(provider), do: model, else: Rho.Config.default_model()
 
       :error ->
-        Operator.Core.default_model()
+        Rho.Config.default_model()
     end
   end
 
@@ -381,14 +463,14 @@ defmodule Operator.Core.Current do
 
   # A new, unwritten session on the shown loop's model; that loop stopped.
   defp replace(s) do
-    model = if s.pid, do: Loop.snapshot(s.pid).model, else: Operator.Core.default_model()
+    model = if s.pid, do: Loop.snapshot(s.pid).model, else: Rho.Config.default_model()
     if s.pid, do: stop_loop(s)
-    {Session.new(s.dir, model, Operator.Paths.data_dir()), %{s | pid: nil, ref: nil}}
+    {Session.new(s.dir, model, Rho.Config.data_dir()), %{s | pid: nil, ref: nil}}
   end
 
   # Real loops get the daily cost cap, kept next to the tools' data dir.
   defp start(s, {session, entries}) do
-    budget = Keyword.get_lazy(s.loop_opts, :data_dir, &Operator.Paths.data_dir/0)
+    budget = Keyword.get_lazy(s.loop_opts, :data_dir, &Rho.Config.data_dir/0)
 
     opts =
       Keyword.merge(

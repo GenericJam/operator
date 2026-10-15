@@ -1,10 +1,10 @@
 defmodule Operator.UsageScreenTest do
   use Mob.ScreenCase, async: true
 
-  alias Operator.Core.Budget
-  alias Operator.Core.Session
-  alias Operator.Core.Usage
   alias Operator.UsageScreen
+  alias Rho.Budget
+  alias Rho.Session
+  alias Rho.Usage
 
   @moduletag :tmp_dir
 
@@ -103,7 +103,7 @@ defmodule Operator.UsageScreenTest do
     view = mount_usage(dir, %{signed_in: [:openai_codex], refresh: refresh})
     assert text(view) =~ "asking the usage endpoint…"
     assert_receive {:refreshed, :openai_codex}
-    assert_receive {:operator_usage, :openai_codex, :ok} = done
+    assert_receive {:rho_usage, :openai_codex, :ok} = done
     view = render_info(view, done)
     shown = text(view)
     assert shown =~ "5 hours  [########..] 77%"
@@ -114,14 +114,14 @@ defmodule Operator.UsageScreenTest do
     view = mount_usage(dir, %{signed_in: [:openai_codex], refresh: failing})
     refute_receive {:refreshed, _}, 50
     view = render_info(view, {:tap, :refresh})
-    assert_receive {:operator_usage, :openai_codex, {:error, _}} = failed
+    assert_receive {:rho_usage, :openai_codex, {:error, _}} = failed
     assert text(render_info(view, failed)) =~ "usage endpoint: HTTP 429"
 
     # a refresh that raises still ends the "asking…"
     raising = fn _d, _p -> raise "disk full" end
     view = mount_usage(dir, %{signed_in: [:openai_codex], refresh: raising})
     view = render_info(view, {:tap, :refresh})
-    assert_receive {:operator_usage, :openai_codex, {:error, _}} = crashed
+    assert_receive {:rho_usage, :openai_codex, {:error, _}} = crashed
     shown = text(render_info(view, crashed))
     assert shown =~ "usage endpoint: disk full"
   end

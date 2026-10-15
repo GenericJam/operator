@@ -3,9 +3,9 @@ defmodule Operator.Core.Tools.FileRead do
   Core tool: read a file. Text comes as lines (numbered from `offset`);
   a picture comes as the picture, scaled down, with its metadata
   (`Operator.Core.Images`); anything else is described. A long result goes
-  through the output budget like any tool's (`Operator.Core.Artifacts`).
+  through the output budget like any tool's (`Rho.Artifacts`).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Images
   alias Operator.Core.Tools.FileTool

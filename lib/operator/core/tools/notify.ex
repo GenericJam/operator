@@ -1,6 +1,6 @@
 defmodule Operator.Core.Tools.Notify do
   @moduledoc "Core tool: a local notification on the phone, now or after a delay."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Tools.PhoneTool
 

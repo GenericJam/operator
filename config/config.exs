@@ -11,7 +11,7 @@ config :mob, :repo, Operator.Repo
 
 # The Mishka tags front screens write in `~MOB` (mob_mishka's composites and
 # their slot tags, as `mix mob.new` lists them). Front screens compile on the
-# phone (Operator.Core.Dyn), where the sigil can't read the plugin's manifest,
+# phone (Rho.Dyn), where the sigil can't read the plugin's manifest,
 # and the manifest has no slot tags: without this list every one warns.
 config :mob, :extra_tags, ~w(
   MishkaAccordion
@@ -127,15 +127,15 @@ config :mob, :extra_tags, ~w(
 
 # llm_db reads priv/llm_db/snapshot.json at runtime by default, but mob_dev
 # ships deps' ebins without their priv/, and Application.app_dir/2 does not
-# resolve on device. Operator.LLMCatalog embeds an Anthropic + OpenAI trim of
-# the snapshot and sets :snapshot_path at boot. (`compile_embed: true` also
+# resolve on device. Rho.LLMCatalog embeds a trim of the snapshot to the
+# providers rho calls and sets :snapshot_path at boot. (`compile_embed: true` also
 # works but embeds all 230 providers: a 12.9 MB beam and a ~19 s first lookup
 # on the emulator; it is compile_env, so switching needs
 # `mix deps.compile llm_db --force`.)
 config :llm_db, compile_embed: false
 
 # req_llm loads a .env file from the CWD at boot by default; there is none
-# on the phone, and the model tokens come from the sign-ins (Operator.Auth).
+# on the phone, and the model tokens come from the sign-ins (Rho.Auth).
 config :req_llm, load_dotenv: false
 
 # The spike agent's model is the :operator alias, resolved when an agent
@@ -176,6 +176,42 @@ config :mob_rapier, :otp_app, :operator
 # to compile until it knows how to count string length.
 config :ash, default_string_length_count: :codepoints
 
+# The agent core (rho): Operator's seams. The data dir is rho's default,
+# MOB_DATA_DIR (the app's private files; tests set it too), so sessions,
+# settings.json, usage.json and Dyn generations stay where they were.
+config :rho,
+  # Sessions keep their `operator.*` customType entries.
+  namespace: "operator",
+  app_name: "Operator",
+  hints: [sign_in: "from [menu] › accounts", switch_model: "in [menu] › model"],
+  # The Keychain / Keystore NIF (or a 0600 file per key off the phone),
+  # under the names existing installs keep their sign-ins in.
+  credential_store: Operator.SecureStore,
+  system_prompt: {Operator.Core, :system_prompt, []},
+  open_url: {Mob.Device, :open_url, []}
+
+# The Dyn layer: the agent's own code. The namespace and data dir name the
+# generations on disk, so they stay Operator's.
+config :rho, :dyn,
+  enabled: true,
+  namespace: Operator.Dyn,
+  app: :operator,
+  core: [Operator],
+  allowed: [Operator.Core.Files, Operator.Core.Tflite, Operator.Core.Terminal],
+  check: [
+    # Operator.Core.Files' caller-side functions: its roots and grants.
+    partial: %{
+      Operator.Core.Files => ~w(roots workspace resolve needs_access? real_path grant_capability)a
+    },
+    banned_erlang: %{operator_secure_store: "holds the sign-ins"},
+    banned: %{
+      File =>
+        "touches the file system directly (use Operator.Core.Files: the same calls, inside its roots)"
+    }
+  ],
+  screens: Operator.Core.DynScreens,
+  guide: {Operator.Core, :dyn_guide, []}
+
 config :mob_deliver,
   trusted_publish_key: trusted_publish_key,
   app: "com.genericjam.operator",
@@ -198,5 +234,5 @@ else
   # One "stable launch" for both layers: the Dyn Keeper's (first frame,
   # then 10 s or the user leaving) also ends a delivered update's
   # probation (Operator.Deliver.launch_stable/0).
-  config :operator, Operator.Core.Dyn, on_stable: {Operator.Deliver, :launch_stable, []}
+  config :rho, :dyn, on_stable: {Operator.Deliver, :launch_stable, []}
 end

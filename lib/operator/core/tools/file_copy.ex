@@ -4,7 +4,7 @@ defmodule Operator.Core.Tools.FileCopy do
   be used: how the agent hands a file out (to Download on Android) or
   brings one in.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Files
   alias Operator.Core.Tools.FileTool

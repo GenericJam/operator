@@ -1,6 +1,6 @@
 defmodule Operator.Core.Tools.Notes do
   @moduledoc "Core tool: append to or read a plain-text notes file in the app's data dir."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @file_name "notes.md"
 

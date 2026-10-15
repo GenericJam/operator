@@ -6,7 +6,7 @@ defmodule Operator.Core.Front.Host do
   process: a front that raises, exits or hangs stops this process (or
   leaves its last view on screen), and the toggle and the terminal keep
   working. Its crash counts against its Dyn generation (the screens'
-  `mount/3` registers it with the Keeper, `Operator.Core.Dyn.Compiler`).
+  `mount/3` registers it with the Keeper, `Rho.Dyn.Compiler`).
 
   It does for the front what `Mob.Screen.Server` and `Mob.Router` do for a
   mob screen: holds the front's own navigation stack (the top first; a
@@ -184,7 +184,7 @@ defmodule Operator.Core.Front.Host do
   # ...: the NIF replies to its caller, this process) answers here raw.
   # Decoded as `Mob.Screen.Server` decodes it, so a front screen gets what
   # any mob screen gets, and its paths granted. Front code can't forge one:
-  # `Operator.Core.Dyn.Check` keeps `:mob_file_result` out of Dyn code, as
+  # `Rho.Dyn.Check` keeps `:mob_file_result` out of Dyn code, as
   # it keeps the router's name out.
   defp handle(s, {:mob_file_result, _event, _sub, _json} = raw) do
     case decode_native(raw) do

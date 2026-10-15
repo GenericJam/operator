@@ -65,14 +65,14 @@ defmodule Operator.Cluster.Identity do
   @doc "This node's identity, made and stored on first use."
   @spec load_or_create() :: {:ok, t()} | {:error, term()}
   def load_or_create do
-    case Operator.SecureStore.get(@account) do
+    case Rho.CredentialStore.get(@account) do
       {:ok, pem} when is_binary(pem) ->
         from_pem(pem)
 
-      {:ok, nil} ->
+      :error ->
         identity = new()
 
-        with :ok <- Operator.SecureStore.put(@account, to_pem(identity)),
+        with :ok <- Rho.CredentialStore.put(@account, to_pem(identity)),
              do: {:ok, identity}
 
       {:error, _} = error ->
@@ -83,16 +83,16 @@ defmodule Operator.Cluster.Identity do
   @doc "The stored identity, without making one."
   @spec load() :: {:ok, t()} | {:error, term()}
   def load do
-    case Operator.SecureStore.get(@account) do
+    case Rho.CredentialStore.get(@account) do
       {:ok, pem} when is_binary(pem) -> from_pem(pem)
-      {:ok, nil} -> {:error, :no_identity}
+      :error -> {:error, :no_identity}
       {:error, _} = error -> error
     end
   end
 
   @doc "Removes the stored identity (a cluster reset with a new identity)."
   @spec delete() :: :ok | {:error, term()}
-  def delete, do: Operator.SecureStore.delete(@account)
+  def delete, do: Rho.CredentialStore.delete(@account)
 
   @doc "A fresh identity named `operator_<10 random hex digits>`."
   @spec new() :: t()

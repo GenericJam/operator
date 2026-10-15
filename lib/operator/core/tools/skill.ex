@@ -12,7 +12,7 @@ defmodule Operator.Core.Tools.Skill do
   is read too. Names are lowercase letters, digits and dashes, so a name
   can never reach outside the skills dir.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.SelfKnowledge
 

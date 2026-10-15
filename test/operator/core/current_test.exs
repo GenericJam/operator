@@ -1,13 +1,13 @@
 defmodule Operator.Core.CurrentTest do
-  # async: false: the sign-ins (Operator.Auth) are app-wide.
+  # async: false: the sign-ins (Rho.Auth) are app-wide.
   use ExUnit.Case, async: false
 
   import Operator.Test.LoopHelpers, only: [collect: 0]
   import Operator.Test.ObserverHelpers
 
-  alias Operator.Auth
   alias Operator.Core.Current
-  alias Operator.Core.Loop
+  alias Rho.Auth
+  alias Rho.Loop
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -16,7 +16,7 @@ defmodule Operator.Core.CurrentTest do
 
   setup %{tmp_dir: dir} do
     start_supervised!(Auth)
-    on_exit(fn -> Operator.SecureStore.delete("auth:anthropic") end)
+    on_exit(fn -> Rho.CredentialStore.delete("auth:anthropic") end)
 
     elsewhere = Path.join(dir, "from_omp.jsonl")
     File.cp!(@fixture, elsewhere)
@@ -33,7 +33,7 @@ defmodule Operator.Core.CurrentTest do
 
     snap = Loop.snapshot(loop)
     # omp ran it on anthropic:claude-opus-5-5, and the phone isn't signed in to Anthropic
-    assert snap.model == Operator.Core.default_model()
+    assert snap.model == Rho.Config.default_model()
     assert Enum.count(snap.entries) == 78
 
     :ok = Loop.subscribe(loop)

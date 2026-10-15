@@ -18,7 +18,7 @@ defmodule Operator.Auth.Transfer do
   Only `type`, `refresh`, `accountId` and `email` travel: an OpenAI access
   token alone is ~1.8 kB, more than a terminal QR the camera reads well.
   The phone stores `"access" => ""` with `"expires" => 0`, so
-  `Operator.Auth.access_token/1` refreshes on first use; the grant was
+  `Rho.Auth.credential/1` refreshes on first use; the grant was
   minted for the phone and nothing else holds it.
 
   Words come from the EFF short wordlist 1 (1296 words, CC BY 3.0,
@@ -111,7 +111,7 @@ defmodule Operator.Auth.Transfer do
   @doc """
   Opens a scanned QR link with the words typed on the phone (any case,
   separated by spaces or commas). Returns the provider and the credentials
-  to hand to `Operator.Auth.put/2`. `opts[:now]` (ms) is the time the age
+  to hand to `Rho.Auth.put/2`. `opts[:now]` (ms) is the time the age
   check measures against.
   """
   @spec open(String.t(), String.t(), keyword()) :: {:ok, atom(), map()} | {:error, reason()}
@@ -205,7 +205,7 @@ defmodule Operator.Auth.Transfer do
   end
 
   defp provider(name) do
-    case Enum.find(Operator.Auth.providers(), &(Atom.to_string(&1) == name)) do
+    case Enum.find(Rho.Auth.providers(), &(Atom.to_string(&1) == name)) do
       nil -> {:error, :unknown_provider}
       provider -> {:ok, provider}
     end

@@ -5,7 +5,7 @@ defmodule Operator.Core.Tools.Logs do
   how the agent sees the crash behind a screen that froze, a tool that
   failed quietly or a plugin's error, without a Mac on adb.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.LogRing
 

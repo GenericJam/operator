@@ -1,6 +1,6 @@
 defmodule Operator.Test.FakeLLM do
   @moduledoc """
-  A scripted `Operator.Core.LLM`: each model call takes the next reply from
+  A scripted `Rho.LLM`: each model call takes the next reply from
   the script and plays its steps, streaming through the loop's sink.
 
   Steps: `{:text, s}`, `{:thinking, s}`, `{:tool_call, id, name, args}`,
@@ -9,7 +9,7 @@ defmodule Operator.Test.FakeLLM do
 
   Every call sends the test `{:llm_request, request, worker_pid}`.
   """
-  @behaviour Operator.Core.LLM
+  @behaviour Rho.LLM
 
   @spec start([[term()]], pid()) :: {:ok, pid()}
   def start(script, test \\ self()),
@@ -87,7 +87,7 @@ end
 
 defmodule Operator.Test.Tools.Echo do
   @moduledoc "Test tool: returns `text` after `sleep_ms`."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @impl true
   def name, do: "echo"
@@ -106,7 +106,7 @@ end
 
 defmodule Operator.Test.Tools.Crash do
   @moduledoc "Test tool: raises."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @impl true
   def name, do: "crash"
@@ -120,7 +120,7 @@ end
 
 defmodule Operator.Test.Tools.Slow do
   @moduledoc "Test tool: outlives its 50 ms timeout."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @impl true
   def name, do: "slow"
@@ -139,7 +139,7 @@ end
 
 defmodule Operator.Test.Tools.Picture do
   @moduledoc "Test tool: answers with an image and a caption."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @impl true
   def name, do: "picture"

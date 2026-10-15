@@ -5,7 +5,7 @@ defmodule Operator.Core.Tools.PickPhotos do
   taken. The same pick as the chat's `[attach] › photo library`
   (`Operator.Core.Attachments.pick_photos/2`).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Attachments
   alias Operator.Core.Term

@@ -16,7 +16,7 @@ defmodule Operator.Core.Tools.FrontScroll do
   show-and-capture (tests have no screen), `ctx[:foreground?]`
   `Front.app_foreground?/0` (the cover warning, as `front_screenshot`).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Front
   alias Operator.Core.Tools.FrontScreenshot

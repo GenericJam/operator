@@ -5,9 +5,9 @@ defmodule Operator.Core.VoiceTest do
   import Operator.Test.ObserverHelpers
 
   alias Operator.Core.Current
-  alias Operator.Core.Loop
   alias Operator.Core.Voice
   alias Operator.Test.FakeSpeech
+  alias Rho.Loop
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -219,13 +219,13 @@ defmodule Operator.Core.VoiceTest do
         keeper: :no_keeper
       )
 
-    send(voice, {:operator_dyn, %{type: :candidate, gen: 3, rationale: "x"}})
+    send(voice, {:rho_dyn, %{type: :candidate, gen: 3, rationale: "x"}})
     assert_receive {:speak, "A change to Operator, generation 3, needs your approval."}
 
-    send(voice, {:operator_dyn, %{type: :reverted, from: 3, to: 2, reason: "x", crashes: []}})
+    send(voice, {:rho_dyn, %{type: :reverted, from: 3, to: 2, reason: "x", crashes: []}})
     assert_receive {:speak, "Generation 3 kept crashing and was reverted."}
 
-    send(voice, {:operator_dyn, %{type: :proven, gen: 2}})
+    send(voice, {:rho_dyn, %{type: :proven, gen: 2}})
     refute_receive {:speak, _}, 100
 
     quiet =
@@ -236,7 +236,7 @@ defmodule Operator.Core.VoiceTest do
         keeper: :no_keeper
       )
 
-    send(quiet, {:operator_dyn, %{type: :candidate, gen: 4, rationale: "x"}})
+    send(quiet, {:rho_dyn, %{type: :candidate, gen: 4, rationale: "x"}})
     refute_receive {:speak, _}, 100
   end
 end

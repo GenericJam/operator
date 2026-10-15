@@ -5,10 +5,8 @@ defmodule Operator.Boot do
   `[{step, ms}]` plus the BEAM's own uptime at the end of boot.
   """
 
-  alias Operator.Auth
-  alias Operator.Auth.Login
-  alias Operator.Core.Dyn
   alias Operator.Core.DynTheme
+  alias Rho.Dyn
 
   require Logger
 
@@ -28,7 +26,7 @@ defmodule Operator.Boot do
             do: Mob.DNS.resolve(host)
       end,
       tz_data: fn -> :ok = Operator.TzData.install!() end,
-      llm_catalog: fn -> :ok = Operator.LLMCatalog.install!() end,
+      llm_catalog: fn -> :ok = Rho.LLMCatalog.install!() end,
       certs: fn -> :ok = Operator.Certs.install!() end,
       # The 3D models front screens load by name (Mob.Scene3d's asset root).
       scene3d_assets: fn -> :ok = Operator.Scene3dAssets.install!() end,
@@ -37,28 +35,26 @@ defmodule Operator.Boot do
       # llm_db, finch, req).
       apps: fn -> {:ok, _} = Application.ensure_all_started(:jido_ai) end,
       jido_instance: fn -> {:ok, _} = Operator.Jido.start_link() end,
-      llmdb_first_lookup: fn -> {:ok, _} = ReqLLM.model(Operator.Core.default_model()) end,
+      llmdb_first_lookup: fn -> {:ok, _} = ReqLLM.model(Rho.Config.default_model()) end,
       repo: fn ->
         {:ok, _} = Application.ensure_all_started(:ecto_sqlite3)
         {:ok, _} = Operator.Repo.start_link()
       end,
-      # The provider sign-ins (Operator.Auth, which model calls take their
-      # tokens from) and the browser sign-in flow. Earlier builds kept an API
-      # key in the secure store (or, before that, a file); nothing uses it.
-      auth: fn ->
-        _ = Operator.SecureStore.delete("openrouter_api_key")
-        _ = File.rm(Path.join(Operator.Paths.data_dir(), "openrouter.key"))
-        {:ok, _} = Auth.start_link()
-        {:ok, _} = Login.start_link()
+      # Earlier builds kept an API key in the secure store (or, before
+      # that, a file); nothing uses it.
+      legacy_key: fn ->
+        _ = Rho.CredentialStore.delete("openrouter_api_key")
+        _ = File.rm(Path.join(Rho.Config.data_dir(), "openrouter.key"))
       end,
-      # The agent loop, sessions, core tools (resumes the latest session) and
-      # the Dyn keeper.
+      # rho (the provider sign-ins, the browser sign-in flow, the tool
+      # registry, the loops, the Dyn keeper) and the rest of the Core: the
+      # front, sessions (resumes the latest one), the run observers.
       core: fn -> {:ok, _} = Operator.Core.start_link() end,
       # A delivered Core update's probation ends with the Keeper's stable
       # launch, not at mob_deliver's first frame (Operator.Deliver).
       deliver: fn -> :ok = Operator.Deliver.take_over_probation() end,
       # The current Dyn generation (or boot probation's revert, or safe mode:
-      # Core only), see Operator.Core.Dyn.Keeper. It records the Core update
+      # Core only), see Rho.Dyn.Keeper. It records the Core update
       # this launch runs; a failed launch whose update mob_deliver just
       # rolled back doesn't count against the generation.
       dyn: fn -> %{} = Dyn.boot(Operator.Deliver.boot_opts()) end,

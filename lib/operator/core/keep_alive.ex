@@ -67,13 +67,13 @@ defmodule Operator.Core.KeepAlive do
     do: {:reply, %{on: s.on, running: MapSet.to_list(s.running)}, s}
 
   @impl true
-  def handle_info({:operator_core, sid, %{type: :agent_start}}, s),
+  def handle_info({:rho, sid, %{type: :agent_start}}, s),
     do: {:noreply, sync(%{s | running: MapSet.put(s.running, sid)})}
 
-  def handle_info({:operator_core, sid, %{type: :agent_end}}, s),
+  def handle_info({:rho, sid, %{type: :agent_end}}, s),
     do: {:noreply, sync(%{s | running: MapSet.delete(s.running, sid)})}
 
-  def handle_info({:operator_core, _sid, _event}, s), do: {:noreply, s}
+  def handle_info({:rho, _sid, _event}, s), do: {:noreply, s}
 
   def handle_info({:grace_over, token}, %{grace: {_timer, token}} = s),
     do: {:noreply, %{s | grace: nil, on: not call(s, :stop)}}

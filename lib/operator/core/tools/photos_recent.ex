@@ -7,7 +7,7 @@ defmodule Operator.Core.Tools.PhotosRecent do
   `ctx[:list_media]` (`(count -> {:ok, items} | {:error, text})`) replaces
   the library in tests.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Attachments
   alias Operator.Core.Tools.PhoneTool

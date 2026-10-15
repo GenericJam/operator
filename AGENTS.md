@@ -6,9 +6,18 @@ Jido.AI ReAct loop, the session stored on device, phone tools, and
 self-modification (it compiles new screens/tools for itself, gated by tests
 and a biometric approval). The model is Claude or ChatGPT on the user's
 subscription, signed in with omp's OAuth flows from the terminal's
-`[menu]` › accounts (`Operator.MenuScreen`, `Operator.Auth`); the chat has no
+`[menu]` › accounts (`Operator.MenuScreen`, `Rho.Auth`); the chat has no
 slash commands. Read `docs/SPIKE.md` first: it records what was
 proven on an emulator, the numbers, and the recommended architecture.
+
+The agent core (loop, sessions, compaction, models, sign-in, the tool
+runner and registry, the Dyn layer) is rho (`~/code/rho`, GitHub
+GenericJam/rho, a dependency pinned by commit until it is on Hex), shared
+with Bezalel. Operator plugs into it through `config :rho` (config/config.exs):
+its secure store, system prompt, tools (`Operator.Core.tools/0`), the
+`"operator"` session namespace, the `Operator.Dyn` namespace and check
+lists, its Dyn screens and seed. A change to the core goes to rho first,
+then Operator moves the pin.
 
 ## Working on it
 
@@ -24,7 +33,7 @@ proven on an emulator, the numbers, and the recommended architecture.
 
 A native deploy is needed for dependency, plugin, native, `priv/`
 (migrations), `config/*.exs` and `mob.exs` changes. Operator's own Elixir
-code can go over the air instead (`Operator.Deliver`, docs/DESIGN.md §1),
+code and rho's can go over the air instead (`Operator.Deliver`, docs/DESIGN.md §1),
 from the Mac on the home network:
 
 ```bash

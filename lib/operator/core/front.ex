@@ -39,13 +39,13 @@ defmodule Operator.Core.Front do
   """
   use GenServer
 
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.Compiler
-  alias Operator.Core.Dyn.Registry
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Front.Host
   alias Operator.Core.Settings
   alias Operator.Core.Term
+  alias Rho.Dyn
+  alias Rho.Dyn.Compiler
+  alias Rho.Dyn.Registry
 
   require Logger
 
@@ -366,7 +366,7 @@ defmodule Operator.Core.Front do
 
     s = %{
       keeper: keeper,
-      dir: Keyword.get_lazy(opts, :dir, &Operator.Paths.data_dir/0),
+      dir: Keyword.get_lazy(opts, :dir, &Rho.Config.data_dir/0),
       subs: %{},
       host: nil,
       mon: nil,
@@ -545,20 +545,20 @@ defmodule Operator.Core.Front do
   # The seed was just installed or updated: when that changed the start
   # screen (a first install, or a seed with a new default), the front opens
   # on it, whatever showed before; otherwise it stays where it was.
-  def handle_info({:operator_dyn, %{type: :activated, seed: true}}, s) do
+  def handle_info({:rho_dyn, %{type: :activated, seed: true}}, s) do
     old = s.start
     s = sync(s)
     s = if s.start != old, do: save_stack(%{s | stack: []}), else: s
     {:noreply, restart_if_running(s)}
   end
 
-  def handle_info({:operator_dyn, %{type: type}}, s)
+  def handle_info({:rho_dyn, %{type: type}}, s)
       when type in [:activated, :reverted, :safe_mode],
       do: {:noreply, s |> sync() |> restart_if_running()}
 
   # A generation rebuilt for a new Core is registered now (same number, new
   # screens), or its rebuild failed.
-  def handle_info({:operator_dyn, %{type: type}}, s) when type in [:loaded, :load_failed],
+  def handle_info({:rho_dyn, %{type: type}}, s) when type in [:loaded, :load_failed],
     do: {:noreply, %{s | gen: nil} |> sync() |> restart_if_running()}
 
   def handle_info(_message, s), do: {:noreply, s}

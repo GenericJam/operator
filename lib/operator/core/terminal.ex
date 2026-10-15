@@ -4,7 +4,7 @@ defmodule Operator.Core.Terminal do
   a draft in the composer (the component library's "use this" hands a
   component to the agent this way). The one Core API besides the tool
   behaviour, the files and TFLite that Dyn code may call
-  (`Operator.Core.Dyn.Check`).
+  (`Rho.Dyn.Check`).
 
   It's safe to hand Dyn code because it can't do anything the user
   wouldn't see and confirm: the draft is never sent (the user reads it and

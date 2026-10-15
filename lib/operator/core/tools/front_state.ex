@@ -7,7 +7,7 @@ defmodule Operator.Core.Tools.FrontState do
   assigns may hold a photo's bytes or a long list. Acts on `ctx[:front]` if
   given.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Front
   alias Operator.Core.Tools.FrontTap

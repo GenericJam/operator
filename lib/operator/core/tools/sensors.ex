@@ -6,7 +6,7 @@ defmodule Operator.Core.Tools.Sensors do
   when a sensor says it's missing, then tries once more.
   `ctx[:sensors]` replaces the backend in tests.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Term
   alias Operator.Core.Tools.PhoneTool

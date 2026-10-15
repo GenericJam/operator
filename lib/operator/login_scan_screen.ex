@@ -5,7 +5,7 @@ defmodule Operator.LoginScanScreen do
 
     * A login from `mix operator.login anthropic|openai`: takes the six
       words shown next to it, opens the code with `Operator.Auth.Transfer`
-      and stores the login with `Operator.Auth.put/2`. The chat opens this
+      and stores the login with `Rho.Auth.put/2`. The chat opens this
       screen at the words, with `%{link: link}`, for a login link scanned
       with another app.
     * A handoff part from `mix operator.handoff`: counted, then on to the
@@ -19,12 +19,12 @@ defmodule Operator.LoginScanScreen do
   """
   use Mob.Screen
 
-  alias Operator.Auth
   alias Operator.Auth.Transfer
   alias Operator.Deliver
   alias Operator.Links
   alias Operator.LoginScanScreen.Native
   alias Operator.Toggle
+  alias Rho.Auth
 
   def mount(params, _session, socket) do
     socket =
@@ -33,7 +33,7 @@ defmodule Operator.LoginScanScreen do
         qr: nil,
         words: "",
         deliver: nil,
-        data_dir: Map.get(params, :data_dir) || Operator.Paths.data_dir(),
+        data_dir: Map.get(params, :data_dir) || Rho.Config.data_dir(),
         line:
           "On the Mac, in the operator checkout: mix operator.login anthropic (or openai) " <>
             "to sign in, mix operator.handoff to carry on from omp, " <>

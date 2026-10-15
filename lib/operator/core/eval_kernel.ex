@@ -41,7 +41,7 @@ defmodule Operator.Core.EvalKernel do
 
   alias Operator.Core.EvalKernel.Capture
   alias Operator.Core.EvalKernel.Evaluator
-  alias Operator.Core.ToolRegistry
+  alias Rho.ToolRegistry
 
   @max_sessions 8
   @idle_ms 30 * 60_000
@@ -259,7 +259,7 @@ defmodule Operator.Core.EvalKernel do
   given. Answers `{:ok, text, session}` (what to keep for the next call;
   nil when there is nothing to keep) or `{:error, text, nil}`. Runs in
   the caller, which waits up to `timeout_ms`, or until it gets
-  `{:operator_core_stop, loop}` (the user stopped the run). Other options:
+  `{:rho_stop, loop}` (the user stopped the run). Other options:
   `:notes` (lines to show with the result), and for tests
   `:max_heap_bytes`, `:max_binding_bytes`.
   """
@@ -290,7 +290,7 @@ defmodule Operator.Core.EvalKernel do
         {:DOWN, ^mon, :process, ^pid, reason} ->
           {:error, exit_text(reason, heap_bytes) <> lost(kept?), [], nil}
 
-        {:operator_core_stop, _loop} ->
+        {:rho_stop, _loop} ->
           kill(pid, mon, ref)
           {:error, "Stopped by the user." <> lost(kept?), [], nil}
       after
@@ -426,7 +426,7 @@ defmodule Operator.Core.EvalKernel do
   defp inbox_call(other), do: other
 
   # Dyn code names its modules `Operator.Dyn.Menu`; they are compiled as
-  # `Operator.Dyn.G<n>.Menu` (`Operator.Core.Dyn.Compiler.rewrite/2`). An
+  # `Operator.Dyn.G<n>.Menu` (`Rho.Dyn.Compiler.rewrite/2`). An
   # alias to a module of the running generation, or to a namespace one of
   # them is under (`Operator.Dyn.Showcase.Phone`), points at that
   # generation's; any other is left as written, so a typo still says the
@@ -457,7 +457,7 @@ defmodule Operator.Core.EvalKernel do
   # The running generation's logical names (and the namespaces above them)
   # to its modules: `"Showcase.Phone" => Operator.Dyn.G43.Showcase.Phone`.
   defp dyn_names do
-    for {_key, mod} <- Operator.Core.Dyn.Registry.entries(Operator.Core.Dyn.Keeper),
+    for {_key, mod} <- Rho.Dyn.Registry.entries(Rho.Dyn.Keeper),
         ["Operator", "Dyn", "G" <> _ = gen | rest] <- [Module.split(mod)],
         n <- 1..length(rest)//1,
         into: %{} do
@@ -548,16 +548,17 @@ defmodule Operator.Core.EvalKernel do
   @spec live_secrets() :: [String.t()]
   def live_secrets do
     tokens =
-      for provider <- Operator.Auth.providers(),
-          {:ok, creds} <- [safely(fn -> Operator.Auth.get(provider) end)],
-          # Operator.Auth's credential shape (auth.ex): "access" and "refresh".
-          key <- ~w(access refresh),
+      for provider <- Rho.Auth.providers(),
+          {:ok, creds} <- [safely(fn -> Rho.Auth.get(provider) end)],
+          # Rho.Auth's credential shapes: OAuth's "access" and "refresh", an
+          # API key's "key".
+          key <- ~w(access refresh key),
           do: creds[key]
 
     cookie = if Node.alive?(), do: Atom.to_string(Node.get_cookie())
 
     stored =
-      case safely(fn -> Operator.SecureStore.get(@cluster_cookie_account) end) do
+      case safely(fn -> Rho.CredentialStore.get(@cluster_cookie_account) end) do
         {:ok, cookie} -> cookie
         _ -> nil
       end

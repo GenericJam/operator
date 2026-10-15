@@ -1,7 +1,7 @@
 defmodule Operator.ChatScreen do
   @moduledoc """
   The app's root after sign-in: a terminal onto the current session's
-  `Operator.Core.Loop`.
+  `Rho.Loop`.
 
   A transcript `:lazy_list` fills the screen (virtualized natively; one item
   per line, each a `:wrap` of styled text from `Operator.Core.Term`, or with
@@ -57,7 +57,7 @@ defmodule Operator.ChatScreen do
   A proposed self-change shows with its diff; on the phone its approve chip
   is `Operator.Core.ApproveButton` (the system prompt: fingerprint or face,
   or the screen lock's PIN, pattern, password or passcode), whose pass
-  activates it. With approve all on (`Operator.Core.Dyn.AutoApprove`, set in
+  activates it. With approve all on (`Rho.Dyn.AutoApprove`, set in
   [menu]) a candidate activates as it arrives, through the same
   confirmation and activation, with a notice and `auto` in the status line;
   if that fails the approval bar shows with the reason.
@@ -69,26 +69,26 @@ defmodule Operator.ChatScreen do
   """
   use Mob.Screen
 
-  alias Operator.Auth
   alias Operator.ChatScreen.Follow
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
   alias Operator.Core.Attachments
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.DynTheme
-  alias Operator.Core.Loop
-  alias Operator.Core.Models
   alias Operator.Core.Phone
-  alias Operator.Core.Session
   alias Operator.Core.Settings
   alias Operator.Core.Term
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
-  alias Operator.Core.Usage
   alias Operator.Links
   alias Operator.TermUI, as: UI
   alias Operator.Toggle
+  alias Rho.Auth
+  alias Rho.Dyn
+  alias Rho.Dyn.AutoApprove
+  alias Rho.Loop
+  alias Rho.Models
+  alias Rho.Session
+  alias Rho.Usage
 
   @flush_ms 100
   @stick_ms 60
@@ -120,7 +120,7 @@ defmodule Operator.ChatScreen do
 
   def mount(params, _session, socket) do
     loop = Map.get(params, :loop) || Operator.Core.current()
-    settings_dir = Map.get(params, :settings_dir) || Operator.Paths.data_dir()
+    settings_dir = Map.get(params, :settings_dir) || Rho.Config.data_dir()
     _ = Dyn.subscribe()
     :ok = Phone.register_host(self())
     :ok = DynTheme.subscribe()
@@ -199,10 +199,10 @@ defmodule Operator.ChatScreen do
 
   # ── loop events ──
 
-  def handle_info({:operator_core, sid, event}, %{assigns: %{sid: sid}} = socket),
+  def handle_info({:rho, sid, event}, %{assigns: %{sid: sid}} = socket),
     do: {:noreply, on_event(event, socket)}
 
-  def handle_info({:operator_core, _other, _event}, socket), do: {:noreply, socket}
+  def handle_info({:rho, _other, _event}, socket), do: {:noreply, socket}
 
   def handle_info(:flush, socket) do
     socket = Mob.Socket.assign(socket, :flush_timer, nil)
@@ -544,11 +544,11 @@ defmodule Operator.ChatScreen do
     {:noreply, socket |> Mob.Socket.assign(:voice, next) |> toast("Voice: #{voice_hint(next)}")}
   end
 
-  # ── self-modification proposals (Operator.Core.Dyn) ──
+  # ── self-modification proposals (Rho.Dyn) ──
 
   # The approval bar takes its room from the transcript once laid out, after
   # repaint's own stick: a following list sticks again then.
-  def handle_info({:operator_dyn, %{type: :candidate, gen: n}}, socket) do
+  def handle_info({:rho_dyn, %{type: :candidate, gen: n}}, socket) do
     socket = Mob.Socket.assign(socket, :auto_approve, AutoApprove.on?())
 
     if socket.assigns.auto_approve,
@@ -556,7 +556,7 @@ defmodule Operator.ChatScreen do
       else: {:noreply, show_proposal(socket, n)}
   end
 
-  def handle_info({:operator_dyn, event}, socket) do
+  def handle_info({:rho_dyn, event}, socket) do
     gone =
       event[:type] in [:superseded, :discarded, :activated] and
         match?(%{gen: _}, socket.assigns.proposal) and socket.assigns.proposal.gen == event[:gen]
@@ -653,11 +653,11 @@ defmodule Operator.ChatScreen do
   def handle_info({:operator_menu, :auto_approve}, socket),
     do: {:noreply, Mob.Socket.assign(socket, :auto_approve, AutoApprove.on?())}
 
-  def handle_info({:operator_auth, :changed}, socket),
+  def handle_info({:rho_auth, :changed}, socket),
     do: {:noreply, socket |> Mob.Socket.assign(:signed_in, signed_in?()) |> refresh()}
 
   # A model call (from any loop) or a usage page refresh changed the numbers.
-  def handle_info({:operator_usage, :changed}, socket), do: {:noreply, load_usage(socket)}
+  def handle_info({:rho_usage, :changed}, socket), do: {:noreply, load_usage(socket)}
 
   # A session file brought over from omp (scripts/session.sh push).
   def handle_info({:open_session, path}, socket) do
@@ -1502,7 +1502,7 @@ defmodule Operator.ChatScreen do
     ])
   end
 
-  # The model's subscription windows (`Operator.Core.Usage.status_text/3`).
+  # The model's subscription windows (`Rho.Usage.status_text/3`).
   defp limits(a) do
     with {:ok, provider} <- Auth.provider_for_model(a.model),
          text when is_binary(text) <- Usage.status_text(a.usage, provider) do
@@ -1512,7 +1512,7 @@ defmodule Operator.ChatScreen do
     end
   end
 
-  # The numbers as `Operator.Core.Usage` has them now.
+  # The numbers as `Rho.Usage` has them now.
   defp load_usage(socket),
     do: Mob.Socket.assign(socket, :usage, Usage.load(socket.assigns.settings_dir))
 

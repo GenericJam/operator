@@ -4,7 +4,7 @@ defmodule Operator.Diag do
   Every function returns plain data and never includes a token.
   """
 
-  alias Operator.Core.LLM.ReqLLM, as: Client
+  alias Rho.LLM.ReqLLM, as: Client
 
   @agent_apps [:jido, :jido_signal, :jido_action, :jido_ai, :req_llm, :llm_db, :finch, :req]
 
@@ -31,7 +31,7 @@ defmodule Operator.Diag do
   end
 
   @doc "Model catalog lookup of a model (the default one), timed."
-  def llmdb(spec \\ Operator.Core.default_model()) do
+  def llmdb(spec \\ Rho.Config.default_model()) do
     {us, res} = :timer.tc(fn -> ReqLLM.model(spec) end)
 
     case res do
@@ -85,19 +85,19 @@ defmodule Operator.Diag do
       boot: Operator.Boot.timings()
     }
 
-  # ── model calls (need a sign-in, Operator.Auth) ──
+  # ── model calls (need a sign-in, Rho.Auth) ──
 
   @doc """
   One streamed completion with the provider's sign-in, as the agent loop
   calls it. Returns time-to-first-token, total time, chunk count, and the text.
   """
-  def stream(model \\ Operator.Core.default_model()) do
+  def stream(model \\ Rho.Config.default_model()) do
     t0 = now()
 
     prompt = "Count from 1 to 10, one number per line, nothing else."
     request = %{model: model, system_prompt: "", messages: [], tools: [], max_tokens: 200}
 
-    with {:ok, opts} <- Client.options(request, &Operator.Auth.access_token/1),
+    with {:ok, opts} <- Client.options(request, &Rho.Auth.credential/1),
          {:ok, resp} <- ReqLLM.stream_text(model, prompt, opts) do
       {ttft, chunks, text} =
         resp

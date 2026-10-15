@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Operator.Publish do
       mix operator.publish --store /tmp/try_it   # anywhere else (a dry run)
 
   Compiles (the dev build, which `mix mob.deploy` ships), takes Operator's
-  own modules from the compile path (`Mix.Operator.Deliver` says which are
+  own modules and rho's (`Mix.Operator.Deliver` says which are
   left out and what needs a native deploy instead), signs the manifest
   with `~/.config/operator/deliver_signing.key` and stores everything in
   `~/.local/share/operator/deliver/`, which `mix operator.deliver.serve`
@@ -46,9 +46,9 @@ defmodule Mix.Tasks.Operator.Publish do
     # phone's build checks for.
     Mix.Task.run("app.config")
     config = Application.get_all_env(:mob_deliver)
-    ebin = Mix.Project.compile_path()
-    build = Deliver.build(ebin)
-    if build == %{}, do: Mix.raise("Nothing to publish in #{ebin}")
+    ebins = Deliver.ebins()
+    build = Deliver.build(ebins)
+    if build == %{}, do: Mix.raise("Nothing to publish in #{Enum.join(ebins, ", ")}")
 
     publish_opts = [
       root: store,

@@ -10,7 +10,7 @@ defmodule Operator.Core.Tools.Eval do
   its output captured and a timeout and heap cap, and a bounded store of
   each session's bindings.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.EvalKernel
 

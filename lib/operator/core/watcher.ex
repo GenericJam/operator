@@ -6,7 +6,7 @@ defmodule Operator.Core.Watcher do
   Current announces, and turns the bookkeeping messages into
   `{:loop_up, session_id, watcher}` / `{:loop_down, session_id, watcher}`.
   The observer gets the loops' events itself, as
-  `{:operator_core, session_id, event}`.
+  `{:rho, session_id, event}`.
   """
 
   alias Operator.Core.Current

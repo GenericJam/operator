@@ -19,7 +19,7 @@ defmodule Operator.Core.Files do
   `stat/1`, `mkdir_p/1`, `rm/1` and `expand/1` here are its file access,
   the same calls checked against the roots. The file tools' side
   (`roots/1`, `workspace/1`, `resolve/3`, ...) takes a caller's ctx and
-  is off limits to Dyn code (`Operator.Core.Dyn.Check`).
+  is off limits to Dyn code (`Rho.Dyn.Check`).
 
   What the phone's capabilities hand a screen (a `Mob.Files.pick/2` pick, a
   `MobCamera` photo, a `MobPhotos` pick, a recording) is a file in the app's
@@ -30,7 +30,7 @@ defmodule Operator.Core.Files do
   Merely guessing another cache filename is not authorization.
 
   `ctx[:file_roots]` replaces the roots (tests); otherwise the workspace is
-  under `ctx[:data_dir]` or `Operator.Paths.data_dir/0`. The app env
+  under `ctx[:data_dir]` or `Rho.Config.data_dir/0`. The app env
   `:operator, :app_temp` (a dir) replaces the temporary files' dir (tests).
   """
 
@@ -57,7 +57,7 @@ defmodule Operator.Core.Files do
   end
 
   defp default_roots(ctx) do
-    data_dir = Map.get_lazy(ctx, :data_dir, &Operator.Paths.data_dir/0)
+    data_dir = Map.get_lazy(ctx, :data_dir, &Rho.Config.data_dir/0)
 
     [
       %{

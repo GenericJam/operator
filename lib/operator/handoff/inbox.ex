@@ -18,7 +18,7 @@ defmodule Operator.Handoff.Inbox do
   sets least recently joined go first.
 
   Options: `:name` (default `#{inspect(__MODULE__)}`), `:dir` (default
-  `Operator.Paths.data_dir/0`), `:clock` (a function giving the time in
+  `Rho.Config.data_dir/0`), `:clock` (a function giving the time in
   ms), `:max_bytes`, `:prune_ms`.
   """
   use GenServer
@@ -51,7 +51,7 @@ defmodule Operator.Handoff.Inbox do
 
   @impl true
   def init(opts) do
-    path = Path.join(Keyword.get_lazy(opts, :dir, &Operator.Paths.data_dir/0), @file_name)
+    path = Path.join(Keyword.get_lazy(opts, :dir, &Rho.Config.data_dir/0), @file_name)
 
     s = %{
       path: path,

@@ -11,24 +11,24 @@ defmodule Operator.Core.Attachments do
   (`Operator.Core.Phone`, so the caller must not be the chat screen
   itself: it starts a task), then each file is kept in the workspace
   (`inbox/`; the agent's own snaps in `photos/`) so the agent can open it
-  again, and becomes a `t:Operator.Core.Session.attachment/0`:
+  again, and becomes a `t:Rho.Session.attachment/0`:
 
     * a picture: scaled down for the model (`Operator.Core.Images`), with
       its size, when and where it was taken (EXIF GPS when the file has it)
     * a text file: its text, up to the output budget
-      (`Operator.Core.Artifacts.budget/0`); the rest is read with file_read
+      (`Rho.Artifacts.budget/0`); the rest is read with file_read
     * a PDF: sent as a document to models that take PDFs
     * anything else: its path, size and type
 
   `ctx` is a tool's context (`:data_dir`, `:phone_host`, `:thumbnail`, …).
   """
 
-  alias Operator.Core.Artifacts
   alias Operator.Core.Files
   alias Operator.Core.Images
-  alias Operator.Core.Session
   alias Operator.Core.Tools.FileTool
   alias Operator.Core.Tools.PhoneTool
+  alias Rho.Artifacts
+  alias Rho.Session
 
   @type t :: Session.attachment()
   @type picked :: {:ok, [t()]} | {:ok, :cancelled} | {:error, String.t()}

@@ -3,7 +3,7 @@ defmodule Operator.Cluster.Ask do
   One question from another phone's agent, answered by this phone's agent
   (`Operator.Cluster.Remote` runs it, the asker's side is the `cluster`
   tool's `ask`). The question goes into this phone's current session like a
-  follow-up (`Operator.Core.Loop.ask/4`): a run starts if the agent is idle,
+  follow-up (`Rho.Loop.ask/4`): a run starts if the agent is idle,
   otherwise it comes up when the current run would stop. The answer is the
   agent's last text after the question, sent back once that run ends.
 
@@ -14,8 +14,8 @@ defmodule Operator.Cluster.Ask do
   (up to `:late_ms`, 10 min), arrives there as a message.
   """
 
-  alias Operator.Core.Loop
-  alias Operator.Core.Session
+  alias Rho.Loop
+  alias Rho.Session
 
   @reply_ms 110_000
   @late_ms 10 * 60_000
@@ -84,7 +84,7 @@ defmodule Operator.Cluster.Ask do
 
   defp flush_ends do
     receive do
-      {:operator_core, _sid, %{type: :agent_end}} -> flush_ends()
+      {:rho, _sid, %{type: :agent_end}} -> flush_ends()
     after
       0 -> :ok
     end
@@ -96,7 +96,7 @@ defmodule Operator.Cluster.Ask do
     left = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {:operator_core, _sid, %{type: :agent_end, reason: reason}} ->
+      {:rho, _sid, %{type: :agent_end, reason: reason}} ->
         case answer(Loop.snapshot(loop).entries, id) do
           {:ok, text} -> {:ok, text}
           :no_text -> {:error, "#{Node.self()}'s agent stopped without an answer (#{reason})"}

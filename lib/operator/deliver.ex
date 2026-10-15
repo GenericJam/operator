@@ -28,14 +28,14 @@ defmodule Operator.Deliver do
   **One stable launch for both layers.** mob_deliver keeps a new update on
   probation until a launch running it is stable, and rolls it back at the
   next launch otherwise; the Dyn Keeper does the same for a new generation
-  (`Operator.Core.Dyn.Keeper`). mob_deliver's own proof is the root
+  (`Rho.Dyn.Keeper`). mob_deliver's own proof is the root
   screen's first frame, the Keeper's is the first frame and then 10 s or the
   user leaving. `take_over_probation/0` removes mob_deliver's proof and the
   Keeper calls `launch_stable/0` instead, so a Core update that crashes the
   app in those 10 s is rolled back too. A launch whose update mob_deliver
   rolled back failed on the Core, not on the Dyn layer: `boot_opts/2` tells
   the Keeper which update each launch runs and which one was rolled back,
-  so it doesn't count that launch (`Operator.Core.Dyn.boot/1`).
+  so it doesn't count that launch (`Rho.Dyn.boot/1`).
   """
 
   alias Operator.Core.Settings
@@ -106,7 +106,7 @@ defmodule Operator.Deliver do
   for an update. Returns the sentence to show.
   """
   @spec save(String.t(), String.t()) :: String.t()
-  def save(endpoint, dir \\ Operator.Paths.data_dir()) when is_binary(endpoint) do
+  def save(endpoint, dir \\ Rho.Config.data_dir()) when is_binary(endpoint) do
     :ok = Settings.put_deliver_endpoint(endpoint, dir)
     put_endpoint(endpoint)
 
@@ -167,7 +167,7 @@ defmodule Operator.Deliver do
   application doesn't reset it.
   """
   @spec apply_saved_endpoint(String.t()) :: :ok
-  def apply_saved_endpoint(dir \\ Operator.Paths.data_dir()) do
+  def apply_saved_endpoint(dir \\ Rho.Config.data_dir()) do
     endpoint = Settings.deliver_endpoint(dir)
     if endpoint, do: put_endpoint(endpoint)
     :persistent_term.put(@booted_key, endpoint)
@@ -191,7 +191,7 @@ defmodule Operator.Deliver do
     do: Mob.Router.Hooks.unregister(:after_first_render, @first_frame_proof)
 
   @doc """
-  The launch is stable (`Operator.Core.Dyn.Keeper`'s `:on_stable`): ends a
+  The launch is stable (`Rho.Dyn.Keeper`'s `:on_stable`): ends a
   delivered update's probation. A no-op without mob_deliver or an update.
   """
   @spec launch_stable() :: :ok
@@ -204,7 +204,7 @@ defmodule Operator.Deliver do
   end
 
   @doc """
-  `Operator.Core.Dyn.boot/1`'s options for this launch: `core:` the update
+  `Rho.Dyn.boot/1`'s options for this launch: `core:` the update
   this launch runs (the active manifest's id, `nil` for the build's own
   code) and `core_rolled_back:` the update mob_deliver rolled back during
   this launch (its rollback notice is newer than the VM), if any.

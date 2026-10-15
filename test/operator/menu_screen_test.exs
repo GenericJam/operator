@@ -1,20 +1,20 @@
 defmodule Operator.MenuScreenTest do
-  # async: false: the sign-ins (Operator.Auth, Operator.Auth.Login) and the
+  # async: false: the sign-ins (Rho.Auth, Rho.Auth.Login) and the
   # renderer (Operator.Core.Term's theme) are app-wide.
   use Mob.ScreenCase, async: false
 
   import Operator.Test.LoopHelpers
 
-  alias Operator.Auth
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Front
-  alias Operator.Core.Loop
-  alias Operator.Core.Models
-  alias Operator.Core.Session
   alias Operator.Core.Term
   alias Operator.MenuScreen
   alias Operator.Test.FlakySecureStore
+  alias Rho.Auth
+  alias Rho.Dyn
+  alias Rho.Dyn.AutoApprove
+  alias Rho.Loop
+  alias Rho.Models
+  alias Rho.Session
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -24,7 +24,7 @@ defmodule Operator.MenuScreenTest do
   setup do
     start_supervised!(Auth)
     for p <- Auth.providers(), do: :ok = Auth.delete(p)
-    on_exit(fn -> for p <- Auth.providers(), do: Operator.SecureStore.delete("auth:#{p}") end)
+    on_exit(fn -> for p <- Auth.providers(), do: Rho.CredentialStore.delete("auth:#{p}") end)
   end
 
   # The menu over a chat: this test process stands in for the chat screen.
@@ -107,7 +107,7 @@ defmodule Operator.MenuScreenTest do
     test "a sign-in elsewhere (a QR scan) updates the accounts lines", %{tmp_dir: dir} do
       %{view: view} = mount_menu(dir, :main)
       :ok = Auth.put(:openai_codex, Map.put(@creds, "email", "c@example.com"))
-      assert_receive {:operator_auth, :changed} = changed
+      assert_receive {:rho_auth, :changed} = changed
       assert view |> render_info(changed) |> text() =~ "c@example.com"
     end
 
@@ -156,7 +156,7 @@ defmodule Operator.MenuScreenTest do
       })
 
       # The activation reaches the open page: no remount needed.
-      assert_receive {:operator_dyn, %{type: :activated}} = activated
+      assert_receive {:rho_dyn, %{type: :activated}} = activated
       view = render_info(view, activated)
       shown = text(view)
       assert shown =~ "── yours"
@@ -220,10 +220,10 @@ defmodule Operator.MenuScreenTest do
       Operator.Test.Dyn.purge_all()
       on_exit(&Operator.Test.Dyn.purge_all/0)
       on_exit(fn -> AutoApprove.disable() end)
-      start_supervised!(Operator.Core.Dyn.Approval.Biometric)
+      start_supervised!(Rho.Dyn.Approval.Biometric)
 
       Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn"),
-        approval: Operator.Core.Dyn.Approval.Biometric
+        approval: Rho.Dyn.Approval.Biometric
       )
 
       # The real confirmation path, into Biometric.
@@ -285,7 +285,7 @@ defmodule Operator.MenuScreenTest do
       end
 
       start_supervised!(
-        {Operator.Auth.Login,
+        {Rho.Auth.Login,
          open_url: fn url ->
            send(test, {:opened, url})
            :ok
@@ -324,7 +324,7 @@ defmodule Operator.MenuScreenTest do
 
       assert text(view) =~ "Code received"
 
-      assert_receive {:operator_login, :anthropic, :ok} = done, 2_000
+      assert_receive {:rho_login, :anthropic, :ok} = done, 2_000
       view = render_info(view, done)
       assert text(view) =~ "Signed in to Claude (Anthropic) as k@example.com."
       assert text(view) =~ "signed in as k@example.com · token good for 7 h"
@@ -364,7 +364,7 @@ defmodule Operator.MenuScreenTest do
         view |> render_info({:change, :code, "c##{state}"}) |> render_info({:tap, :paste_code})
 
       assert text(view) =~ "Code received"
-      assert_receive {:operator_login, :anthropic, :ok} = done, 2_000
+      assert_receive {:rho_login, :anthropic, :ok} = done, 2_000
       assert view |> render_info(done) |> text() =~ "Signed in to Claude (Anthropic)"
     end
 

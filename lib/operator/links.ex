@@ -23,10 +23,10 @@ defmodule Operator.Links do
 
   alias Operator.Auth.Transfer
   alias Operator.Cluster.Invite
-  alias Operator.Core.Session
   alias Operator.Deliver
   alias Operator.Handoff
   alias Operator.Handoff.Inbox
+  alias Rho.Session
 
   @type result ::
           {:login, String.t()}

@@ -4,7 +4,7 @@ defmodule Operator.Core.Tools.Clipboard do
   app in front read the clipboard, so a read while Operator runs in the
   background comes back empty.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @max_chars 100_000
 

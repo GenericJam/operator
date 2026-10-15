@@ -5,8 +5,8 @@ defmodule Operator.RescueScreenTest do
   import Operator.Test.Dyn
 
   alias Operator.Core.ApproveButton
-  alias Operator.Core.Dyn
   alias Operator.RescueScreen
+  alias Rho.Dyn
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -71,8 +71,8 @@ defmodule Operator.RescueScreenTest do
   end
 
   test "with the production approval the plain button reverts nothing", %{tmp_dir: dir} do
-    start_supervised!(Operator.Core.Dyn.Approval.Biometric)
-    start_keeper(dir, approval: Operator.Core.Dyn.Approval.Biometric)
+    start_supervised!(Rho.Dyn.Approval.Biometric)
+    start_keeper(dir, approval: Rho.Dyn.Approval.Biometric)
     :ok = Dyn.stage_put("weather.ex", tool("Weather", "weather"))
     {:ok, %{n: n}} = Dyn.propose("weather")
 
