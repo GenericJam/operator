@@ -20,7 +20,8 @@ defmodule Operator.Nifs.OperatorSecureStore do
   `:newstring_failed`, `:call_failed`, `:getchars_failed` or `:alloc`.
   """
 
-  @behaviour Operator.SecureStore
+  # `Operator.SecureStore`'s phone backend. Not a `Rho.CredentialStore`
+  # itself: a missing key is `{:ok, nil}` here, `:error` there.
 
   @on_load :load_nif
 
@@ -32,12 +33,10 @@ defmodule Operator.Nifs.OperatorSecureStore do
     :erlang.load_nif(~c"operator_secure_store", 0)
   end
 
-  @impl true
+  @doc "`{:ok, value}`, `{:ok, nil}` when there is none, or `{:error, reason}`."
   def get(_account), do: :erlang.nif_error(:nif_not_loaded)
 
-  @impl true
   def put(_account, _value), do: :erlang.nif_error(:nif_not_loaded)
 
-  @impl true
   def delete(_account), do: :erlang.nif_error(:nif_not_loaded)
 end

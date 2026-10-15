@@ -1,7 +1,7 @@
 defmodule Operator.Core.Tools.FrontScreenshot do
   @moduledoc """
   Core tool: a screenshot of the front, for the model to see (an image in
-  the tool result, `Operator.Core.ToolRunner`). If the user is in the
+  the tool result, `Rho.ToolRunner`). If the user is in the
   terminal, the front is put on screen for the shot (the shell pushed over
   the terminal, as the toggle does) and taken away again, so they see it
   flash by. While another app's window covers Operator, the text says so
@@ -11,7 +11,7 @@ defmodule Operator.Core.Tools.FrontScreenshot do
   jpeg} | {:error, text})`; tests have no screen), `ctx[:foreground?]`
   `Front.app_foreground?/0`.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Front
   alias Operator.Core.Tools.FrontTap

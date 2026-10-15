@@ -3,9 +3,9 @@ defmodule Operator.Core.LibraryGenerationTest do
   # app-named (Operator.Test.Dyn).
   use ExUnit.Case, async: false
 
-  alias Operator.Core.Dyn
   alias Operator.Core.Library
   alias Operator.Test.Dyn, as: T
+  alias Rho.Dyn
 
   @moduletag :tmp_dir
   @moduletag :capture_log

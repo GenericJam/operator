@@ -9,13 +9,13 @@ defmodule Operator.Core.ApproveButton do
   `ios/OperatorViews.swift`); off the phone screens show a plain button.
 
   A pass is only the human's say-so: the screen then records it
-  (`Operator.Core.Dyn.Approval.Biometric.confirm/1`) and asks for the token
-  (`Operator.Core.Dyn.request_approval/2`).
+  (`Rho.Dyn.Approval.Biometric.confirm/1`) and asks for the token
+  (`Rho.Dyn.request_approval/2`).
 
   Props:
 
     * `:notify`: the pid that gets the events (the screen)
-    * `:subject`: what is being approved (`t:Operator.Core.Dyn.Approval.subject/0`),
+    * `:subject`: what is being approved (`t:Rho.Dyn.Approval.subject/0`),
       handed back with every event
     * `:label` (the chip's text), `:title`, `:subtitle` (the prompt's)
     * `:text_color`, `:background`: ARGB integers

@@ -7,7 +7,7 @@ defmodule Operator.Core.Voice do
     * `:important` (default): when a run ends: finished (the first sentence
       of the final reply, at most ~200 chars, markup stripped), stopped,
       error (short) or step limit; when a self-change waits for approval
-      or was reverted (`Operator.Core.Dyn` events).
+      or was reverted (`Rho.Dyn` events).
     * `:everything`: also each complete assistant reply (markup stripped);
       a finished run whose final reply was read adds nothing.
     * `:off`: nothing.
@@ -37,9 +37,9 @@ defmodule Operator.Core.Voice do
   """
   use GenServer
 
-  alias Operator.Core.Dyn
-  alias Operator.Core.Session
   alias Operator.Core.Watcher
+  alias Rho.Dyn
+  alias Rho.Session
 
   require Logger
 
@@ -48,7 +48,7 @@ defmodule Operator.Core.Voice do
     setting: &Operator.Core.Settings.voice/0,
     pace: {500, 75},
     current: Operator.Core.Current,
-    keeper: Operator.Core.Dyn.Keeper
+    keeper: Rho.Dyn.Keeper
   ]
 
   @summary_chars 200
@@ -80,9 +80,9 @@ defmodule Operator.Core.Voice do
   def handle_continue(:watch, s), do: {:noreply, %{s | watch: Watcher.watch(s.watch)}}
 
   @impl true
-  def handle_info({:operator_core, sid, event}, s), do: {:noreply, event(s, sid, event)}
+  def handle_info({:rho, sid, event}, s), do: {:noreply, event(s, sid, event)}
 
-  def handle_info({:operator_dyn, event}, s) do
+  def handle_info({:rho_dyn, event}, s) do
     case {setting(s), dyn_line(event)} do
       {:off, _} -> {:noreply, s}
       {_, nil} -> {:noreply, s}

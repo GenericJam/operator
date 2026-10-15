@@ -7,7 +7,7 @@ defmodule Operator.Core.Tools.Cluster do
   A session that is answering another phone's question can't ask: an
   exchange is one question and one answer.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Cluster.Bus
   alias Operator.Cluster.Remote

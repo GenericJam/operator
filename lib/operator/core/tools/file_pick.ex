@@ -7,7 +7,7 @@ defmodule Operator.Core.Tools.FilePick do
   picture to look at. The same pick as the chat's `[attach] › file`
   (`Operator.Core.Attachments.pick_files/2`).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Attachments
 

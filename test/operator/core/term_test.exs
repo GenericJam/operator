@@ -2,10 +2,10 @@ defmodule Operator.Core.TermTest do
   use ExUnit.Case, async: true
 
   alias Operator.Core.MarkdownView
-  alias Operator.Core.Session
   alias Operator.Core.Term
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
+  alias Rho.Session
 
   @fixture Path.expand("../../fixtures/omp_session.jsonl", __DIR__)
 

@@ -8,7 +8,7 @@ defmodule Operator.Core.Tools.Instructions do
   without a Core update. Edits are exact-match replacements, like
   `dyn_edit`, so the file is kept current rather than appended to forever.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.SelfKnowledge
 

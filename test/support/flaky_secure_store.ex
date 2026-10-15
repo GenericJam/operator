@@ -2,11 +2,11 @@ defmodule Operator.Test.FlakySecureStore do
   @moduledoc """
   The host's file store, except the operations named by `fail/1` return
   `{:error, :disk_full}`. App-wide (`config :operator, :secure_store, ...`,
-  read by the Operator.Auth process), so tests using it are `async: false`.
+  read by the Rho.Auth process), so tests using it are `async: false`.
   """
-  @behaviour Operator.SecureStore
+  @behaviour Rho.CredentialStore
 
-  alias Operator.SecureStore.File, as: Store
+  alias Rho.CredentialStore.File, as: Store
 
   @doc "Installs this store; `ops` (`:put`, `:delete`) fail until `fail([])`."
   @spec install(list()) :: :ok

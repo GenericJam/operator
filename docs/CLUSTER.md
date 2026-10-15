@@ -20,7 +20,7 @@ The QR is a secret. It contains the inviter's node, pinned certificate fingerpri
 - TLS 1.3 with a self-signed certificate per installation. The exact certificate fingerprint is pinned; system certificate authorities are not trusted for membership.
 - Mutual certificates. During the five-minute pairing window only, the inviter may admit an unpinned certificate as pending. It becomes a member only after proving possession of the QR's random Erlang cookie and presenting that window's secret along with the same certificate fingerprint.
 - One fixed TCP port, `9370`, bound to the current private-LAN address. No epmd listener. Address changes restart distribution with a new node address.
-- Secrets: the private key and cookie use Android Keystore / iOS Keychain through `Operator.SecureStore`. Non-secret peer and revocation records live under the app data directory.
+- Secrets: the private key and cookie use Android Keystore / iOS Keychain through `Operator.SecureStore` (rho's credential store, `Rho.CredentialStore`). Non-secret peer and revocation records live under the app data directory.
 - The cluster is local-network infrastructure, not an Internet transport. There is no relay, NAT traversal, hostname authentication, or public discovery.
 - At most 32 members and 64 identities (members plus revocations) are retained; a peer that would exceed them is disconnected, not admitted. A phone already joined to a cluster refuses an invite carrying a different cluster cookie; reset it deliberately before moving it to another cluster.
 

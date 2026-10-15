@@ -6,7 +6,7 @@ defmodule Operator.ChatScreen.Native do
   `{:error, :unavailable}` instead of raising.
   """
 
-  alias Operator.Core.Dyn.Approval.Biometric
+  alias Rho.Dyn.Approval.Biometric
 
   @callback clipboard_put(String.t()) :: :ok | {:error, term()}
   @callback scroll_info(String.t()) :: map() | {:error, term()}
@@ -17,7 +17,7 @@ defmodule Operator.ChatScreen.Native do
   Records that the human just passed the screen-lock prompt
   (`Operator.Core.ApproveButton`) for `subject` (`Dyn.Approval.Biometric`).
   """
-  @callback confirm_approval(Operator.Core.Dyn.Approval.subject()) :: :ok | {:error, term()}
+  @callback confirm_approval(Rho.Dyn.Approval.subject()) :: :ok | {:error, term()}
   @doc """
   Starts a phone action for a tool (`Operator.Core.Phone`); its result
   arrives as the plugin's message (`{:location, ...}`, `{:camera, ...}`,

@@ -15,32 +15,32 @@ defmodule Operator.MenuScreen do
       (`Operator.Dyn.Showcase.GalleryScreen`, from the Dyn seed): the menu
       opens it in the front, over the front's own screens
       (`Operator.Core.Front.open/3` with `push: true`). Approvals: ask each
-      time, or approve all (`Operator.Core.Dyn.AutoApprove`): turning it on
+      time, or approve all (`Rho.Dyn.AutoApprove`): turning it on
       takes the screen-lock prompt (`Operator.Core.ApproveButton`), off is
       one tap. Under `yours`, the rows the agent added for its own front
       screens (a plugin's screen, say): see "Rows the agent adds" below.
-    * `:accounts`: per provider, sign in in the browser (`Operator.Auth.Login`,
+    * `:accounts`: per provider, sign in in the browser (`Rho.Auth.Login`,
       with a field for the `code#state` Anthropic's page shows when it doesn't
-      redirect back) or sign out (`Operator.Auth.delete/1`, after a confirm),
+      redirect back) or sign out (`Rho.Auth.delete/1`, after a confirm),
       and scanning a login QR made on the Mac (`Operator.LoginScanScreen`).
     * `:model`: the models the signed-in providers offer
-      (`Operator.Core.Models`), the current one marked, and a custom spec.
-    * `:sessions`: the saved sessions (`Operator.Core.Session.list/1`), newest
+      (`Rho.Models`), the current one marked, and a custom spec.
+    * `:sessions`: the saved sessions (`Rho.Session.list/1`), newest
       first, the shown one marked.
 
   Params: `:chat` (the chat screen's pid, told about a new or resumed session
   and a renderer change with `{:operator_menu, action}`), `:loop`, `:model`
   and `:path` (the shown session's loop, model and file: the model is set on
   the loop), `:page` (default `:main`), `:sessions_dir` (default
-  `Operator.Core.Session.dir/0`). The accounts page takes over a sign-in
-  still in progress (`Operator.Auth.Login.pending/0`).
+  `Rho.Session.dir/0`). The accounts page takes over a sign-in
+  still in progress (`Rho.Auth.Login.pending/0`).
 
   **Rows the agent adds.** The agent writes `Operator.Dyn.Menu` (Dyn
-  code, see `Operator.Core.Dyn.agent_guide/0`) with `items/0` returning
+  code, see `Rho.Dyn.agent_guide/0`) with `items/0` returning
   `[%{label: "...", detail: "...", screen: "Name.Of.FrontScreen"}]`; each
   row opens its front screen like `components` opens the library. It is
   read at mount and again whenever another generation runs (the main page
-  subscribes to `Operator.Core.Dyn`), in a process of its own with a time
+  subscribes to `Rho.Dyn`), in a process of its own with a time
   and heap limit, so a raise, a hang, a bad return or a missing module
   costs the section, never the menu: the valid rows show (at most
   20), what was wrong shows (and is logged) below them, and a row whose
@@ -48,20 +48,20 @@ defmodule Operator.MenuScreen do
   """
   use Mob.Screen
 
-  alias Operator.Auth
-  alias Operator.Auth.Login
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.AutoApprove
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Front
-  alias Operator.Core.Loop
-  alias Operator.Core.Models
-  alias Operator.Core.Session
   alias Operator.Core.Term
   alias Operator.TermUI, as: UI
   alias Operator.Toggle
+  alias Rho.Auth
+  alias Rho.Auth.Login
+  alias Rho.Dyn
+  alias Rho.Dyn.AutoApprove
+  alias Rho.Loop
+  alias Rho.Models
+  alias Rho.Session
 
   require Logger
 
@@ -178,11 +178,11 @@ defmodule Operator.MenuScreen do
   end
 
   # Another generation runs: its menu module may add, change or drop rows.
-  def handle_info({:operator_dyn, %{type: type}}, %{assigns: %{page: :main}} = socket)
+  def handle_info({:rho_dyn, %{type: type}}, %{assigns: %{page: :main}} = socket)
       when type in @generation_events,
       do: {:noreply, Mob.Socket.assign(socket, :yours, yours())}
 
-  # ── approvals (Operator.Core.Dyn.AutoApprove) ──
+  # ── approvals (Rho.Dyn.AutoApprove) ──
 
   # On takes the screen lock: the approve chip's pass, confirmed like an activation.
   def handle_info({:approval, "approved", %{"subject" => {:auto_approve, :on} = subject}}, socket) do
@@ -253,7 +253,7 @@ defmodule Operator.MenuScreen do
 
   def handle_info({:submit, :code}, socket), do: handle_info({:tap, :paste_code}, socket)
 
-  def handle_info({:operator_login, provider, :ok}, socket) do
+  def handle_info({:rho_login, provider, :ok}, socket) do
     who =
       case Auth.get(provider) do
         {:ok, %{"email" => email}} when is_binary(email) -> " as #{email}"
@@ -266,7 +266,7 @@ defmodule Operator.MenuScreen do
      |> note("Signed in to #{Auth.label(provider)}#{who}.")}
   end
 
-  def handle_info({:operator_login, provider, {:error, message}}, socket),
+  def handle_info({:rho_login, provider, {:error, message}}, socket),
     do: {:noreply, note(socket, "Sign-in to #{Auth.label(provider)} failed: #{message}")}
 
   def handle_info({:tap, {:sign_out, provider}}, socket),
@@ -295,7 +295,7 @@ defmodule Operator.MenuScreen do
     end
   end
 
-  def handle_info({:operator_auth, :changed}, socket),
+  def handle_info({:rho_auth, :changed}, socket),
     do: {:noreply, Mob.Socket.assign(socket, :auth, Auth.status())}
 
   def handle_info(_message, socket), do: {:noreply, socket}
@@ -480,7 +480,7 @@ defmodule Operator.MenuScreen do
 
   defp page(:main, a, t) do
     accounts =
-      for provider <- Auth.providers() do
+      for provider <- Operator.Core.providers() do
         st = a.auth[provider]
         value = if st.signed_in, do: st.email || "signed in", else: "not signed in"
 
@@ -520,7 +520,7 @@ defmodule Operator.MenuScreen do
 
   defp page(:accounts, a, t) do
     providers =
-      Enum.flat_map(Auth.providers(), fn provider ->
+      Enum.flat_map(Operator.Core.providers(), fn provider ->
         [UI.heading(Auth.label(provider), t), UI.line(auth_line(a.auth[provider]), t)] ++
           account_actions(provider, a, t)
       end)
@@ -536,7 +536,10 @@ defmodule Operator.MenuScreen do
 
   defp page(:model, a, t) do
     rows =
-      Enum.flat_map(Models.by_provider(a.auth), fn {provider, signed_in, models} ->
+      a.auth
+      |> Models.by_provider()
+      |> Enum.filter(fn {provider, _, _} -> provider in Operator.Core.providers() end)
+      |> Enum.flat_map(fn {provider, signed_in, models} ->
         body =
           if signed_in,
             do: Enum.map(models, &model_item(&1, a.model, t)),

@@ -1,6 +1,6 @@
 defmodule Operator.Core.Tools.FileWrite do
   @moduledoc "Core tool: write (or append to) a file, creating its directory."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Tools.FileTool
 

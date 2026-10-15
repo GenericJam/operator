@@ -4,12 +4,12 @@ defmodule Operator.Core.Tools.ReadGuide do
   (`Operator.Core.Docs`): mob's guides, its rules for app code, the Mishka
   widgets, each capability plugin's README. Whole, one section, or a range
   of lines; a guide over the output budget is cut like any long output
-  (`Operator.Core.Artifacts`), after a list of its sections.
+  (`Rho.Artifacts`), after a list of its sections.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
-  alias Operator.Core.Artifacts
   alias Operator.Core.Docs
+  alias Rho.Artifacts
 
   @impl true
   def name, do: "read_guide"

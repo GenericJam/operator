@@ -4,9 +4,9 @@ defmodule Operator.Cluster.AskTest do
   import Operator.Test.LoopHelpers
 
   alias Operator.Cluster.Ask
-  alias Operator.Core.Loop
-  alias Operator.Core.Models
   alias Operator.Test.FakeLLM
+  alias Rho.Loop
+  alias Rho.Models
 
   @moduletag :tmp_dir
 

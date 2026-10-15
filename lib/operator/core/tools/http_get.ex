@@ -7,7 +7,7 @@ defmodule Operator.Core.Tools.HttpGet do
   Only `http` and `https` URLs; bodies over 2 MB and non-text content
   types are refused rather than returned as bytes.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @max_body 2_000_000
   @text_types ~w(text/ application/json application/xml application/javascript application/rss application/atom +json +xml)

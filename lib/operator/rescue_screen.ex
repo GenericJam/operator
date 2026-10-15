@@ -4,7 +4,7 @@ defmodule Operator.RescueScreen do
   (number, status, when, rationale), a generation's diff, reverting to any
   generation that was active once (approved like an activation: "Revert to
   this", then the approve chip, `Operator.Core.ApproveButton`, whose pass
-  goes through `Operator.Core.Dyn.request_approval/2`), and the crash log.
+  goes through `Rho.Dyn.request_approval/2`), and the crash log.
 
   The app opens it instead of the chat in safe mode; the diagnostics screen
   links to it. It is Core code: nothing the agent writes can remove or
@@ -14,10 +14,10 @@ defmodule Operator.RescueScreen do
 
   alias Operator.ChatScreen.Native
   alias Operator.Core.ApproveButton
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.Generation
   alias Operator.Core.Term
   alias Operator.Toggle
+  alias Rho.Dyn
+  alias Rho.Dyn.Generation
 
   @log_limit 30
 
@@ -95,7 +95,7 @@ defmodule Operator.RescueScreen do
   def handle_info({:approval, "unavailable", payload}, socket),
     do: {:noreply, Mob.Socket.assign(socket, :message, ApproveButton.why("unavailable", payload))}
 
-  def handle_info({:operator_dyn, _event}, socket), do: {:noreply, load(socket)}
+  def handle_info({:rho_dyn, _event}, socket), do: {:noreply, load(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 

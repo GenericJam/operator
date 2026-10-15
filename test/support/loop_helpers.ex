@@ -4,9 +4,9 @@ defmodule Operator.Test.LoopHelpers do
   import ExUnit.Assertions
   import ExUnit.Callbacks
 
-  alias Operator.Core.Loop
-  alias Operator.Core.Session
   alias Operator.Test.FakeLLM
+  alias Rho.Loop
+  alias Rho.Session
 
   @model "anthropic:claude-haiku-4-5"
 
@@ -48,8 +48,8 @@ defmodule Operator.Test.LoopHelpers do
 
   defp collect(acc, timeout) do
     receive do
-      {:operator_core, _sid, %{type: :agent_end} = e} -> Enum.reverse([e | acc])
-      {:operator_core, _sid, e} -> collect([e | acc], timeout)
+      {:rho, _sid, %{type: :agent_end} = e} -> Enum.reverse([e | acc])
+      {:rho, _sid, e} -> collect([e | acc], timeout)
     after
       timeout ->
         flunk("no agent_end; events so far: #{inspect(Enum.map(Enum.reverse(acc), & &1.type))}")
@@ -59,8 +59,8 @@ defmodule Operator.Test.LoopHelpers do
   @doc "Waits for the next event of `type` (discarding others)."
   def await_event(type, timeout \\ 2_000) do
     receive do
-      {:operator_core, _sid, %{type: ^type} = e} -> e
-      {:operator_core, _sid, _other} -> await_event(type, timeout)
+      {:rho, _sid, %{type: ^type} = e} -> e
+      {:rho, _sid, _other} -> await_event(type, timeout)
     after
       timeout -> flunk("no #{type} event")
     end

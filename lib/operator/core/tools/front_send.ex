@@ -15,7 +15,7 @@ defmodule Operator.Core.Tools.FrontSend do
   screen's `Files.keep/2` takes it as it would the phone's own result.
   Acts on `ctx[:front]` if given.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Files
   alias Operator.Core.Front

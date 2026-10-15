@@ -4,7 +4,7 @@ defmodule Operator.Core.Tools.CameraPhoto do
   kept in the workspace's `inbox/`. The same shot as the chat's
   `[attach] › take photo` (`Operator.Core.Attachments.take_photo/1`).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Attachments
   alias Operator.Core.Tools.PhoneTool

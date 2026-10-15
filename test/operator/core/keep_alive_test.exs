@@ -6,8 +6,8 @@ defmodule Operator.Core.KeepAliveTest do
 
   alias Operator.Core.Current
   alias Operator.Core.KeepAlive
-  alias Operator.Core.Loop
   alias Operator.Test.FakeKeepAlive
+  alias Rho.Loop
 
   @moduletag :tmp_dir
   @moduletag :capture_log

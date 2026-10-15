@@ -3,7 +3,7 @@ defmodule Operator.Core.Tools.FrontScreens do
   Core tool: the front's screens (`Operator.Core.Front`), which one is open
   and whether it crashed. Acts on `ctx[:front]` if given (tests).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Front
 

@@ -29,9 +29,9 @@ defmodule Operator.Core.Term do
   """
 
   alias Operator.Core.MarkdownView
-  alias Operator.Core.Session
   alias Operator.Core.Term.Markup
   alias Operator.Core.Term.Stream, as: TermStream
+  alias Rho.Session
 
   @key {__MODULE__, :theme}
   @nbsp "\u00A0"
@@ -346,13 +346,12 @@ defmodule Operator.Core.Term do
   end
 
   defp entry_lines(
-         %{"type" => "custom_message", "customType" => type, "content" => content},
+         %{"type" => "custom_message", "customType" => _, "content" => content} = entry,
          theme
        ) do
     role =
-      case type do
-        "operator.error" -> :error
-        "operator.notice" -> :notice
+      case Session.notice_kind(entry) do
+        kind when kind in [:error, :notice] -> kind
         _ -> :aside
       end
 

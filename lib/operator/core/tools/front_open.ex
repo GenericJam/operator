@@ -4,7 +4,7 @@ defmodule Operator.Core.Tools.FrontOpen do
   for when the user asks, or built a front with no way to a screen. Acts on
   `ctx[:front]` if given (tests).
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Front
   alias Operator.Core.Tools.FrontTap

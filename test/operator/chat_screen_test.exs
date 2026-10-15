@@ -12,16 +12,16 @@ defmodule Operator.ChatScreenTest do
   alias Operator.ChatScreen
   alias Operator.ChatScreen.Follow
   alias Operator.Core.ApproveButton
-  alias Operator.Core.Dyn.AutoApprove
-  alias Operator.Core.Loop
   alias Operator.Core.Phone
-  alias Operator.Core.Session
   alias Operator.Core.Settings
   alias Operator.Core.Term
   alias Operator.Handoff
   alias Operator.Handoff.Inbox
   alias Operator.Test.FakeLLM
   alias Operator.Test.FakeNative
+  alias Rho.Dyn.AutoApprove
+  alias Rho.Loop
+  alias Rho.Session
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -41,7 +41,7 @@ defmodule Operator.ChatScreenTest do
   # event type or a timer atom) has been handled.
   defp pump(view, until, timeout \\ 2_000) do
     receive do
-      {:operator_core, _sid, %{type: type}} = msg ->
+      {:rho, _sid, %{type: type}} = msg ->
         view = render_info(view, msg)
         if type == until, do: view, else: pump(view, until, timeout)
 
@@ -381,7 +381,7 @@ defmodule Operator.ChatScreenTest do
   end
 
   test "the status line shows the model's provider's windows as they change", %{tmp_dir: dir} do
-    alias Operator.Core.Usage
+    alias Rho.Usage
     reset = System.os_time(:second) + 3600
 
     claude = [
@@ -400,13 +400,13 @@ defmodule Operator.ChatScreenTest do
 
     # a model call's headers, recorded by any loop, show at once
     :ok = Usage.record(dir, model(), %{status: 200, headers: claude, usage: %{}})
-    assert_receive {:operator_usage, :changed} = changed
+    assert_receive {:rho_usage, :changed} = changed
     view = render_info(view, changed)
     assert text(view) =~ "idle · 5h 42% · wk 18% · $0.0000 · 0 tok · claude-haiku-4-5"
 
     # another model: its provider's windows
     :ok = Usage.record(dir, "openai_codex:gpt-5-mini", %{status: 200, headers: codex, usage: %{}})
-    assert_receive {:operator_usage, :changed} = changed
+    assert_receive {:rho_usage, :changed} = changed
     view = render_info(view, changed)
     :ok = Loop.set_model(loop, "openai_codex:gpt-5-mini")
     view = pump(view, :model_change)
@@ -415,7 +415,7 @@ defmodule Operator.ChatScreenTest do
     # a usage page refresh too
     week = %{"7d" => %{"label" => "7 days", "used" => 55.0, "resets_at" => nil}}
     :ok = Usage.put_endpoint(dir, :openai_codex, week, "plus")
-    assert_receive {:operator_usage, :changed} = changed
+    assert_receive {:rho_usage, :changed} = changed
     assert text(render_info(view, changed)) =~ "idle · 5h 7% · wk 55% · $0.0000"
   end
 
@@ -595,21 +595,21 @@ defmodule Operator.ChatScreenTest do
 
   describe "signed out" do
     setup do
-      start_supervised!(Operator.Auth)
+      start_supervised!(Rho.Auth)
 
       on_exit(fn ->
-        for p <- Operator.Auth.providers(), do: Operator.SecureStore.delete("auth:#{p}")
+        for p <- Rho.Auth.providers(), do: Rho.CredentialStore.delete("auth:#{p}")
       end)
     end
 
     test "the transcript says where to sign in, until a provider is signed in", %{tmp_dir: dir} do
-      for p <- Operator.Auth.providers(), do: :ok = Operator.Auth.delete(p)
+      for p <- Rho.Auth.providers(), do: :ok = Rho.Auth.delete(p)
       %{view: view} = mount_chat(dir, [])
       assert text(view) =~ "Not signed in to a model: [menu] › accounts to sign in."
 
       creds = %{"type" => "oauth", "access" => "a", "refresh" => "r", "expires" => 0}
-      :ok = Operator.Auth.put(:anthropic, creds)
-      assert_receive {:operator_auth, :changed} = changed
+      :ok = Rho.Auth.put(:anthropic, creds)
+      assert_receive {:rho_auth, :changed} = changed
       view = render_info(view, changed)
       refute text(view) =~ "Not signed in"
     end
@@ -934,7 +934,7 @@ defmodule Operator.ChatScreenTest do
 
     defp dyn_event(type) do
       receive do
-        {:operator_dyn, %{type: ^type}} = msg -> msg
+        {:rho_dyn, %{type: ^type}} = msg -> msg
       after
         2_000 -> flunk("no #{type} event")
       end
@@ -957,7 +957,7 @@ defmodule Operator.ChatScreenTest do
 
       view = render_info(view, {:approval, "approved", %{"subject" => {:activate, n}}})
       assert_received {:confirmed, {:activate, ^n}}
-      assert %{generation: ^n, status: :probation} = Operator.Core.Dyn.status()
+      assert %{generation: ^n, status: :probation} = Rho.Dyn.status()
       refute button?(view, "approve")
       assert text(view) =~ "Generation #{n} is live"
 
@@ -985,11 +985,11 @@ defmodule Operator.ChatScreenTest do
       assert text(view) =~ ApproveButton.why("unavailable", %{})
 
       refute_received {:confirmed, _}
-      assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
+      assert %{generation: 0, pending: ^n} = Rho.Dyn.status()
       assert button?(view, "approve")
 
       view = render_info(view, {:tap, :deny_proposal})
-      assert %{generation: 0, pending: nil} = Operator.Core.Dyn.status()
+      assert %{generation: 0, pending: nil} = Rho.Dyn.status()
       refute button?(view, "approve")
     end
 
@@ -1000,7 +1000,7 @@ defmodule Operator.ChatScreenTest do
 
       view = render_info(view, {:tap, :approve_proposal})
       refute_received {:confirmed, _}
-      assert %{generation: ^n} = Operator.Core.Dyn.status()
+      assert %{generation: ^n} = Rho.Dyn.status()
       assert text(view) =~ "Generation #{n} is live"
     end
 
@@ -1021,7 +1021,7 @@ defmodule Operator.ChatScreenTest do
       %{n: n} = propose("auto1")
       view = render_info(view, dyn_event(:candidate))
       assert_received {:confirmed, {:activate, ^n}}
-      assert %{generation: ^n, status: :probation} = Operator.Core.Dyn.status()
+      assert %{generation: ^n, status: :probation} = Rho.Dyn.status()
       refute button?(view, "approve")
 
       assert text(view) =~
@@ -1034,7 +1034,7 @@ defmodule Operator.ChatScreenTest do
       %{n: m} = propose("auto2")
       view = render_info(view, dyn_event(:candidate))
       assert button?(view, "approve")
-      assert %{generation: ^n, pending: ^m} = Operator.Core.Dyn.status()
+      assert %{generation: ^n, pending: ^m} = Rho.Dyn.status()
     end
   end
 
@@ -1042,10 +1042,10 @@ defmodule Operator.ChatScreenTest do
     setup %{tmp_dir: dir} do
       Operator.Test.Dyn.purge_all()
       on_exit(&Operator.Test.Dyn.purge_all/0)
-      start_supervised!(Operator.Core.Dyn.Approval.Biometric)
+      start_supervised!(Rho.Dyn.Approval.Biometric)
 
       Operator.Test.Dyn.start_keeper(Path.join(dir, "dyn_data"),
-        approval: Operator.Core.Dyn.Approval.Biometric
+        approval: Rho.Dyn.Approval.Biometric
       )
 
       :ok
@@ -1061,14 +1061,14 @@ defmodule Operator.ChatScreenTest do
       %{view: view} = mount_chat(dir, [])
       view = render_info(view, {:tap, :approve_proposal})
       assert text(view) =~ "Generation #{n} not activated: it needs approving"
-      assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
+      assert %{generation: 0, pending: ^n} = Rho.Dyn.status()
     end
 
     test "approve all that can't activate falls back to the approval bar with the reason", %{
       tmp_dir: dir
     } do
       on_exit(fn -> AutoApprove.disable() end)
-      :ok = Operator.SecureStore.put("dyn:auto_approve", "on")
+      :ok = Rho.CredentialStore.put("dyn:auto_approve", "on")
       %{view: view} = mount_chat(dir, [])
 
       %{n: n} =
@@ -1077,10 +1077,10 @@ defmodule Operator.ChatScreenTest do
           "add the held tool"
         )
 
-      view = render_info(view, {:operator_dyn, %{type: :candidate, gen: n}})
+      view = render_info(view, {:rho_dyn, %{type: :candidate, gen: n}})
       assert button?(view, "approve")
       assert text(view) =~ "Generation #{n} not activated: approve all couldn't activate it"
-      assert %{generation: 0, pending: ^n} = Operator.Core.Dyn.status()
+      assert %{generation: 0, pending: ^n} = Rho.Dyn.status()
     end
   end
 

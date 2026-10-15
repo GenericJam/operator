@@ -110,7 +110,7 @@ defmodule Operator.ClusterTest do
 
       assert :ok = Cluster.forget(fingerprint)
       # The forgotten peer's copy of the cookie no longer opens distribution.
-      assert {:ok, cookie} = Operator.SecureStore.get("cluster_cookie")
+      assert {:ok, cookie} = Rho.CredentialStore.get("cluster_cookie")
       assert cookie != @invite.cookie
       assert {:error, :revoked} = Cluster.join(@invite)
     end
@@ -119,7 +119,7 @@ defmodule Operator.ClusterTest do
       assert {:error, :restart_needed} = Cluster.join(@invite)
       newer = %{@invite | cookie: "abcdefabcdefabcdefabcdefabcdefab"}
       assert {:error, :restart_needed} = Cluster.join(newer)
-      assert Operator.SecureStore.get("cluster_cookie") == {:ok, newer.cookie}
+      assert Rho.CredentialStore.get("cluster_cookie") == {:ok, newer.cookie}
     end
   end
 

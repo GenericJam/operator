@@ -1,6 +1,6 @@
 defmodule Operator.Core.Tools.Location do
   @moduledoc "Core tool: the phone's current location (one fix; asks for the permission the first time)."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   alias Operator.Core.Tools.PhoneTool
 

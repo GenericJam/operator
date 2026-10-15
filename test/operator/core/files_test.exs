@@ -14,7 +14,7 @@ defmodule Operator.Core.FilesTest do
     File.mkdir_p!(cache)
     Application.put_env(:operator, :app_temp, cache)
     on_exit(fn -> Application.delete_env(:operator, :app_temp) end)
-    %{cache: cache, data: Operator.Paths.data_dir()}
+    %{cache: cache, data: Rho.Config.data_dir()}
   end
 
   describe "keep/2" do

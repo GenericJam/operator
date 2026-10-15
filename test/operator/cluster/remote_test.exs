@@ -1,6 +1,6 @@
 defmodule Operator.Cluster.RemoteTest.Location do
   @moduledoc "Stands in for the `location` tool: a fixed fix."
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @impl true
   def name, do: "location"
@@ -20,7 +20,7 @@ defmodule Operator.Cluster.RemoteTest do
 
   alias Operator.Cluster.Remote
   alias Operator.Cluster.RemoteTest.Location
-  alias Operator.Core.ToolRegistry
+  alias Rho.ToolRegistry
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -33,7 +33,7 @@ defmodule Operator.Cluster.RemoteTest do
   end
 
   test "the Core tools added since peers could run tools are refused, even when registered" do
-    start_supervised!({ToolRegistry, tools: ToolRegistry.core_tools()})
+    start_supervised!({ToolRegistry, tools: Operator.Core.tools()})
 
     for name <- ~w(eval logs instructions skill todo task front_send front_tap) do
       assert {:ok, _} = ToolRegistry.lookup(name)
@@ -58,7 +58,7 @@ defmodule Operator.Cluster.RemoteTest do
   end
 
   test "the current Dyn generation's tools still run for a peer", %{tmp_dir: dir} do
-    start_supervised!({ToolRegistry, tools: []})
+    start_supervised!({ToolRegistry, tools: [], tool_sources: [Rho.Dyn.Source]})
     start_keeper(dir)
     activate!(%{"weather.ex" => tool("Weather", "weather")})
 

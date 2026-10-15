@@ -1,12 +1,12 @@
 defmodule Operator.Core.Tools.SubagentTest.Router do
   @moduledoc """
-  An `Operator.Core.LLM` whose opts are `fn request -> steps end`: the reply
+  An `Rho.LLM` whose opts are `fn request -> steps end`: the reply
   depends on which session asks (parent or subagent), whatever order the
   concurrent calls arrive in. Steps: `{:text, s}`, `{:tool_call, id, name,
   args}`, `{:hold, test, tag}` (tells the test `{:held, tag, worker_pid}`,
   then waits for `:go`).
   """
-  @behaviour Operator.Core.LLM
+  @behaviour Rho.LLM
 
   @impl true
   def stream(request, route, sink) do
@@ -47,12 +47,12 @@ defmodule Operator.Core.Tools.SubagentTest do
   import Operator.Test.LoopHelpers
   import Operator.Test.ObserverHelpers, only: [start_current: 3]
 
-  alias Operator.Core.Artifacts
   alias Operator.Core.Current
-  alias Operator.Core.Loop
-  alias Operator.Core.Session
   alias Operator.Core.Tools.Subagent
   alias Operator.Core.Tools.SubagentTest.Router
+  alias Rho.Artifacts
+  alias Rho.Loop
+  alias Rho.Session
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -263,7 +263,7 @@ defmodule Operator.Core.Tools.SubagentTest do
     refute Process.alive?(loop1)
     refute Process.alive?(loop2)
 
-    for sid <- [sid1, sid2], do: refute_received({:operator_core, ^sid, _})
+    for sid <- [sid1, sid2], do: refute_received({:rho, ^sid, _})
     refute_received {:DOWN, _, :process, _, _}
   end
 

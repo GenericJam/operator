@@ -18,7 +18,7 @@ defmodule Operator.Agent do
   @moduledoc """
   The spike's Jido.AI ReAct agent (one tool), started without network by
   `Operator.Diag.agent/0`; the model is the `:operator` alias
-  (`config :jido_ai, :model_aliases`). The chat uses `Operator.Core.Loop`.
+  (`config :jido_ai, :model_aliases`). The chat uses `Rho.Loop`.
   """
   use Jido.AI.Agent,
     name: "operator_agent",

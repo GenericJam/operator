@@ -1,9 +1,9 @@
 defmodule Operator.Core.AttachmentsTest do
   use ExUnit.Case, async: true
 
-  alias Operator.Core.Artifacts
   alias Operator.Core.Attachments
-  alias Operator.Core.Session
+  alias Rho.Artifacts
+  alias Rho.Session
 
   @moduletag :tmp_dir
 

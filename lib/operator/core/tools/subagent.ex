@@ -1,12 +1,12 @@
 defmodule Operator.Core.Tools.Subagent do
   @moduledoc """
   Core tool `task`: omp's subagents on the phone. Each task runs in a
-  fresh session of its own (an `Operator.Core.Loop`), all of them at once,
+  fresh session of its own (an `Rho.Loop`), all of them at once,
   and the call returns each one's final answer, so the agent can fan out
   independent research (guides, docs, plugin APIs, a review of a proposal)
   without filling its own context with every page read along the way.
 
-  A subagent is configured like its caller's loop (`Operator.Core.Loop.config/1`):
+  A subagent is configured like its caller's loop (`Rho.Loop.config/1`):
   the same model, LLM, tools, approval gate and daily cost cap, and at most
   `Operator.Core.max_iterations/0` model calls. It is never offered `task`
   (the loop's `:withhold_tools`), so it can't fan out again. Its session is
@@ -15,9 +15,9 @@ defmodule Operator.Core.Tools.Subagent do
   caller's session.
 
   The call waits for every subagent's `agent_end`. Near the tool's own
-  timeout, the ones still running are stopped (`Operator.Core.Loop.stop/1`)
+  timeout, the ones still running are stopped (`Rho.Loop.stop/1`)
   and reported as timed out with what they had written; stopping the
-  caller's run (the loop sends running tools `{:operator_core_stop, loop}`)
+  caller's run (the loop sends running tools `{:rho_stop, loop}`)
   or the caller's loop going away does the same. The subagents run outside
   the call's process, started by a guard that ends them before the call
   returns (so none outlives it, though `eval`'s evaluator, a caller that
@@ -25,11 +25,11 @@ defmodule Operator.Core.Tools.Subagent do
   it went (killed at its timeout included), so none keeps calling the
   model in the background.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
-  alias Operator.Core.Artifacts
-  alias Operator.Core.Loop
-  alias Operator.Core.Session
+  alias Rho.Artifacts
+  alias Rho.Loop
+  alias Rho.Session
 
   @max_tasks 4
   @timeout_ms 15 * 60_000
@@ -264,7 +264,7 @@ defmodule Operator.Core.Tools.Subagent do
 
   defp flush(sessions) do
     receive do
-      {:operator_core, sid, _event} when is_map_key(sessions, sid) -> flush(sessions)
+      {:rho, sid, _event} when is_map_key(sessions, sid) -> flush(sessions)
     after
       0 -> :ok
     end
@@ -308,17 +308,17 @@ defmodule Operator.Core.Tools.Subagent do
     %{by_session: by_session, by_ref: by_ref, loop: loop, loop_ref: loop_ref} = ctx
 
     receive do
-      {:operator_core, sid, %{type: :agent_end, reason: reason}}
+      {:rho, sid, %{type: :agent_end, reason: reason}}
       when is_map_key(by_session, sid) ->
         wait(Map.put_new(results, by_session[sid], {:ended, reason}), ctx, deadline, n)
 
-      {:operator_core, _sid, _event} ->
+      {:rho, _sid, _event} ->
         wait(results, ctx, deadline, n)
 
       {:DOWN, ref, :process, _pid, reason} when is_map_key(by_ref, ref) ->
         wait(Map.put_new(results, by_ref[ref], {:crashed, reason}), ctx, deadline, n)
 
-      {:operator_core_stop, ^loop} ->
+      {:rho_stop, ^loop} ->
         {:stopped, results}
 
       {:DOWN, ^loop_ref, :process, _pid, _reason} ->
@@ -389,9 +389,14 @@ defmodule Operator.Core.Tools.Subagent do
 
   defp last_problem(entries) do
     Enum.find_value(Enum.reverse(entries), fn
-      %{"message" => %{"role" => "assistant", "errorMessage" => e}} when is_binary(e) -> e
-      %{"type" => "custom_message", "customType" => "operator.error", "content" => c} -> c
-      _ -> nil
+      %{"message" => %{"role" => "assistant", "errorMessage" => e}} when is_binary(e) ->
+        e
+
+      %{"type" => "custom_message", "content" => c} = entry ->
+        if Session.notice_kind(entry) == :error, do: c
+
+      _ ->
+        nil
     end)
   end
 

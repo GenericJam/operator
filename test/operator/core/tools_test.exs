@@ -2,7 +2,6 @@ defmodule Operator.Core.ToolsTest do
   use ExUnit.Case, async: false
 
   alias Operator.Core.Phone
-  alias Operator.Core.ToolRegistry
   alias Operator.Core.Tools.Clipboard
   alias Operator.Core.Tools.Friction
   alias Operator.Core.Tools.HttpGet
@@ -54,19 +53,6 @@ defmodule Operator.Core.ToolsTest do
              Friction.run(%{"action" => "resolve", "id" => 9, "how" => "x"}, a)
 
     assert {:error, _} = log.(%{"what" => ""}, a)
-  end
-
-  test "looks up core tools and takes new ones at runtime" do
-    start_supervised!(ToolRegistry)
-
-    assert {:ok, Notes} = ToolRegistry.lookup("notes")
-
-    assert :ok = ToolRegistry.register(Operator.Test.Tools.Echo)
-    assert {:ok, Operator.Test.Tools.Echo} = ToolRegistry.lookup("echo")
-    assert {:error, :not_a_tool} = ToolRegistry.register(String)
-
-    :ok = ToolRegistry.unregister("echo")
-    assert ToolRegistry.lookup("echo") == :error
   end
 
   defp responding(status, type, body) do

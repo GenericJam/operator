@@ -286,7 +286,7 @@ defmodule Operator.Core.Library do
 
   The library is Dyn code the agent changes (a new phone widget, say), so
   `catalogue/1` parses the current generation's sources
-  (`Operator.Core.Dyn.sources/2`), once per generation: the prompt is
+  (`Rho.Dyn.sources/2`), once per generation: the prompt is
   rebuilt on every model call, and the text is kept (in
   `:persistent_term`) until another generation runs. With no generation
   or no library pages in it, it is the seed's catalogue
@@ -299,10 +299,10 @@ defmodule Operator.Core.Library do
   the more pages there are, the fewer props and the shorter the usage.
   """
 
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.Registry
   alias Operator.Core.Dyn.Seed
   alias Operator.Core.Library.Pages
+  alias Rho.Dyn
+  alias Rho.Dyn.Registry
 
   require Logger
 

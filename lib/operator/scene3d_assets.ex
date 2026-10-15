@@ -29,7 +29,7 @@ defmodule Operator.Scene3dAssets do
 
   @doc "Writes the models under `dir` and makes it mob_scene3d's asset root."
   @spec install!(Path.t()) :: :ok
-  def install!(dir \\ Path.join(Operator.Paths.data_dir(), "scene3d_assets")) do
+  def install!(dir \\ Path.join(Rho.Config.data_dir(), "scene3d_assets")) do
     File.mkdir_p!(dir)
 
     for {name, bytes} <- @assets do

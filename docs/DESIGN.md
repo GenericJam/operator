@@ -49,7 +49,7 @@ only way the Core changes besides a cable deploy:
   and `mob.exs` never travel: those need a native deploy.
 - **Trust**: the public key is baked into the build (mob_dev ships
   `config :mob_deliver` inside it; delivered code can't change it, and Dyn code
-  may not call `MobDeliver` at all, `Operator.Core.Dyn.Check`). Every manifest
+  may not call `MobDeliver` at all, rho's `Rho.Dyn.Check`). Every manifest
   and module is checked against it, whatever server sent it. The Mac's
   address is not baked: the phone learns it from an `operator://deliver` QR
   carrying the key's fingerprint. A fingerprint that doesn't match the
@@ -160,7 +160,7 @@ lifeline (a second BEAM in a `:lifeline` service process); iOS can't.
 
 ## 3. The agent loop (ported from pi-agent-core)
 
-A GenServer per session (`Operator.Core.Loop`), events broadcast to the chat
+A GenServer per session (`Rho.Loop`, in rho since the extraction), events broadcast to the chat
 screen. Shape from `pi-agent-core/src/agent-loop.ts`:
 
 - **Events**: `agent_start`, per turn `turn_start` → `message_start` /
@@ -258,7 +258,7 @@ Each with name, description, schema (Jido.Action), streaming progress, and a
 Claude (Pro/Max) and ChatGPT (Plus/Pro, Codex) through req_llm, signed in
 on the phone with omp's flows: menu › accounts (`Operator.MenuScreen`)
 runs the provider's OAuth PKCE flow with its own localhost redirect
-(54545 / 1455) answered by the phone's BEAM, and `Operator.Auth` keeps the
+(54545 / 1455) answered by the phone's BEAM, and `Rho.Auth` keeps the
 credentials in the platform secure store, refreshing the access token
 before each call when due. Default model: the cheapest current Claude
 (`anthropic:claude-haiku-4-5`), user-selectable (menu › model); per-day cost cap enforced
@@ -272,7 +272,7 @@ link (`operator://login?c=…`, AES-256-GCM under PBKDF2-SHA256 of six EFF
 short-list words, 10-minute lifetime) plus the six words. Scanning it with
 the camera or any QR app opens Operator at the words (`Operator.Links`), as
 does menu › accounts › scan a login QR (`Operator.LoginScanScreen`, mob_scanner); the
-login is stored with `Operator.Auth.put/2`. Each run is a new grant, so omp
+login is stored with `Rho.Auth.put/2`. Each run is a new grant, so omp
 and the phone never share a rotating refresh token; only the refresh token
 travels (an OpenAI access token alone is ~1.8 kB), and the phone refreshes
 on first use.

@@ -8,7 +8,7 @@ defmodule Operator.Core.Tools.Friction do
   its Dyn layer) and marks it resolved; the open ones are for the user's
   Mac, which reads the file to fix docs, prompts and Core.
   """
-  @behaviour Operator.Core.Tool
+  @behaviour Rho.Tool
 
   @file_name "friction.jsonl"
   @max_text 600
@@ -121,7 +121,7 @@ defmodule Operator.Core.Tools.Friction do
 
   @doc "Every entry, oldest first (for the Mac, over RPC, and for tests)."
   @spec entries(String.t()) :: [map()]
-  def entries(data_dir \\ Operator.Paths.data_dir()), do: read(%{data_dir: data_dir})
+  def entries(data_dir \\ Rho.Config.data_dir()), do: read(%{data_dir: data_dir})
 
   defp read(ctx) do
     case File.read(path(ctx)) do

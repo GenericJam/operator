@@ -1,6 +1,6 @@
 defmodule Operator.Test.Dyn.Approval do
   @moduledoc "Approval for tests: `request/1` approves, with a fresh token; only its own tokens verify, for their subject."
-  @behaviour Operator.Core.Dyn.Approval
+  @behaviour Rho.Dyn.Approval
 
   @impl true
   def request(subject), do: {:ok, {:test_approval, subject, make_ref()}}
@@ -21,11 +21,11 @@ defmodule Operator.Test.Dyn do
   import ExUnit.Assertions
   import ExUnit.Callbacks
 
-  alias Operator.Core.Dyn
-  alias Operator.Core.Dyn.Compiler
-  alias Operator.Core.Dyn.Keeper
+  alias Rho.Dyn
+  alias Rho.Dyn.Compiler
+  alias Rho.Dyn.Keeper
 
-  @keeper Operator.Core.Dyn.Keeper
+  @keeper Rho.Dyn.Keeper
 
   @fast [
     approval: Operator.Test.Dyn.Approval,
@@ -84,11 +84,11 @@ defmodule Operator.Test.Dyn do
     n
   end
 
-  @doc "Waits for `{:operator_dyn, %{type: type}}` (discarding others)."
+  @doc "Waits for `{:rho_dyn, %{type: type}}` (discarding others)."
   def await_dyn(type, timeout \\ 2_000) do
     receive do
-      {:operator_dyn, %{type: ^type} = event} -> event
-      {:operator_dyn, _other} -> await_dyn(type, timeout)
+      {:rho_dyn, %{type: ^type} = event} -> event
+      {:rho_dyn, _other} -> await_dyn(type, timeout)
     after
       timeout -> flunk("no #{type} event")
     end
@@ -98,7 +98,7 @@ defmodule Operator.Test.Dyn do
   def tool(mod, name, opts \\ []) do
     """
     defmodule Operator.Dyn.#{mod} do
-      @behaviour Operator.Core.Tool
+      @behaviour Rho.Tool
 
       def name, do: #{inspect(name)}
       def description, do: "A test tool."

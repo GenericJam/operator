@@ -55,12 +55,12 @@ defmodule Mix.Tasks.Operator.DeliverTest do
     assert Deliver.read_private_key!(path) == key
   end
 
-  test "a publish carries Operator's modules, not the entry module, the build's config, " <>
-         "NIF stubs or Mix tasks",
+  test "a publish carries Operator's modules and rho's, not the entry module, the build's " <>
+         "config, NIF stubs or Mix tasks",
        %{tmp_dir: dir} do
-    keys = Mix.Project.compile_path() |> Deliver.build() |> Map.keys()
+    keys = Deliver.ebins() |> Deliver.build() |> Map.keys()
 
-    for key <- ~w(Operator.App Operator.Core.Loop Operator.Core.Dyn.Keeper Operator.ChatScreen
+    for key <- ~w(Operator.App Rho.Loop Rho.Dyn.Keeper Operator.ChatScreen
                   Operator.Deliver Operator.Links) do
       assert key in keys
     end
@@ -80,10 +80,10 @@ defmodule Mix.Tasks.Operator.DeliverTest do
         [:binary]
       )
 
-    loop = Path.join(Mix.Project.compile_path(), "Elixir.Operator.Core.Loop.beam")
+    loop = to_string(:code.which(Rho.Loop))
     File.write!(Path.join(dir, "mob_app_config.beam"), config)
-    File.cp!(loop, Path.join(dir, "Elixir.Operator.Core.Loop.beam"))
-    assert %{"Operator.Core.Loop" => {sha, beam}} = build = Deliver.build(dir)
+    File.cp!(loop, Path.join(dir, "Elixir.Rho.Loop.beam"))
+    assert %{"Rho.Loop" => {sha, beam}} = build = Deliver.build(dir)
     assert map_size(build) == 1
 
     # Stripped: what the VM needs, no checkout path (the SHA is the same
@@ -101,7 +101,7 @@ defmodule Mix.Tasks.Operator.DeliverTest do
     store = Path.join(dir, "store")
     opts = [root: store, app: @app, channel: "dev", private_key: private_key]
     {probe, probe_v1} = entry("defmodule Operator.RoundTripProbe do\n  def v, do: 1\nend\n")
-    build = Mix.Project.compile_path() |> Deliver.build() |> Map.put(probe, probe_v1)
+    build = Deliver.ebins() |> Deliver.build() |> Map.put(probe, probe_v1)
 
     assert {:ok, %{previous_issued_at: nil, removed: []} = first} = Deliver.publish(build, opts)
     assert length(first.changed) == map_size(build)
@@ -136,7 +136,7 @@ defmodule Mix.Tasks.Operator.DeliverTest do
     assert {:ok, manifest, _body} = Client.fetch_manifest(client)
     assert manifest.modules == Map.new(build, fn {key, {sha, _beam}} -> {key, sha} end)
 
-    for key <- [probe, "Operator.Core.Loop"] do
+    for key <- [probe, "Rho.Loop"] do
       {sha, beam} = build[key]
       assert Client.fetch_beam(sha, client) == {:ok, beam}
     end

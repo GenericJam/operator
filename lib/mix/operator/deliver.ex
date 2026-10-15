@@ -14,9 +14,11 @@ defmodule Mix.Operator.Deliver do
 
   ## What a publish delivers (`build/1`)
 
-  Operator's own modules: the BEAMs `mix compile` wrote to the compile
-  path, the same files `mix mob.deploy` ships (Core, screens, tools, ...),
-  so a publish carries whatever changed since the build on the phone. Each
+  Operator's own modules and rho's (the agent core, a dependency that was
+  Operator's own code and is still updated with it): the BEAMs `mix
+  compile` wrote to the compile path and to rho's ebin (`ebins/0`), the
+  same files `mix mob.deploy` ships (Core, screens, tools, ...), so a
+  publish carries whatever changed since the build on the phone. Each
   is stripped to the chunks the VM needs, as mob_deliver_server does, so
   an unchanged module keeps its SHA wherever the checkout lives (debug info
   and docs embed its path) and phones don't download it again. Left out,
@@ -30,7 +32,7 @@ defmodule Mix.Operator.Deliver do
       to the native code inside the installed binary;
     * `Mix.*`: these Mac-side tasks.
 
-  Never deliverable (not in the app's compile path): dependencies (mob,
+  Never deliverable (not in those ebins): the other dependencies (mob,
   mob_dev, the plugins, jido, ...), native code, `priv/` (migrations,
   fonts, models), `config/*.exs` and `mob.exs`. Delivered code runs against
   the deps, NIFs and config already on the phone, so a change that needs
@@ -164,13 +166,19 @@ defmodule Mix.Operator.Deliver do
 
   # ── publishing ──
 
+  @doc "The ebins a publish carries: Operator's compile path and rho's."
+  @spec ebins() :: [Path.t()]
+  def ebins,
+    do: [Mix.Project.compile_path(), Path.join([Mix.Project.build_path(), "lib", "rho", "ebin"])]
+
   @doc """
-  The publishable modules in `ebin_dir` as a `MobDeliverServer.build()`:
+  The publishable modules in `ebin_dirs` as a `MobDeliverServer.build()`:
   `%{module_key => {sha256, stripped_beam}}` (see the moduledoc).
   """
-  @spec build(Path.t()) :: %{String.t() => {String.t(), binary()}}
-  def build(ebin_dir) do
-    for path <- Path.wildcard(Path.join(ebin_dir, "*.beam")),
+  @spec build(Path.t() | [Path.t()]) :: %{String.t() => {String.t(), binary()}}
+  def build(ebin_dirs) do
+    for dir <- List.wrap(ebin_dirs),
+        path <- Path.wildcard(Path.join(dir, "*.beam")),
         beam = path |> File.read!() |> strip(),
         {:ok, {module, []}} = :beam_lib.chunks(beam, []),
         key = MobDeliverServer.module_key(module),

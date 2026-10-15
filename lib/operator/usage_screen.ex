@@ -3,33 +3,33 @@ defmodule Operator.UsageScreen do
   Menu › usage (`Operator.MenuScreen`), drawn like the terminal
   (`Operator.TermUI`): per provider, how much of the subscription's 5-hour
   and weekly windows is used and when they reset, the last 429 and when it
-  resets (`Operator.Core.Usage`); then the tokens, requests and cost of the
+  resets (`Rho.Usage`); then the tokens, requests and cost of the
   shown session, today and all time, and per model.
 
   Opening the page asks the signed-in providers' usage endpoints
-  (`Operator.Core.Usage.Fetch`) when their numbers are over
+  (`Rho.Usage.Fetch`) when their numbers are over
   #{div(300, 60)} minutes old; `[refresh]` asks at once. Params: `:model`
   and `:path` (the shown session), `:data_dir` (default
-  `Operator.Paths.data_dir/0`), `:signed_in` (the providers to ask; default
+  `Rho.Config.data_dir/0`), `:signed_in` (the providers to ask; default
   the signed-in ones) and `:refresh` (`fn dir, provider -> :ok | {:error,
-  message} end`, default `Operator.Core.Usage.Fetch.refresh/2`).
+  message} end`, default `Rho.Usage.Fetch.refresh/2`).
   """
   use Mob.Screen
 
-  alias Operator.Auth
-  alias Operator.Core.Budget
-  alias Operator.Core.Session
   alias Operator.Core.Term
-  alias Operator.Core.Usage
-  alias Operator.Core.Usage.Fetch
   alias Operator.TermUI, as: UI
   alias Operator.Toggle
+  alias Rho.Auth
+  alias Rho.Budget
+  alias Rho.Session
+  alias Rho.Usage
+  alias Rho.Usage.Fetch
 
   @stale_s 300
   @bar 10
 
   def mount(params, _session, socket) do
-    dir = Map.get(params, :data_dir) || Operator.Paths.data_dir()
+    dir = Map.get(params, :data_dir) || Rho.Config.data_dir()
     signed_in = Map.get_lazy(params, :signed_in, &signed_in/0)
     :ok = Usage.subscribe()
 
@@ -60,7 +60,7 @@ defmodule Operator.UsageScreen do
     t = Term.theme()
 
     rows =
-      Enum.flat_map(Auth.providers(), &provider_rows(&1, a, t)) ++
+      Enum.flat_map(Operator.Core.providers(), &provider_rows(&1, a, t)) ++
         [UI.actions(t, [UI.link("refresh", :refresh, t)])] ++
         tokens_rows(a, t) ++ model_rows(a, t)
 
@@ -76,9 +76,9 @@ defmodule Operator.UsageScreen do
   def handle_info({:tap, :refresh}, socket),
     do: {:noreply, refresh(socket, socket.assigns.signed_in)}
 
-  def handle_info({:operator_usage, :changed}, socket), do: {:noreply, load(socket)}
+  def handle_info({:rho_usage, :changed}, socket), do: {:noreply, load(socket)}
 
-  def handle_info({:operator_usage, provider, result}, socket) do
+  def handle_info({:rho_usage, provider, result}, socket) do
     note = with {:error, message} <- result, do: "usage endpoint: #{message}"
     note = if note == :ok, do: nil, else: note
     fetching = Map.put(socket.assigns.fetching, provider, note)
@@ -88,13 +88,13 @@ defmodule Operator.UsageScreen do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # The endpoints answer off the screen process; each result comes back as
-  # `{:operator_usage, provider, result}`.
+  # `{:rho_usage, provider, result}`.
   defp refresh(socket, providers) do
     screen = self()
     %{data_dir: dir, refresh: fun} = socket.assigns
 
     for p <- providers do
-      {:ok, _} = Task.start(fn -> send(screen, {:operator_usage, p, run(fun, dir, p)}) end)
+      {:ok, _} = Task.start(fn -> send(screen, {:rho_usage, p, run(fun, dir, p)}) end)
     end
 
     fetching = Map.merge(socket.assigns.fetching, Map.new(providers, &{&1, :fetching}))

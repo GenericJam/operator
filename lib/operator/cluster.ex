@@ -221,7 +221,7 @@ defmodule Operator.Cluster do
   @impl true
   def init(opts) do
     phone? = System.get_env("MOB_BEAMS_DIR") != nil
-    dir = Keyword.get_lazy(opts, :dir, fn -> Path.join(Operator.Paths.data_dir(), "cluster") end)
+    dir = Keyword.get_lazy(opts, :dir, fn -> Path.join(Rho.Config.data_dir(), "cluster") end)
     File.mkdir_p!(dir)
     :ok = Tls.init_table()
     # Linked: restarted along with this process. Local-only while off.
@@ -333,8 +333,8 @@ defmodule Operator.Cluster do
 
   def handle_call(:reset, _from, s) do
     s = s |> stop_cluster() |> close_window()
-    _ = Operator.SecureStore.delete(@cookie_account)
-    _ = Operator.SecureStore.delete(@join_account)
+    _ = Rho.CredentialStore.delete(@cookie_account)
+    _ = Rho.CredentialStore.delete(@join_account)
     _ = Identity.delete()
     s = %{s | enabled: false, peers: [], fingerprint: nil, error: nil, join_secret: nil}
     save(s)
@@ -430,7 +430,7 @@ defmodule Operator.Cluster do
   end
 
   def handle_info({:join_expired, secret}, %{join_secret: secret} = s) do
-    _ = Operator.SecureStore.delete(@join_account)
+    _ = Rho.CredentialStore.delete(@join_account)
     {:noreply, %{s | join_secret: nil}}
   end
 
@@ -759,13 +759,13 @@ defmodule Operator.Cluster do
   # ── cookie ──
 
   defp cookie do
-    case Operator.SecureStore.get(@cookie_account) do
+    case Rho.CredentialStore.get(@cookie_account) do
       {:ok, cookie} when is_binary(cookie) ->
         {:ok, cookie}
 
-      {:ok, nil} ->
+      :error ->
         cookie = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
-        with :ok <- Operator.SecureStore.put(@cookie_account, cookie), do: {:ok, cookie}
+        with :ok <- Rho.CredentialStore.put(@cookie_account, cookie), do: {:ok, cookie}
 
       {:error, _} = error ->
         error
@@ -775,12 +775,12 @@ defmodule Operator.Cluster do
   # "<unix expiry>:<secret>" in the secure store; schedules its own expiry.
   defp store_join_secret(secret) do
     expires = System.os_time(:second) + div(@window_ms, 1000)
-    _ = Operator.SecureStore.put(@join_account, "#{expires}:#{secret}")
+    _ = Rho.CredentialStore.put(@join_account, "#{expires}:#{secret}")
     Process.send_after(self(), {:join_expired, secret}, @window_ms)
   end
 
   defp stored_join_secret do
-    with {:ok, value} when is_binary(value) <- Operator.SecureStore.get(@join_account),
+    with {:ok, value} when is_binary(value) <- Rho.CredentialStore.get(@join_account),
          [expires, secret] <- String.split(value, ":", parts: 2),
          {expires, ""} <- Integer.parse(expires),
          left when left > 0 <- expires - System.os_time(:second) do
@@ -788,7 +788,7 @@ defmodule Operator.Cluster do
       secret
     else
       _ ->
-        _ = Operator.SecureStore.delete(@join_account)
+        _ = Rho.CredentialStore.delete(@join_account)
         nil
     end
   end
@@ -797,7 +797,7 @@ defmodule Operator.Cluster do
     do: take_cookie(s, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
 
   defp take_cookie(s, cookie) do
-    case Operator.SecureStore.put(@cookie_account, cookie) do
+    case Rho.CredentialStore.put(@cookie_account, cookie) do
       :ok ->
         if s.running, do: Node.set_cookie(String.to_atom(cookie))
         {:ok, cookie}
@@ -828,19 +828,19 @@ defmodule Operator.Cluster do
   # A member that missed a cookie change (it was offline when a peer was
   # forgotten) takes the new one from an invite of a member it has pinned.
   defp adopt_cookie(s, %{cookie: new_cookie, fingerprint: inviter}) do
-    case Operator.SecureStore.get(@cookie_account) do
-      {:ok, nil} ->
-        Operator.SecureStore.put(@cookie_account, new_cookie)
+    case Rho.CredentialStore.get(@cookie_account) do
+      :error ->
+        Rho.CredentialStore.put(@cookie_account, new_cookie)
 
       {:ok, ^new_cookie} ->
         :ok
 
       {:ok, _other} when s.peers == [] ->
-        Operator.SecureStore.put(@cookie_account, new_cookie)
+        Rho.CredentialStore.put(@cookie_account, new_cookie)
 
       {:ok, _other} ->
         if pinned?(s, inviter),
-          do: Operator.SecureStore.put(@cookie_account, new_cookie),
+          do: Rho.CredentialStore.put(@cookie_account, new_cookie),
           else: {:error, :different_cluster}
 
       {:error, _} = error ->
