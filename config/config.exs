@@ -176,10 +176,12 @@ config :mob_rapier, :otp_app, :operator
 # to compile until it knows how to count string length.
 config :ash, default_string_length_count: :codepoints
 
-# The agent core (rho): Operator's seams. The data dir is rho's default,
-# MOB_DATA_DIR (the app's private files; tests set it too), so sessions,
-# settings.json, usage.json and Dyn generations stay where they were.
+# The agent core (rho): Operator's seams. The data dir is where it always
+# was (Operator.Core.data_dir/0: MOB_DATA_DIR on the phone, which tests set
+# too; _build/host_data off it), so sessions, sign-ins, settings.json,
+# usage.json and Dyn generations stay where they were.
 config :rho,
+  data_dir: {Operator.Core, :data_dir, []},
   # Sessions keep their `operator.*` customType entries.
   namespace: "operator",
   app_name: "Operator",

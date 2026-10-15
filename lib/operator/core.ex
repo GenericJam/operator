@@ -102,6 +102,19 @@ defmodule Operator.Core do
   def tools, do: @tools
 
   @doc """
+  Operator's data dir (`config :rho, :data_dir`): `MOB_DATA_DIR` (the
+  app's private files) on the phone, `_build/host_data` off it. Created by
+  `Rho.Config.data_dir/0`, which callers use.
+  """
+  @spec data_dir() :: String.t()
+  def data_dir do
+    case System.get_env("MOB_DATA_DIR") do
+      dir when dir in [nil, ""] -> Path.join(File.cwd!(), "_build/host_data")
+      dir -> dir
+    end
+  end
+
+  @doc """
   The providers Operator signs in to: the subscriptions (rho's OAuth
   providers). rho also takes API keys, which Operator has no screen for.
   """
