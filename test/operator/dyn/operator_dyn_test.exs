@@ -79,6 +79,25 @@ defmodule Operator.DynTest do
     assert {:ok, _} = Check.run(%{"probe.ex" => probe(allowed)})
   end
 
+  test "a tool written before the move to rho, on Operator.Core.Tool, still builds and runs",
+       %{tmp_dir: dir} do
+    start_keeper(dir)
+
+    legacy =
+      "weather"
+      |> then(&tool("Weather", &1, run: ~s|{:ok, "sunny"}|))
+      |> String.replace("@behaviour Rho.Tool", "@behaviour Operator.Core.Tool")
+
+    assert legacy =~ "@behaviour Operator.Core.Tool"
+    # Compiled without a warning: the old name is the same behaviour.
+    %{n: n, warnings: []} = propose!(%{"weather.ex" => legacy})
+    {:ok, token} = Dyn.request_approval({:activate, n})
+    {:ok, _} = Dyn.activate(n, token)
+
+    assert [{"weather", module}] = Dyn.tools()
+    assert module.run(%{}, %{}) == {:ok, "sunny"}
+  end
+
   test "the bundled sample screens pass the whole pipeline", %{tmp_dir: dir} do
     start_keeper(dir)
     files = Map.new(Samples.names(), &Samples.get/1)

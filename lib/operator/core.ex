@@ -263,8 +263,8 @@ defmodule Operator.Core do
     `keep(path, name)`, to `inbox/`. No `Mob.Storage`. `Operator.Core.Tflite` runs models on \
     the GPU/NPU and `Operator.Core.Terminal` opens the terminal; `Nx` and `NxTfliteMob` are \
     fine.
-    - Tools written for older versions say `@behaviour Operator.Core.Tool`: it is \
-    `Rho.Tool` now, change it when you edit the file.
+    - Tools written before Operator moved onto rho say `@behaviour Operator.Core.Tool`, \
+    the same behaviour under its old name; new code says `Rho.Tool`.
 
     A menu row for a screen: [menu] lists, under `yours`, the rows `Operator.Dyn.Menu.items/0` \
     returns (at most 20), each `%{label: ..., detail: ..., screen: ...}` (strings; `screen` is a \

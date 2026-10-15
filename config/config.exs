@@ -197,7 +197,13 @@ config :rho, :dyn,
   namespace: Operator.Dyn,
   app: :operator,
   core: [Operator],
-  allowed: [Operator.Core.Files, Operator.Core.Tflite, Operator.Core.Terminal],
+  # Operator.Core.Tool: Rho.Tool's old name, which Dyn tools on phones use.
+  allowed: [
+    Operator.Core.Files,
+    Operator.Core.Tflite,
+    Operator.Core.Terminal,
+    Operator.Core.Tool
+  ],
   check: [
     # Operator.Core.Files' caller-side functions: its roots and grants.
     partial: %{
