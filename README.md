@@ -47,7 +47,7 @@ on an Android 9+ phone, open it, and allow your browser or Files app to install
 it. In Operator, tap the dial for the terminal, then `[menu] › accounts` to sign
 in with your own Claude or ChatGPT subscription.
 
-> **Status:** 1.3.0, sideloaded from GitHub; not in any store. Tested on a Moto
+> **Status:** 1.3.1, sideloaded from GitHub; not in any store. Tested on a Moto
 > G 2021 (Android 11), a Moto G Power 2024 and a physical iPhone. Expect sharp edges.
 
 ## What it can do
@@ -141,7 +141,7 @@ mix credo --strict
 | `lib/operator/core/` | the Core: agent loop, session, LLM adapters, tools, Dyn engine (`dyn/`), the front host, theme, voice, keep-alive |
 | `lib/operator/*_screen.ex` | chat (terminal), menu (settings), usage, shell (front), diagnostics, rescue, QR scanner |
 | `lib/operator/auth*` | provider sign-in, token refresh, QR login transfer |
-| `lib/operator/cluster*`, `src/operator_{dist,epmd}.erl` | optional local TLS cluster: identity, pairing, pinning, fixed-port distribution and bounded application bus |
+| `lib/operator/cluster*`, `src/operator_{dist,epmd,mdns}.erl` | optional local cluster: paired TLS (identity, pairing, pinning, fixed-port distribution) or open Erlang distribution (on-phone epmd answers, `.local` names over mDNS), and the bounded application bus |
 | `lib/mix/tasks/` | the Mac-side tasks (`operator.handoff`, `.login`, `.deliver.*`, `.publish`, `.docs`) |
 | `priv/dyn_seed/` | the default front (welcome screen, component library: `showcase/components/` Mishka pages, `showcase/phone/` capability widgets), installed as a generation; a newer seed is merged in on update, user edits kept |
 | `priv/docs/` | the docs bundled for the phone agent (`mix operator.docs` refreshes them) |

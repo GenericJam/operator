@@ -712,6 +712,7 @@ defmodule Operator.Cluster do
     with {:ok, ip} <- address(s),
          {:ok, cookie} <- open_cookie() do
       :ok = stop_dist()
+      ensure_cookie_dir()
       :ok = set_global(true)
       node = :"#{s.open_name}@#{:inet.ntoa(ip)}"
       :ok = :operator_epmd.set_mode(:open)
@@ -754,6 +755,7 @@ defmodule Operator.Cluster do
          {:ok, cookie} <- cookie(),
          {:ok, _} <- Application.ensure_all_started(:ssl) do
       :ok = stop_dist()
+      ensure_cookie_dir()
       :ok = prepare_node()
       node = :"#{Identity.name(identity)}@#{:inet.ntoa(ip)}"
       :ok = :operator_dist.set_mode(:tls)
@@ -825,6 +827,21 @@ defmodule Operator.Cluster do
     end
 
     :ok
+  end
+
+  # A node started without -setcookie reads (or first writes) a cookie file
+  # before it takes ours: a phone has no -home, so OTP's auth goes for the
+  # XDG one, <HOME>/.config/erlang/.erlang.cookie, whose directory only
+  # exists once something made it (a development build's link does; a
+  # fresh release install has nothing): without it Node.start/2 fails with
+  # enoent. The random cookie written there is replaced at once.
+  defp ensure_cookie_dir do
+    dir = :filename.basedir(:user_config, ~c"erlang")
+
+    case File.mkdir_p(dir) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[cluster] no #{dir}: #{inspect(reason)}")
+    end
   end
 
   defp failed(s, reason) do
