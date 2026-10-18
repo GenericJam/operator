@@ -52,7 +52,7 @@ defmodule Operator.Core do
     Operator.Core.Tools.PickPhotos,
     Operator.Core.Tools.PhotosRecent,
     Operator.Core.Tools.Sensors,
-    # The other Operators paired in the local cluster.
+    # The local cluster: paired Operators, or any Erlang node (open mode).
     Operator.Core.Tools.Cluster,
     # Files: the workspace, Android's shared storage, the document picker.
     Operator.Core.Tools.FileList,
@@ -215,11 +215,14 @@ defmodule Operator.Core do
     with items open unless you're blocked or need the user.
     - You can add rows to the user's `[menu]`: `Operator.Dyn.Menu.items/0` in the Dyn \
     layer, one row per front screen (see the Dyn guide below).
-    - Other phones: `cluster` reaches the Operators this phone is paired with on the local \
-    network (the user pairs them in [menu] › cluster). Ask their agent something and get its \
-    answer, run one of their tools on that phone (its location, sensors, a notification \
-    there, its files), or show its user a message. Each one is called a node \
-    (`operator_<id>@<address>`). A user message starting `<node> asks:` is another phone's \
+    - Other nodes: `cluster` reaches this phone's local cluster (the user turns it on in \
+    [menu] › cluster). In paired mode those are the Operators paired with this one; in open \
+    mode any Erlang node whose name and cookie you have: `cluster` `connect` dials one. On \
+    an Operator, ask its agent something and get its answer, run one of its tools on that \
+    phone (its location, sensors, a notification there, its files), or show its user a \
+    message. Any connected node is a plain Erlang node to `eval` (`:erpc.call/4`, \
+    `Node.spawn/2`, `:global`). Each one is called a node (`operator_<id>@<address>`, \
+    `name@host`). A user message starting `<node> asks:` is another phone's \
     agent asking you: just answer it, your reply goes back to that phone; you can't ask \
     phones anything while answering.
     - Files: `file_list`, `file_read` (text, or a picture you see), `file_write`, \
@@ -278,6 +281,12 @@ defmodule Operator.Core do
     fine.
     - Tools written before Operator moved onto rho say `@behaviour Operator.Core.Tool`, \
     the same behaviour under its old name; new code says `Rho.Tool`.
+    - Distribution is open here, whatever the rules above say: `Node` (`Node.list/0`, \
+    `Node.connect/1`, `Node.spawn/2,4`, `Node.monitor/2`), `:rpc`, `:erpc`, `:global`, \
+    `:net_kernel` and `:net_adm` are allowed. `Operator.Cluster.connect("name@host", cookie)` \
+    connects to a node by name (open mode; a string, since Dyn code can't make atoms), \
+    `Operator.Cluster.status/0` shows the mode and the nodes, `Operator.Cluster.Bus` has \
+    topics and services across the Operators connected.
 
     A menu row for a screen: [menu] lists, under `yours`, the rows `Operator.Dyn.Menu.items/0` \
     returns (at most 20), each `%{label: ..., detail: ..., screen: ...}` (strings; `screen` is a \

@@ -1,16 +1,17 @@
 defmodule Operator.Cluster.Bus do
   @moduledoc """
-  What code running on the cluster may use, front (Dyn) screens and the
-  agent's `cluster` tool included: who the peers are, topics to publish and
-  subscribe to, and named services to call on a peer. Everything goes
-  through the `:pg` scope `Operator.Cluster` runs, so it only ever reaches
-  processes that joined it here; there is no way through this module to
-  `:rpc`, to another node's system processes, or to change the cluster
-  (pairing, forgetting: `Operator.Cluster`, from the menu).
+  The application API between Operators on the cluster, for front (Dyn)
+  screens and the agent's `cluster` tool: who the peers are, topics to
+  publish and subscribe to, and named services to call on a peer.
+  Everything goes through the `:pg` scope `Operator.Cluster` runs, so it
+  only reaches processes that joined it, on Operators. It's the stable,
+  shaped way between Operators, not a fence: distribution itself
+  (`Node`, `:rpc`, `:erpc`, `:global`) is open to the same code, and any
+  connected node can run anything here.
 
   Topics and services are strings up to #{100} bytes. Messages are plain
   data: no functions anywhere in them (a peer never runs code it was
-  sent), at most #{64} KiB in the external term format.
+  sent through the Bus), at most #{64} KiB in the external term format.
 
       # a chat: every phone's screen subscribes, any phone publishes
       :ok = Operator.Cluster.Bus.subscribe("chat")
@@ -33,7 +34,8 @@ defmodule Operator.Cluster.Bus do
   @type name :: String.t()
 
   @doc """
-  The paired peers that aren't revoked: `%{node: node, connected: boolean}`.
+  The peers that aren't revoked: `%{node: node, connected: boolean}` (in
+  open mode, the remembered nodes and every other one connected).
   `this_node/0` is this phone's node.
   """
   @spec peers() :: [%{node: node(), connected: boolean()}]

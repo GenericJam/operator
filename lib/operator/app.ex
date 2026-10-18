@@ -25,7 +25,8 @@ defmodule Operator.App do
 
     # Dist first, so a boot step that fails can still be inspected over rpc.
     # Operator.Cluster starts it in the saved mode, after Mob.Dist's delay:
-    # the cluster (TLS on the Wi-Fi address) when it is on, otherwise the
+    # the cluster (paired: TLS, or open: plain Erlang distribution, on the
+    # Wi-Fi address) when it is on, otherwise the
     # development link (Mob.Dist, loopback only; no :cookie: the node takes
     # the per-app cookie mob_dev writes to $MOB_BEAMS_DIR/mob_dist_cookie).
     # Operator.Cluster.Remote answers the other members' agents through the

@@ -506,7 +506,7 @@ defmodule Operator.MenuScreen do
           UI.line(renderer_hint(renderer), t, "dim", text_size: t.text_size - 1),
           UI.heading("usage and devices", t),
           UI.item("usage", "5h / weekly, tokens", :usage, t),
-          UI.item("cluster", "pair Operators over local TLS", :cluster, t),
+          UI.item("cluster", "Operators, or any Erlang node", :cluster, t),
           UI.item("components", "the component library, in the front", :components, t)
         ] ++
         yours_rows(a.yours, t) ++

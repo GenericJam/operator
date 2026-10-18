@@ -1,7 +1,7 @@
 defmodule Operator.Cluster.Remote do
   @moduledoc """
-  What this Operator does for the agents on the other members, through
-  three `Operator.Cluster.Bus` services (only members reach the Bus):
+  What this Operator does for the agents on the other Operators connected,
+  through three `Operator.Cluster.Bus` services:
 
     * `"operator.tool"`: runs one of this phone's agent tools
       (`{:tool, name, args}`) and answers with its result, so a member's

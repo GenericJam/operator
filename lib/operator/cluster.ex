@@ -1,10 +1,17 @@
 defmodule Operator.Cluster do
   @moduledoc """
-  Operator's Erlang cluster: phones (and Nerves devices, Macs) joined over
-  mutually authenticated TLS distribution on the local network. Off by
-  default; [menu] › cluster (`Operator.ClusterScreen`) turns it on, pairs
-  and shows the peers. docs/CLUSTER.md has the whole design and the recipe
-  for a node that isn't a phone.
+  Operator's Erlang cluster on the local network, in one of two modes:
+
+    * `:paired` (the default): phones (and Nerves devices, Macs) joined
+      over mutually authenticated TLS distribution, each one pinned by its
+      certificate after a screen-lock-approved invite;
+    * `:open`: plain Erlang distribution with any node whose name and
+      cookie the user knows (`connect/2`), stock `erl`/`iex` nodes
+      included, which find this one through `Operator.Cluster.Epmd`.
+
+  Off by default; [menu] › cluster (`Operator.ClusterScreen`) turns it on,
+  picks the mode, pairs or connects, and shows the peers. docs/CLUSTER.md
+  has the whole design and the recipe for a node that isn't a phone.
 
   ## Distribution modes
 
@@ -13,21 +20,28 @@ defmodule Operator.Cluster do
   module from it). The native hosts write it to `Mob.InitArgs`' file
   before the first launch and this process keeps it there, so no launch
   needs a restart. Everything else is set at run time when cluster
-  distribution starts (`prepare_node/0`): the TLS options and global's
-  `connect_all`; then the cookie. Distribution then
-  runs in one of two modes, never both:
+  distribution starts. Distribution then runs one way at a time:
 
     * off (the default): development builds keep `Mob.Dist`'s link, plain
       TCP on loopback, reached from the Mac over `adb forward` (`mix
       mob.connect`, scripts/rpc.sh); release builds have no distribution at
       all. Nothing listens on the network.
-    * on: the node is `operator_<id>@<Wi-Fi address>` (`Operator.Cluster.Identity`),
-      TLS 1.3 on that address only, port #{9370}, no epmd (`:operator_epmd`),
-      peers checked against pinned certificate fingerprints
-      (`Operator.Cluster.Tls`). The development link is replaced: from the
-      Mac, join the cluster instead (scripts/cluster_rpc.sh).
+    * paired: the node is `operator_<id>@<Wi-Fi address>` (`Operator.Cluster.Identity`),
+      TLS 1.3 on that address only, port #{9370}, no epmd (`:operator_epmd`
+      `fixed`), peers checked against pinned certificate fingerprints
+      (`Operator.Cluster.Tls`), global without `connect_all` (`prepare_node/0`).
+    * open: the node is `<name>@<Wi-Fi address>` (name `operator` unless
+      the user picks one), plain TCP distribution on that address, port
+      #{9370}, the user's cookie (`configure_open/2`) and, per node, the
+      cookie given to `connect/2`. Peers' ports come from the epmd on their
+      host (`:operator_epmd` `open`); this node's is answered on port 4369
+      by `Operator.Cluster.Epmd`. global meshes as on any stock node.
+      Anyone on the network who has the cookie has the whole app.
 
-  ## Pairing and membership
+  On, either mode replaces the development link: from the Mac, connect to
+  the node instead (open mode: `iex --name me@<Mac's address> --cookie <cookie>`).
+
+  ## Pairing and membership (paired mode)
 
   `invite/0` opens a pairing window (#{5} minutes) with a fresh secret and
   returns the link (`Operator.Cluster.Invite`) the screen shows as a QR.
@@ -43,17 +57,27 @@ defmodule Operator.Cluster do
   revocations) are kept. `reset/0` forgets everything and makes a new
   cookie.
 
-  State: `<data dir>/cluster/cluster.json` (on/off, peers; no secret), the
-  cookie and the key in the secure store.
+  ## Connecting (open mode)
+
+  `connect/2` dials `name@host` with a cookie for that node (or this
+  node's own), and remembers it: it is dialled again every #{30} s while
+  it is down, until `disconnect/1`. Nodes that connect here with this
+  node's cookie are let in.
+
+  State: `<data dir>/cluster/cluster.json` (on/off, mode, open name, pinned
+  peers; no secret); the cookies, the remembered open nodes (with theirs)
+  and the key in the secure store.
 
   ## For code that runs on the cluster
 
   Front (Dyn) screens and the agent use `Operator.Cluster.Bus` (peers,
-  publish/subscribe on topics, calling a named service on a peer): it only
-  reaches processes that joined its `:pg` scope, never `:rpc`.
+  publish/subscribe on topics, calling a named service on a peer) to reach
+  other Operators; distribution itself (`Node`, `:rpc`, `:erpc`,
+  `:global`) is open to them too.
   """
   use GenServer
 
+  alias Operator.Cluster.Epmd
   alias Operator.Cluster.Identity
   alias Operator.Cluster.Invite
   alias Operator.Cluster.Tls
@@ -68,8 +92,16 @@ defmodule Operator.Cluster do
   @max_identities 64
   @cookie_account "cluster_cookie"
   @join_account "cluster_join"
+  @open_cookie_account "cluster_open_cookie"
+  @open_nodes_account "cluster_open_nodes"
+  @default_open_name "operator"
   @dev_node :"operator_android@127.0.0.1"
   @pg_scope :operator_cluster
+  @open_name ~r/\A[A-Za-z0-9_-]{1,64}\z/
+  @node_name ~r/\A[A-Za-z0-9_-]{1,64}@[A-Za-z0-9._-]{1,253}\z/
+  # What an Erlang cookie can be on a command line or in ~/.erlang.cookie.
+  @open_cookie ~r/\A[\x21-\x7e]{1,255}\z/
+  @dial_timeout_ms 5_000
 
   @type peer :: %{
           fingerprint: String.t(),
@@ -89,7 +121,8 @@ defmodule Operator.Cluster do
   `<data dir>/cluster`), `:boot_dist` (default true on a phone: start
   distribution in the saved mode after #{@start_delay_ms} ms, the delay
   `Mob.Dist` uses), `:dev_node` (the development link's node name),
-  `:address` (listen on this IPv4 address instead of the LAN one: tests).
+  `:address` (listen on this IPv4 address instead of the LAN one: tests),
+  `:epmd_port` (open mode's port lookups on this port instead of 4369: tests).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -103,11 +136,16 @@ defmodule Operator.Cluster do
   def pg_scope, do: @pg_scope
 
   @doc """
-  What the cluster screen shows: `enabled` (saved setting), `running` (TLS
-  distribution up), `node`, `address`, `port`, `fingerprint` (this node's),
+  What the cluster screen shows: `enabled` (saved setting), `mode`
+  (`:paired` or `:open`), `running` (cluster distribution up), `node`,
+  `address`, `port`, `fingerprint` (this node's, paired mode),
+  `open_name` (this node's name in open mode), `epmd` (open mode: nil
+  while the port lookup answers, or why it couldn't open port 4369),
   `restart_needed` (this launch didn't boot with the cluster's init args:
   open Operator again), `pairing` (window open), `peers` and `error` (why
-  the last start failed).
+  the last start failed). Peers are the pinned ones in paired mode; in
+  open mode the remembered nodes and every other one connected, with
+  `saved` and a nil `fingerprint`.
   """
   @spec status() :: map()
   def status, do: GenServer.call(__MODULE__, :status)
@@ -120,8 +158,8 @@ defmodule Operator.Cluster do
   @spec disable() :: :ok
   def disable, do: GenServer.call(__MODULE__, :disable, 30_000)
 
-  @doc "Opens the pairing window and returns this node's invite link."
-  @spec invite() :: {:ok, String.t()} | {:error, :not_running}
+  @doc "Opens the pairing window and returns this node's invite link (paired mode)."
+  @spec invite() :: {:ok, String.t()} | {:error, :not_running | :open_mode}
   def invite, do: GenServer.call(__MODULE__, :invite)
 
   @doc "Closes the pairing window."
@@ -130,7 +168,8 @@ defmodule Operator.Cluster do
 
   @doc """
   Accepts an invite the human confirmed with the screen lock: pins the
-  inviter, takes its cookie, turns the cluster on and connects to it.
+  inviter, takes its cookie, turns the cluster on in paired mode and
+  connects to it.
   """
   @spec join(Invite.t()) :: :ok | {:error, term()}
   def join(%{node: _, fingerprint: _, cookie: _, port: _} = invite),
@@ -141,11 +180,96 @@ defmodule Operator.Cluster do
   def forget(fingerprint), do: GenServer.call(__MODULE__, {:forget, fingerprint})
 
   @doc """
-  Turns the cluster off and forgets it: every peer, the cookie, and this
-  node's identity (a new name and fingerprint next time).
+  Turns the cluster off and forgets it: every peer, the cookies, the
+  remembered open nodes, the mode, and this node's identity (a new name
+  and fingerprint next time).
   """
   @spec reset() :: :ok
   def reset, do: GenServer.call(__MODULE__, :reset, 30_000)
+
+  @doc """
+  Picks the mode (`:paired` or `:open`) and, while the cluster is on,
+  restarts distribution in it.
+  """
+  @spec set_mode(:paired | :open) :: :ok | {:error, term()}
+  def set_mode(mode) when mode in [:paired, :open],
+    do: GenServer.call(__MODULE__, {:set_mode, mode}, 30_000)
+
+  @doc "This node's open-mode name (the part before `@`) and cookie."
+  @spec open_settings() :: {:ok, %{name: String.t(), cookie: String.t()}} | {:error, term()}
+  def open_settings, do: GenServer.call(__MODULE__, :open_settings)
+
+  @doc """
+  Sets this node's open-mode name (letters, digits, `_`, `-`) and cookie
+  (1..255 printable characters, no spaces). A new name restarts open
+  distribution if it runs. A new cookie applies at once: links made on
+  the old one are dropped (remembered nodes are redialled with the new
+  one); nodes remembered with a cookie of their own stay linked.
+  """
+  @spec configure_open(String.t(), String.t()) :: :ok | {:error, term()}
+  def configure_open(name, cookie) when is_binary(name) and is_binary(cookie),
+    do: GenServer.call(__MODULE__, {:configure_open, name, cookie}, 30_000)
+
+  @doc """
+  Open mode: connects to `node` (`"name@host"`, at most 255 characters)
+  with `cookie` (nil or `""`: this node's own) and remembers both, so it
+  is dialled again while it is down. Each node name and cookie becomes an
+  atom, as with `Node.connect/1`. `{:error, reason}`, which `explain/1`
+  puts in words: `:not_open`, `:bad_node`, `:bad_cookie`, `:self`,
+  `{:store, reason}` (not remembered), `:unknown_host`, `:no_epmd`
+  (nothing answers lookups on that host), `{:not_registered, names}` (its
+  epmd doesn't know the name), `:refused` (the handshake failed: usually
+  the cookie).
+  """
+  @spec connect(String.t(), String.t() | nil) :: :ok | {:error, term()}
+  def connect(node, cookie \\ nil) when is_binary(node),
+    do: GenServer.call(__MODULE__, {:connect, node, cookie}, 30_000)
+
+  @doc """
+  Open mode: disconnects `node` (`"name@host"`) and forgets it, its own
+  cookie included. `{:error, {:store, reason}}` if it couldn't be
+  forgotten (it stays remembered and linked).
+  """
+  @spec disconnect(String.t()) :: :ok | {:error, term()}
+  def disconnect(node) when is_binary(node), do: GenServer.call(__MODULE__, {:disconnect, node})
+
+  @doc "A cluster error in words, for the screen and the agent."
+  @spec explain(term()) :: String.t()
+  def explain(:not_open),
+    do: "The cluster isn't running in open mode ([menu] › cluster: open, then enable)."
+
+  def explain(:bad_node), do: "A node is name@host (at most 255 characters), like app@10.0.0.5."
+  def explain(:bad_name), do: "A name is 1..64 letters, digits, _ or -."
+  def explain(:bad_cookie), do: "A cookie is 1..255 printable characters, no spaces."
+  def explain(:self), do: "That's this node."
+
+  def explain(:no_epmd),
+    do:
+      "Nothing answers node lookups on that host (port 4369): it's unreachable, or no " <>
+        "node runs there with an epmd."
+
+  def explain(:unknown_host),
+    do:
+      "Can't find that host (a name.local one must answer multicast DNS on this Wi-Fi); " <>
+        "its address works too: name@10.0.0.31."
+
+  def explain({:not_registered, []}), do: "That host's epmd has no nodes."
+
+  def explain({:not_registered, names}),
+    do: "That host's epmd has no node by that name (it has: #{Enum.join(names, ", ")})."
+
+  def explain(:refused),
+    do:
+      "The node turned the connection down: a wrong cookie, or it runs with -sname " <>
+        "(short names can't talk to this node's long name)."
+
+  def explain(:restart_needed), do: "Close and reopen Operator once, then try again."
+
+  def explain({:store, reason}),
+    do: "Couldn't save that in the phone's secure store (#{inspect(reason)}): nothing changed."
+
+  def explain(:open_mode), do: "Pairing is for paired mode; this cluster is in open mode."
+  def explain(other), do: inspect(other)
 
   @doc "Messages `{:operator_cluster, :changed}` to the caller on every change."
   @spec subscribe() :: :ok
@@ -159,23 +283,24 @@ defmodule Operator.Cluster do
   def booted_for_cluster?, do: :init.get_argument(:proto_dist) == {:ok, [[~c"operator"]]}
 
   @doc """
-  Gets a node ready to start cluster distribution: `inet_tls_dist`'s
-  options, and `global` told not to mesh every node it hears of (each
-  node connects to the members it pinned; global's default would drop
-  working links to a member that doesn't pin everyone, a headless device,
-  "to prevent overlapping partitions"). global reads `connect_all` when it
-  starts, which is at boot, so it is restarted with the new setting; only
-  while distribution is off, where it holds nothing.
+  Gets a node ready to start paired cluster distribution:
+  `inet_tls_dist`'s options, and `global` told not to mesh every node it
+  hears of (each node connects to the members it pinned; global's default
+  would drop working links to a member that doesn't pin everyone, a
+  headless device, "to prevent overlapping partitions"). global reads
+  `connect_all` when it starts, which is at boot, so it is restarted with
+  the new setting; only while distribution is off, where it holds nothing.
   """
   @spec prepare_node() :: :ok
   def prepare_node do
     :ok = Tls.install_dist_options()
-    limit_global()
+    set_global(false)
   end
 
-  defp limit_global do
-    if Application.get_env(:kernel, :connect_all) != false and not Node.alive?() do
-      Application.put_env(:kernel, :connect_all, false)
+  # Open mode meshes like any stock node (`:global` names need it).
+  defp set_global(connect_all) do
+    if Application.get_env(:kernel, :connect_all, true) != connect_all and not Node.alive?() do
+      Application.put_env(:kernel, :connect_all, connect_all)
       :ok = Supervisor.terminate_child(:kernel_sup, :global_name_server)
       {:ok, _} = Supervisor.restart_child(:kernel_sup, :global_name_server)
     end
@@ -233,11 +358,17 @@ defmodule Operator.Cluster do
     s = %{
       dir: dir,
       enabled: saved.enabled,
+      mode: saved.mode,
+      open_name: saved.open_name,
+      open_nodes: read_open_nodes(),
       peers: saved.peers,
       running: false,
       node: nil,
       address: nil,
       fingerprint: nil,
+      epmd: nil,
+      epmd_error: nil,
+      reconnect: nil,
       window_until: nil,
       window_secret: nil,
       # Survives the restart a join usually needs (the first launch with
@@ -246,7 +377,8 @@ defmodule Operator.Cluster do
       error: nil,
       subscribers: MapSet.new(),
       dev_node: Keyword.get(opts, :dev_node, @dev_node),
-      fixed_address: Keyword.get(opts, :address)
+      fixed_address: Keyword.get(opts, :address),
+      epmd_port: Keyword.get(opts, :epmd_port, Epmd.port())
     }
 
     sync_pins(s)
@@ -277,6 +409,7 @@ defmodule Operator.Cluster do
     {:reply, :ok, changed(s)}
   end
 
+  def handle_call(:invite, _from, %{mode: :open} = s), do: {:reply, {:error, :open_mode}, s}
   def handle_call(:invite, _from, %{running: false} = s), do: {:reply, {:error, :not_running}, s}
 
   def handle_call(:invite, _from, s) do
@@ -308,6 +441,8 @@ defmodule Operator.Cluster do
     with :ok <- admissible_invite(s, invite),
          :ok <- same_port(invite.port),
          :ok <- adopt_cookie(s, invite) do
+      # An invite is to a paired cluster: open distribution makes way.
+      s = if s.mode == :open, do: %{stop_cluster(s) | mode: :paired}, else: s
       s = pin(s, invite.fingerprint, invite.node)
       s = %{s | enabled: true, join_secret: invite.secret}
       store_join_secret(invite.secret)
@@ -333,19 +468,136 @@ defmodule Operator.Cluster do
 
   def handle_call(:reset, _from, s) do
     s = s |> stop_cluster() |> close_window()
-    _ = Rho.CredentialStore.delete(@cookie_account)
-    _ = Rho.CredentialStore.delete(@join_account)
+
+    for account <- [@cookie_account, @join_account, @open_cookie_account, @open_nodes_account],
+        do: _ = Rho.CredentialStore.delete(account)
+
     _ = Identity.delete()
-    s = %{s | enabled: false, peers: [], fingerprint: nil, error: nil, join_secret: nil}
+
+    s = %{
+      s
+      | enabled: false,
+        mode: :paired,
+        open_name: @default_open_name,
+        open_nodes: [],
+        peers: [],
+        fingerprint: nil,
+        error: nil,
+        join_secret: nil
+    }
+
     save(s)
     sync_pins(s)
     start_dev_link(s)
     {:reply, :ok, changed(s)}
   end
 
+  def handle_call({:set_mode, mode}, _from, %{mode: mode} = s), do: {:reply, :ok, s}
+
+  def handle_call({:set_mode, mode}, _from, s) do
+    was_running = s.running
+    s = s |> stop_cluster() |> close_window()
+    s = %{s | mode: mode}
+    save(s)
+
+    cond do
+      s.enabled ->
+        case start_cluster(s) do
+          {:ok, s} -> {:reply, :ok, changed(s)}
+          {:error, reason, s} -> {:reply, {:error, reason}, changed(recover(s, reason))}
+        end
+
+      was_running ->
+        start_dev_link(s)
+        {:reply, :ok, changed(s)}
+
+      true ->
+        {:reply, :ok, changed(s)}
+    end
+  end
+
+  def handle_call(:open_settings, _from, s) do
+    case open_cookie() do
+      {:ok, cookie} -> {:reply, {:ok, %{name: s.open_name, cookie: cookie}}, s}
+      {:error, _} = error -> {:reply, error, s}
+    end
+  end
+
+  def handle_call({:configure_open, name, cookie}, _from, s) do
+    cond do
+      not Regex.match?(@open_name, name) ->
+        {:reply, {:error, :bad_name}, s}
+
+      not Regex.match?(@open_cookie, cookie) ->
+        {:reply, {:error, :bad_cookie}, s}
+
+      true ->
+        case Rho.CredentialStore.put(@open_cookie_account, cookie) do
+          :ok -> configured_open(s, name, cookie)
+          {:error, _} = error -> {:reply, error, s}
+        end
+    end
+  end
+
+  def handle_call({:connect, node, cookie}, from, s) do
+    cookie = if cookie in [nil, ""], do: nil, else: cookie
+
+    with :ok <- check_connect(node, cookie, s),
+         {:ok, s} <- remember(s, node, cookie) do
+      # The user typed it: the one place a node atom is made from text,
+      # only once it is a valid name and distribution can use it.
+      atom = String.to_atom(node)
+      use_cookie(atom, cookie)
+      spawn(fn -> GenServer.reply(from, dial(atom)) end)
+      {:noreply, changed(s)}
+    else
+      {:error, _} = error -> {:reply, error, s}
+    end
+  end
+
+  def handle_call({:disconnect, node}, _from, s) do
+    nodes = Enum.reject(s.open_nodes, &(&1.node == node))
+
+    case save_open_nodes(nodes) do
+      :ok ->
+        forget_link(node)
+        {:reply, :ok, changed(%{s | open_nodes: nodes})}
+
+      {:error, _} = error ->
+        {:reply, error, s}
+    end
+  end
+
   def handle_call({:subscribe, pid}, _from, s) do
     Process.monitor(pid)
     {:reply, :ok, %{s | subscribers: MapSet.put(s.subscribers, pid)}}
+  end
+
+  defp check_connect(node, cookie, s) do
+    cond do
+      not valid_node?(node) -> {:error, :bad_node}
+      not valid_cookie?(cookie) -> {:error, :bad_cookie}
+      not s.running or s.mode != :open -> {:error, :not_open}
+      node == Atom.to_string(Node.self()) -> {:error, :self}
+      true -> :ok
+    end
+  end
+
+  # An atom holds at most 255 characters.
+  defp valid_node?(node),
+    do: is_binary(node) and byte_size(node) <= 255 and Regex.match?(@node_name, node)
+
+  defp valid_cookie?(nil), do: true
+  defp valid_cookie?(cookie), do: is_binary(cookie) and Regex.match?(@open_cookie, cookie)
+
+  # Forgotten: unlinked, and its own cookie no longer opens this node (OTP
+  # keeps a node's cookie after a disconnect). Never makes an atom.
+  defp forget_link(node) do
+    atom = String.to_existing_atom(node)
+    if Node.alive?(), do: :erlang.set_cookie(atom, Node.get_cookie())
+    Node.disconnect(atom)
+  rescue
+    ArgumentError -> false
   end
 
   defp complete_join(s, invite) do
@@ -361,7 +613,10 @@ defmodule Operator.Cluster do
   end
 
   # A peer says who it is and whom it trusts (after nodeup, both ways).
+  # Pinning is paired mode's: an open cluster lets in whoever has the cookie.
   @impl true
+  def handle_cast(_message, %{mode: :open} = s), do: {:noreply, s}
+
   def handle_cast({:hello, node, fingerprint, peers, secret}, s) when is_atom(node) do
     {:noreply, changed(hello(s, node, fingerprint, peers, secret))}
   end
@@ -398,6 +653,11 @@ defmodule Operator.Cluster do
     {:noreply, s}
   end
 
+  def handle_info({:nodeup, node, _info}, %{running: true, mode: :open} = s) do
+    Logger.info("[cluster] linked to #{node}")
+    {:noreply, changed(s)}
+  end
+
   def handle_info({:nodeup, node, _info}, %{running: true} = s) do
     Logger.info("[cluster] linked to #{node}#{if s.join_secret, do: " (joining)", else: ""}")
     say_hello(s, node)
@@ -409,18 +669,12 @@ defmodule Operator.Cluster do
   def handle_info(:reconnect, %{running: true} = s) do
     s = check_address(s)
 
-    for %{node: node, revoked: false} <- s.peers,
-        node = String.to_atom(node),
-        node != Node.self() and node not in Node.list(),
-        do: connect_async(node, s.join_secret != nil)
-
-    # Still joining: say hello again on every link. The first one can be
-    # lost (an iPhone suspended right after the connection came up), and
-    # the inviter pins only on a hello with its window's secret.
-    if s.join_secret, do: Enum.each(Node.list(), &say_hello(s, &1))
-
-    Process.send_after(self(), :reconnect, @reconnect_ms)
-    {:noreply, s}
+    if s.running do
+      redial(s)
+      {:noreply, schedule_reconnect(s, @reconnect_ms)}
+    else
+      {:noreply, s}
+    end
   end
 
   def handle_info(:window_check, s) do
@@ -452,6 +706,47 @@ defmodule Operator.Cluster do
 
   defp start_cluster(%{running: true} = s), do: {:ok, s}
 
+  # Plain TCP needs no boot argument: `:operator_dist` in its tcp mode, or
+  # stock `inet_tcp_dist` on a VM booted without it.
+  defp start_cluster(%{mode: :open} = s) do
+    with {:ok, ip} <- address(s),
+         {:ok, cookie} <- open_cookie() do
+      :ok = stop_dist()
+      :ok = set_global(true)
+      node = :"#{s.open_name}@#{:inet.ntoa(ip)}"
+      :ok = :operator_epmd.set_mode(:open)
+      put_dist_env(ip)
+
+      case Node.start(node, :longnames) do
+        {:ok, _} ->
+          Node.set_cookie(String.to_atom(cookie))
+          apply_cookies(s)
+          # Hidden nodes too, with an info list (the 3-tuple messages).
+          :ok = :net_kernel.monitor_nodes(true, node_type: :all)
+          {epmd, epmd_error} = start_epmd(s, ip)
+          Logger.info("[cluster] up as #{node} (open)")
+
+          s = %{
+            s
+            | running: true,
+              node: node,
+              address: ip,
+              epmd: epmd,
+              epmd_error: epmd_error,
+              error: nil
+          }
+
+          {:ok, schedule_reconnect(s, 0)}
+
+        {:error, reason} ->
+          dist_env_off()
+          failed(s, {:dist, reason})
+      end
+    else
+      {:error, reason} -> failed(s, reason)
+    end
+  end
+
   defp start_cluster(s) do
     with :ok <- booted(),
          {:ok, ip} <- address(s),
@@ -462,34 +757,58 @@ defmodule Operator.Cluster do
       :ok = prepare_node()
       node = :"#{Identity.name(identity)}@#{:inet.ntoa(ip)}"
       :ok = :operator_dist.set_mode(:tls)
-      Application.put_env(:kernel, :epmd_module, :operator_epmd)
-      Application.put_env(:kernel, :operator_dist_port, @port)
-      Application.put_env(:kernel, :inet_dist_use_interface, ip)
+      :ok = :operator_epmd.set_mode(:fixed)
+      put_dist_env(ip)
 
       case Node.start(node, :longnames) do
         {:ok, _} ->
           Node.set_cookie(String.to_atom(cookie))
           :ok = :net_kernel.monitor_nodes(true)
-          Process.send_after(self(), :reconnect, 0)
           Logger.info("[cluster] up as #{node}")
 
-          {:ok,
-           %{
-             s
-             | running: true,
-               node: node,
-               address: ip,
-               fingerprint: identity.fingerprint,
-               error: nil
-           }}
+          s = %{
+            s
+            | running: true,
+              node: node,
+              address: ip,
+              fingerprint: identity.fingerprint,
+              error: nil
+          }
+
+          {:ok, schedule_reconnect(s, 0)}
 
         {:error, reason} ->
-          tls_off()
+          dist_env_off()
           failed(s, {:dist, reason})
       end
     else
       {:error, reason} -> failed(s, reason)
     end
+  end
+
+  defp put_dist_env(ip) do
+    Application.put_env(:kernel, :epmd_module, :operator_epmd)
+    Application.put_env(:kernel, :operator_dist_port, @port)
+    Application.put_env(:kernel, :inet_dist_use_interface, ip)
+  end
+
+  # Port 4369 may be taken (in development, `adb reverse` holds it for the
+  # Mac's epmd): distribution still runs, and this node can still dial out.
+  defp start_epmd(s, ip) do
+    case Epmd.listen(ip, port: s.epmd_port) do
+      {:ok, socket} ->
+        {:ok, pid} = Epmd.start_link(socket, s.open_name, @port)
+        {pid, nil}
+
+      {:error, reason} ->
+        Logger.warning("[cluster] no epmd on #{s.epmd_port}: #{inspect(reason)}")
+        {nil, reason}
+    end
+  end
+
+  defp schedule_reconnect(s, ms) do
+    if s.reconnect, do: Process.cancel_timer(s.reconnect)
+    %{s | reconnect: Process.send_after(self(), :reconnect, ms)}
   end
 
   # The development link has to go before cluster distribution starts. On
@@ -520,14 +839,18 @@ defmodule Operator.Cluster do
 
   defp stop_cluster(s) do
     :net_kernel.monitor_nodes(false)
+    :net_kernel.monitor_nodes(false, node_type: :all)
+    if s.reconnect, do: Process.cancel_timer(s.reconnect)
+    if s.epmd, do: Epmd.stop(s.epmd)
     Mob.Dist.stop()
-    tls_off()
+    dist_env_off()
     Logger.info("[cluster] stopped")
-    %{s | running: false, node: nil, address: nil}
+    %{s | running: false, node: nil, address: nil, epmd: nil, epmd_error: nil, reconnect: nil}
   end
 
-  defp tls_off do
+  defp dist_env_off do
     :ok = :operator_dist.set_mode(:tcp)
+    :ok = :operator_epmd.set_mode(:fixed)
     Application.delete_env(:kernel, :epmd_module)
     Application.delete_env(:kernel, :operator_dist_port)
     Application.delete_env(:kernel, :inet_dist_use_interface)
@@ -571,6 +894,62 @@ defmodule Operator.Cluster do
       end
     end)
   end
+
+  # Hidden nodes count: `-hidden` is a normal way for a tool to join.
+  defp redial(%{mode: :open} = s) do
+    for %{node: node} <- s.open_nodes,
+        node = String.to_atom(node),
+        node not in Node.list(:connected),
+        do: spawn(fn -> Node.connect(node) end)
+  end
+
+  defp redial(s) do
+    for %{node: node, revoked: false} <- s.peers,
+        node = String.to_atom(node),
+        node != Node.self() and node not in Node.list(),
+        do: connect_async(node, s.join_secret != nil)
+
+    # Still joining: say hello again on every link. The first one can be
+    # lost (an iPhone suspended right after the connection came up), and
+    # the inviter pins only on a hello with its window's secret.
+    if s.join_secret, do: Enum.each(Node.list(), &say_hello(s, &1))
+  end
+
+  # An open-mode dial that says why it failed: the host not found (a
+  # `.local` one over mDNS, `:operator_epmd`), no epmd answering there
+  # (bounded: an unreachable host would hold a TCP connect for over a
+  # minute), no such name there, or the handshake turned down.
+  defp dial(node) do
+    [name, host] = node |> Atom.to_string() |> String.split("@", parts: 2)
+
+    lookup =
+      Task.async(fn ->
+        with {:ok, ip} <- :operator_epmd.address_please(nil, String.to_charlist(host), :inet) do
+          {:resolved, :erl_epmd.names(ip)}
+        end
+      end)
+
+    case Task.yield(lookup, @dial_timeout_ms) || Task.shutdown(lookup, :brutal_kill) do
+      {:ok, {:resolved, {:ok, names}}} ->
+        names = for {n, _port} <- names, do: to_string(n)
+
+        cond do
+          name not in names -> {:error, {:not_registered, names}}
+          Node.connect(node) == true -> :ok
+          true -> {:error, :refused}
+        end
+
+      {:ok, {:error, _}} ->
+        {:error, :unknown_host}
+
+      _ ->
+        {:error, :no_epmd}
+    end
+  end
+
+  # The cookie for one node: its own, or (nil) this node's.
+  defp use_cookie(node, cookie),
+    do: :erlang.set_cookie(node, if(cookie, do: String.to_atom(cookie), else: Node.get_cookie()))
 
   # Distribution only dials once the peer's port answers. A dial that can't
   # arrive (the peer is on a network that reaches us but not the other way
@@ -719,7 +1098,7 @@ defmodule Operator.Cluster do
     s = %{s | peers: peers}
     save(s)
     sync_pins(s)
-    if node != "", do: disconnect(node)
+    if node != "", do: drop_link(node)
     s
   end
 
@@ -728,7 +1107,7 @@ defmodule Operator.Cluster do
   defp revoked?(s, fp), do: Enum.any?(s.peers, &(&1.fingerprint == fp and &1.revoked))
 
   # Never creates an atom from a name a peer gossiped.
-  defp disconnect(node) do
+  defp drop_link(node) do
     Node.disconnect(String.to_existing_atom(node))
   rescue
     ArgumentError -> false
@@ -799,7 +1178,7 @@ defmodule Operator.Cluster do
   defp take_cookie(s, cookie) do
     case Rho.CredentialStore.put(@cookie_account, cookie) do
       :ok ->
-        if s.running, do: Node.set_cookie(String.to_atom(cookie))
+        if s.running and s.mode == :paired, do: Node.set_cookie(String.to_atom(cookie))
         {:ok, cookie}
 
       {:error, reason} = error ->
@@ -851,6 +1230,96 @@ defmodule Operator.Cluster do
   defp same_port(@port), do: :ok
   defp same_port(_other), do: {:error, :other_port}
 
+  # ── open mode ──
+
+  defp open_cookie do
+    case Rho.CredentialStore.get(@open_cookie_account) do
+      {:ok, cookie} when is_binary(cookie) ->
+        {:ok, cookie}
+
+      :error ->
+        cookie = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+        with :ok <- Rho.CredentialStore.put(@open_cookie_account, cookie), do: {:ok, cookie}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp configured_open(s, name, cookie) do
+    renamed? = name != s.open_name
+    s = %{s | open_name: name}
+    save(s)
+
+    cond do
+      not (s.running and s.mode == :open) ->
+        {:reply, :ok, changed(s)}
+
+      renamed? ->
+        case start_cluster(stop_cluster(s)) do
+          {:ok, s} -> {:reply, :ok, changed(s)}
+          {:error, reason, s} -> {:reply, {:error, reason}, changed(recover(s, reason))}
+        end
+
+      true ->
+        old = Node.get_cookie()
+        new = String.to_atom(cookie)
+        Node.set_cookie(new)
+        apply_cookies(s)
+        if new != old, do: drop_old_cookie_links(s)
+        {:reply, :ok, changed(schedule_reconnect(s, 0))}
+    end
+  end
+
+  # A new cookie takes the old one's authority away at once: links made on
+  # this node's cookie go (the remembered ones are redialled with the new
+  # one); links to nodes remembered with a cookie of their own stay.
+  defp drop_old_cookie_links(s) do
+    own = for %{node: node, cookie: cookie} <- s.open_nodes, cookie != nil, do: node
+
+    for node <- Node.list(:connected), Atom.to_string(node) not in own, do: Node.disconnect(node)
+  end
+
+  # Remembered nodes without a cookie of their own follow this node's.
+  defp apply_cookies(s),
+    do: Enum.each(s.open_nodes, &use_cookie(String.to_atom(&1.node), &1.cookie))
+
+  # At most 64 remembered (@max_identities): the oldest one beyond that is
+  # forgotten like `disconnect/1` does, its cookie with it.
+  defp remember(s, node, cookie) do
+    nodes = Enum.reject(s.open_nodes, &(&1.node == node)) ++ [%{node: node, cookie: cookie}]
+    {evicted, nodes} = Enum.split(nodes, max(length(nodes) - @max_identities, 0))
+
+    with :ok <- save_open_nodes(nodes) do
+      Enum.each(evicted, &forget_link(&1.node))
+      {:ok, %{s | open_nodes: nodes}}
+    end
+  end
+
+  defp read_open_nodes do
+    with {:ok, json} when is_binary(json) <- Rho.CredentialStore.get(@open_nodes_account),
+         {:ok, nodes} when is_list(nodes) <- JSON.decode(json) do
+      for %{"node" => node} = entry <- nodes,
+          valid_node?(node),
+          cookie = entry["cookie"],
+          valid_cookie?(cookie),
+          do: %{node: node, cookie: cookie}
+    else
+      _ -> []
+    end
+  end
+
+  defp save_open_nodes(nodes) do
+    case Rho.CredentialStore.put(@open_nodes_account, JSON.encode!(nodes)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[cluster] open nodes not stored: #{inspect(reason)}")
+        {:error, {:store, reason}}
+    end
+  end
+
   # ── state ──
 
   # The native hosts write the same before the first launch (MainActivity,
@@ -868,13 +1337,24 @@ defmodule Operator.Cluster do
 
   defp read_state(dir) do
     with {:ok, json} <- File.read(Path.join(dir, "cluster.json")),
-         {:ok, %{"enabled" => enabled, "peers" => peers}} when is_boolean(enabled) <-
+         {:ok, %{"enabled" => enabled, "peers" => peers} = saved} when is_boolean(enabled) <-
            JSON.decode(json) do
-      %{enabled: enabled, peers: Enum.flat_map(peers, &read_peer/1)}
+      %{
+        enabled: enabled,
+        mode: if(saved["mode"] == "open", do: :open, else: :paired),
+        open_name: read_open_name(saved["name"]),
+        peers: Enum.flat_map(peers, &read_peer/1)
+      }
     else
-      _ -> %{enabled: false, peers: []}
+      _ -> %{enabled: false, mode: :paired, open_name: @default_open_name, peers: []}
     end
   end
+
+  defp read_open_name(name) when is_binary(name) do
+    if Regex.match?(@open_name, name), do: name, else: @default_open_name
+  end
+
+  defp read_open_name(_name), do: @default_open_name
 
   defp read_peer(%{"fingerprint" => fp, "node" => node, "revoked" => revoked})
        when is_binary(fp) and is_binary(node) and is_boolean(revoked),
@@ -883,31 +1363,47 @@ defmodule Operator.Cluster do
   defp read_peer(_other), do: []
 
   defp save(s) do
-    json = JSON.encode!(%{enabled: s.enabled, peers: s.peers})
+    json = JSON.encode!(%{enabled: s.enabled, mode: s.mode, name: s.open_name, peers: s.peers})
     path = Path.join(s.dir, "cluster.json")
     :ok = File.write(path <> ".tmp", json)
     :ok = File.rename(path <> ".tmp", path)
   end
 
   defp status_map(s) do
-    connected = Enum.map(Node.list(), &Atom.to_string/1)
+    # Open mode lists hidden nodes too; paired members are never hidden.
+    links = if s.mode == :open, do: Node.list(:connected), else: Node.list()
+    connected = Enum.map(links, &Atom.to_string/1)
 
     %{
       enabled: s.enabled,
+      mode: s.mode,
       running: s.running,
       node: s.node,
       address: s.address && to_string(:inet.ntoa(s.address)),
       port: @port,
       fingerprint: s.fingerprint || stored_fingerprint(),
-      restart_needed: not booted_for_cluster?(),
+      open_name: s.open_name,
+      epmd: s.epmd_error,
+      restart_needed: s.mode == :paired and not booted_for_cluster?(),
       pairing: s.window_until != nil,
       error: s.error,
-      peers:
-        for peer <- s.peers do
-          Map.put(peer, :connected, s.running and peer.node in connected)
-        end
+      peers: peers_status(s, connected)
     }
   end
+
+  defp peers_status(%{mode: :open} = s, connected) do
+    saved = Enum.map(s.open_nodes, & &1.node)
+
+    for(node <- saved, do: open_peer(node, s.running and node in connected, true)) ++
+      for node <- connected, node not in saved, do: open_peer(node, true, false)
+  end
+
+  defp peers_status(s, connected) do
+    for peer <- s.peers, do: Map.put(peer, :connected, s.running and peer.node in connected)
+  end
+
+  defp open_peer(node, connected, saved),
+    do: %{node: node, connected: connected, saved: saved, fingerprint: nil, revoked: false}
 
   defp stored_fingerprint do
     case Identity.load() do

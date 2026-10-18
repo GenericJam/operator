@@ -47,8 +47,8 @@ on an Android 9+ phone, open it, and allow your browser or Files app to install
 it. In Operator, tap the dial for the terminal, then `[menu] › accounts` to sign
 in with your own Claude or ChatGPT subscription.
 
-> **Status:** 1.2.1, sideloaded from GitHub; not in any store. Tested on a Moto
-> G 2021 (Android 11) and a physical iPhone. Expect sharp edges.
+> **Status:** 1.3.0, sideloaded from GitHub; not in any store. Tested on a Moto
+> G 2021 (Android 11), a Moto G Power 2024 and a physical iPhone. Expect sharp edges.
 
 ## What it can do
 
@@ -67,7 +67,7 @@ in with your own Claude or ChatGPT subscription.
 | **Voice** | hold-to-talk dictation with on-device Whisper ([mob_speech](https://hex.pm/packages/mob_speech) + [mob_whisper](https://hex.pm/packages/mob_whisper)); spoken updates when a run ends |
 | **Background** | keeps a run going with the screen off (Android foreground service; iOS audio-session keep-alive) |
 | **Plugins** | camera, photos, location, scanner, notify, Bluetooth, biometric, video, screencast, touch, wake, themes, Mishka, and more on the way, all available to front screens |
-| **Local cluster** | Optional TLS 1.3 Erlang distribution between Operators on one private LAN: QR invite, screen-lock approval, pinned per-install certificates, peer revocation, and a bounded topic/service API. Off by default; trusted peers have full BEAM authority. See [`docs/CLUSTER.md`](docs/CLUSTER.md). |
+| **Local cluster** | Optional Erlang distribution on one private LAN, in one of two modes. Paired: TLS 1.3 between Operators, QR invite, screen-lock approval, pinned per-install certificates, peer revocation. Open: plain Erlang distribution with any node whose name and cookie you know (stock `iex`, Nerves, other Operators), `.local` names over mDNS, the phone answering epmd lookups itself. A bounded topic/service API between Operators. Off by default; connected nodes have full BEAM authority. See [`docs/CLUSTER.md`](docs/CLUSTER.md). |
 
 ## Moving work from your computer to the phone
 

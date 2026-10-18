@@ -3,6 +3,7 @@ defmodule Operator.ClusterTest do
 
   alias Operator.Cluster
   alias Operator.Cluster.Bus
+  alias Operator.Cluster.Epmd
   alias Operator.Cluster.Identity
   alias Operator.Cluster.Invite
   alias Operator.Cluster.Tls
@@ -155,16 +156,91 @@ defmodule Operator.ClusterTest do
     end
   end
 
+  describe "open mode" do
+    test "keeps the mode and this node's name and cookie across a restart", %{tmp_dir: dir} do
+      assert :ok = Cluster.set_mode(:open)
+      assert {:error, :bad_name} = Cluster.configure_open("bad name", "monster")
+      assert {:error, :bad_cookie} = Cluster.configure_open("laptop", "has space")
+      assert :ok = Cluster.configure_open("laptop", "monster")
+
+      stop_supervised!(Cluster)
+      start_supervised!({Cluster, dir: Path.join(dir, "cluster"), boot_dist: false})
+
+      assert %{mode: :open, open_name: "laptop", enabled: false} = Cluster.status()
+      assert {:ok, %{name: "laptop", cookie: "monster"}} = Cluster.open_settings()
+      # Pairing belongs to the other mode.
+      assert {:error, :open_mode} = Cluster.invite()
+    end
+
+    test "connect refuses a bad name or cookie without making an atom, and needs open mode" do
+      bad = "not a node #{System.unique_integer([:positive])}"
+      assert {:error, :bad_node} = Cluster.connect(bad, nil)
+      refute atom_exists?(bad)
+      # Name and host characters fit, but no atom can hold it.
+      assert {:error, :bad_node} =
+               Cluster.connect(String.duplicate("a", 64) <> "@" <> String.duplicate("b", 200))
+
+      node = "app#{System.unique_integer([:positive])}@10.0.0.5"
+      assert {:error, :bad_cookie} = Cluster.connect(node, "has space")
+      # Not running in open mode (a test VM can't start this distribution).
+      assert {:error, :not_open} = Cluster.connect(node, "monster")
+      assert {:error, :not_open} = Cluster.connect(node, "")
+      refute atom_exists?(node)
+      assert Cluster.status().peers == []
+    end
+
+    test "a stock node's epmd client finds this node by name, and only this one" do
+      {:ok, socket} = Epmd.listen({127, 0, 0, 1}, port: 0)
+      {:ok, port} = :inet.port(socket)
+      {:ok, epmd} = Epmd.start_link(socket, "phone", 9370)
+
+      # A plain OTP node whose epmd lookups go to this port, as a laptop's
+      # go to the phone's 4369.
+      {:ok, peer, _node} =
+        :peer.start_link(%{connection: :standard_io, args: [~c"-epmd_port", ~c"#{port}"]})
+
+      try do
+        assert {:port, 9370, 6} =
+                 :peer.call(peer, :erl_epmd, :port_please, [~c"phone", ~c"127.0.0.1", 2_000])
+
+        assert :noport =
+                 :peer.call(peer, :erl_epmd, :port_please, [~c"other", ~c"127.0.0.1", 2_000])
+
+        assert {:ok, [{~c"phone", 9370}]} =
+                 :peer.call(peer, :erl_epmd, :names, [~c"127.0.0.1"])
+      after
+        :peer.stop(peer)
+        Epmd.stop(epmd)
+      end
+    end
+  end
+
   describe "cluster screen" do
     test "reviews a parsed peer without joining it" do
       view = mount_screen(Operator.ClusterScreen, %{invite: @invite})
       assert_renderable(view)
       shown = text(view)
-      assert shown =~ "local TLS cluster"
       assert shown =~ "join this peer?"
       assert shown =~ @invite.node
       assert shown =~ String.slice(@invite.fingerprint, 0, 16)
       assert view |> render_info({:tap, :back}) |> navigated_to() == {:pop}
+    end
+
+    test "open mode: this node's name and cookie are saved from the screen, a bad one isn't" do
+      :ok = Cluster.set_mode(:open)
+      view = mount_screen(Operator.ClusterScreen, %{})
+      assert_renderable(view)
+
+      view = render_info(view, {:change, :open_name, "bad name"})
+      view = render_info(view, {:tap, :save_open})
+      assert_renderable(view)
+      assert Cluster.status().open_name == "operator"
+
+      view = render_info(view, {:change, :open_name, "kitchen"})
+      view = render_info(view, {:change, :open_cookie, "monster"})
+      view = render_info(view, {:tap, :save_open})
+      assert_renderable(view)
+      assert {:ok, %{name: "kitchen", cookie: "monster"}} = Cluster.open_settings()
     end
   end
 
