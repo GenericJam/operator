@@ -1,6 +1,11 @@
 # Operator local clusters
 
-Operator 1.1 can join phones and headless BEAM devices on one private LAN. Clustering is **off by default**. When off, a release build has no distribution listener; a development build keeps only mob's loopback development link.
+Operator can join phones, headless BEAM devices and any other Erlang node on one private LAN. Clustering is **off by default**. When off, a release build has no distribution listener; a development build keeps only mob's loopback development link.
+
+`[menu] › cluster` picks one of two modes:
+
+- **paired (TLS)**: Operators (and devices running Operator's cluster modules) pair through a QR and the screen lock; TLS 1.3 with pinned certificates. Everything below up to "Open mode" is this mode.
+- **open (any Erlang node)**: stock Erlang distribution. Any node whose name and cookie you know can join, and any node on the network with this phone's cookie can connect to it. See [Open mode](#open-mode-any-erlang-node).
 
 ## Pair two Operators
 
@@ -58,6 +63,31 @@ alias Operator.Cluster.Bus
 
 Topic and service names are 1–100 bytes. Messages must be external-term encodable, contain no functions, and encode to at most 64 KiB. Calls target only a process registered for that service. Publish/subscribe uses a named `:pg` scope across the cluster.
 
+## Open mode: any Erlang node
+
+1. `[menu] › cluster` › `open (any Erlang node)`, then `enable`. Distribution restarts as plain TCP on the phone's Wi-Fi address; no app restart.
+2. Under **this node**, set its name (default `operator`) and cookie (a random one until you set it), then `save`. The node is `<name>@<Wi-Fi address>`, e.g. `operator@10.0.0.17`.
+3. Connect either way:
+   - From the phone: **connect to a node**, `name@host` plus that node's cookie (blank: the phone's own). The phone remembers it (cookie in the secure store) and redials it every 30 s while it is down; tap it in **nodes** to disconnect and forget it.
+   - From any other node: `iex --name me@10.0.0.71 --cookie <the phone's cookie>`, then `Node.connect(:"operator@10.0.0.17")`. The phone answers epmd lookups on port 4369 itself (`Operator.Cluster.Epmd`: port and names requests for its own name only), so stock nodes find it by name.
+
+Then it is ordinary distributed Erlang: `:erpc.call/4`, `Node.spawn/2`, `:global`, `:pg`, monitors, in both directions. The agent's `cluster` tool has a `connect` action and reaches any connected node with `eval`; Operators connected this way still answer `ask`, `tool` and `message` through the Bus. Dyn code may use `Node`, `:rpc`, `:erpc`, `:global`, `:net_kernel`, `:net_adm`, `Operator.Cluster` (except its process and pairing functions) and `Operator.Cluster.Bus`.
+
+Details:
+
+- Long names only: a node started with `-sname` can't talk to the phone.
+- Hosts: an address (`me@10.0.0.71`), a name the phone's DNS knows, or a `.local` name, which the phone resolves itself over multicast DNS (`operator_mdns`: one query asking for a unicast answer, as Nerves' mdns_lite and macOS give). On 2026-10-17 the Moto resolved `nerves-7ef3.local` to the Pi Zero this way and reached its epmd.
+- A Nerves node's cookie may not be the `cookie:` in its `mix.exs` (on 2026-10-17 the Pi Zero's node turned `pi_zero_cookie` down; a node started at run time takes its cookie from elsewhere). Read it on the device with `Node.get_cookie()`.
+- The connected-node list and each node's cookie are kept in the secure store and redialled every 30 s; a remote node that answers but turns the handshake down is reported as a wrong cookie.
+- The phone's distribution port is fixed (9370); a peer's port is asked of the epmd on its host (stock `erl_epmd`), so peers need a running epmd, as stock nodes have.
+- `global` meshes as on a stock node (`connect_all` true): connecting to one node connects to the nodes it knows, with the phone's cookie for those unless one was given for them.
+- In development, `mix mob.connect` sets `adb reverse tcp:4369`, which takes the phone's port 4369 on every interface. The screen then says other nodes can't look the phone up; the phone can still dial out. `adb reverse --remove tcp:4369` and toggle the mode (or relaunch) to get it back. The other way round, once open mode holds 4369, `adb reverse tcp:4369` fails with "Address already in use".
+- Paired-mode state (pins, the TLS cookie) is kept while open mode runs; switching back resumes it. Scanning an invite switches to paired mode.
+
+### Security boundary (open mode)
+
+There is none beyond the cookie. Distribution traffic is unencrypted, the handshake is Erlang's cookie challenge, and a node that passes it has the full authority of the app: it can read sign-in tokens, files, and run any code. Use a long random cookie, only on a network you trust, and switch back to paired mode (or disable) when done.
+
 ## Headless/Nerves path
 
 The wire protocol is normal distributed Erlang with Operator's TLS pinning and membership handshake. A Nerves device therefore needs:
@@ -97,7 +127,7 @@ This probe establishes transport and API compatibility; it does not claim Nerves
 ## Operations
 
 - `-proto_dist operator` must be on the BEAM's command line from the first launch: the native hosts (`MainActivity`, `AppDelegate`) write it to `Mob.InitArgs`' file before starting the BEAM. Without it (an install of an older build, first launch only) enabling asks for one restart. A native build with mob 0.9.13 or newer is required.
-- While clustering is on, it replaces mob's development distribution link. Use cluster membership for remote inspection; disabling restores the loopback development link in a development build.
+- While clustering is on (either mode), it replaces mob's development distribution link. Use cluster membership (or, in open mode, a plain `iex --name … --cookie …`) for remote inspection; disabling restores the loopback development link in a development build.
 - Members may reach each other one way only (two Wi-Fi networks behind one router: on 2026-10-08 the iPhone reached the Moto but not the reverse). A member dials a peer only after a plain TCP connect to its port 9370 succeeds. Otherwise a dial that can never arrive stays pending, and while it does, distribution turns away the peer's own dial (the node with the greater name keeps its own attempt), so the two would never link. While joining, a failed dial is logged with its reason.
 - Certificate fingerprints are SHA-256 lowercase hex. Node names and cookie strings are validated and bounded before approval; atoms are created only after the system-lock approval path.
-- Do not expose port 9370 with router port forwarding. Host firewalls should restrict it to the private LAN.
+- Do not expose ports 9370 or 4369 with router port forwarding. Host firewalls should restrict them to the private LAN.

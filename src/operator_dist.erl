@@ -4,11 +4,13 @@
 %% init args for the next launch with `Mob.InitArgs`), but which carrier the
 %% node uses is chosen each time distribution starts:
 %%
-%%   * `inet_tcp_dist` (the default): the development link, plain TCP on
+%%   * `inet_tcp_dist` (the default): plain TCP. The development link, on
 %%     loopback only, reached from the Mac through `adb forward`
-%%     (`Mob.Dist`, `mix mob.connect`, scripts/rpc.sh);
-%%   * `inet_tls_dist`: the cluster, mutually authenticated TLS on the
-%%     phone's Wi-Fi address, peers pinned by certificate fingerprint
+%%     (`Mob.Dist`, `mix mob.connect`, scripts/rpc.sh); or the open cluster,
+%%     stock Erlang distribution with any node on the phone's Wi-Fi
+%%     address (`Operator.Cluster`'s open mode, `operator_epmd` `open`);
+%%   * `inet_tls_dist`: the paired cluster, mutually authenticated TLS on
+%%     the phone's Wi-Fi address, peers pinned by certificate fingerprint
 %%     (`Operator.Cluster.Tls`).
 %%
 %% `Operator.Cluster` sets the mode (`set_mode/1`) only while distribution

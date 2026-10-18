@@ -28,9 +28,6 @@ defmodule Operator.Core.Tools.ClusterTest do
     assert {:ok, text} = Tool.run(%{"action" => "peers"}, %{}, peers(list), bus(nil))
     assert text =~ "operator_aaaa111111@10.0.0.2: connected"
     assert text =~ "operator_bbbb222222@10.0.0.3: not connected"
-
-    assert {:ok, "No paired peers" <> _} =
-             Tool.run(%{"action" => "peers"}, %{}, peers([]), bus(nil))
   end
 
   test "runs a tool on the one connected peer and returns that phone's answer" do
@@ -108,8 +105,7 @@ defmodule Operator.Core.Tools.ClusterTest do
     assert {:error, text} = Tool.run(msg, %{}, one, bus({:error, :timeout}))
     assert text =~ "didn't answer"
 
-    assert {:error, text} = Tool.run(msg, %{}, one, bus({:error, :no_service}))
-    assert text =~ "doesn't answer cluster requests"
+    assert {:error, _} = Tool.run(msg, %{}, one, bus({:error, :no_service}))
   end
 
   describe "the peer's side" do

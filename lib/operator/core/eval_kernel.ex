@@ -59,8 +59,8 @@ defmodule Operator.Core.EvalKernel do
   @redacted "[redacted sign-in token]"
   # Shorter strings aren't secrets worth hiding, and would hit ordinary text.
   @min_secret_bytes 16
-  # Where `Operator.Cluster` keeps the cluster's cookie.
-  @cluster_cookie_account "cluster_cookie"
+  # Where `Operator.Cluster` keeps the cluster's cookies (paired, open).
+  @cluster_cookie_accounts ["cluster_cookie", "cluster_open_cookie"]
   @max_frames 12
 
   # The evaluator's own frames, not the agent's (the evaluated code's own
@@ -544,7 +544,7 @@ defmodule Operator.Core.EvalKernel do
   end
 
   @doc false
-  # The current sign-ins' tokens and the cluster cookie (live and stored).
+  # The current sign-ins' tokens and the cluster cookies (live and stored).
   @spec live_secrets() :: [String.t()]
   def live_secrets do
     tokens =
@@ -558,12 +558,11 @@ defmodule Operator.Core.EvalKernel do
     cookie = if Node.alive?(), do: Atom.to_string(Node.get_cookie())
 
     stored =
-      case safely(fn -> Rho.CredentialStore.get(@cluster_cookie_account) end) do
-        {:ok, cookie} -> cookie
-        _ -> nil
-      end
+      for account <- @cluster_cookie_accounts,
+          {:ok, cookie} <- [safely(fn -> Rho.CredentialStore.get(account) end)],
+          do: cookie
 
-    [cookie, stored | tokens]
+    [cookie | stored ++ tokens]
   end
 
   defp safely(fun) do

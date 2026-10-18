@@ -204,17 +204,32 @@ config :rho, :dyn,
     Operator.Core.Files,
     Operator.Core.Tflite,
     Operator.Core.Terminal,
-    Operator.Core.Tool
+    Operator.Core.Tool,
+    Operator.Cluster,
+    Operator.Cluster.Bus
   ],
   check: [
     # Operator.Core.Files' caller-side functions: its roots and grants.
+    # Operator.Cluster: its process, and the TLS pairing the human confirms.
     partial: %{
-      Operator.Core.Files => ~w(roots workspace resolve needs_access? real_path grant_capability)a
+      Operator.Core.Files =>
+        ~w(roots workspace resolve needs_access? real_path grant_capability)a,
+      Operator.Cluster =>
+        ~w(start_link child_spec init handle_call handle_cast handle_info prepare_node join invite forget reset)a
     },
-    banned_erlang: %{operator_secure_store: "holds the sign-ins"},
+    banned_erlang: %{
+      operator_secure_store: "holds the sign-ins",
+      # Distribution is open to Dyn code: it's what the BEAM is for.
+      net_kernel: nil,
+      net_adm: nil,
+      rpc: nil,
+      erpc: nil,
+      global: nil
+    },
     banned: %{
       File =>
-        "touches the file system directly (use Operator.Core.Files: the same calls, inside its roots)"
+        "touches the file system directly (use Operator.Core.Files: the same calls, inside its roots)",
+      Node => nil
     }
   ],
   screens: Operator.Core.DynScreens,
