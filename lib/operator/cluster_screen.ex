@@ -137,8 +137,13 @@ defmodule Operator.ClusterScreen do
     do: {:noreply, refresh(socket, "#{node}: #{Cluster.explain(reason)}")}
 
   def handle_info({:tap, {:drop, node}}, socket) do
-    :ok = Cluster.disconnect(node)
-    {:noreply, refresh(socket, "Disconnected from #{node} and forgot it.")}
+    note =
+      case Cluster.disconnect(node) do
+        :ok -> "Disconnected from #{node} and forgot it."
+        {:error, reason} -> "#{node}: #{Cluster.explain(reason)}"
+      end
+
+    {:noreply, refresh(socket, note)}
   end
 
   def handle_info({:tap, :disable}, socket) do

@@ -8,8 +8,9 @@ defmodule Operator.Cluster.MdnsTest do
   Record.defrecordp(:dns_rr, Record.extract(:dns_rr, from_lib: "kernel/src/inet_dns.hrl"))
 
   # A responder on loopback standing in for the mDNS group: it answers the
-  # one query it gets with `records`, from its own (unicast) address.
-  defp responder(records) do
+  # one query it gets with `records`, from its own (unicast) address, under
+  # the query's ID (or `opts[:id]`).
+  defp responder(records, opts \\ []) do
     {:ok, socket} = :gen_udp.open(0, [:binary, ip: {127, 0, 0, 1}, active: false])
     {:ok, port} = :inet.port(socket)
     test = self()
@@ -22,13 +23,11 @@ defmodule Operator.Cluster.MdnsTest do
 
         reply =
           dns_rec(
-            header: dns_header(id: id, qr: true, aa: true),
+            header: dns_header(id: Keyword.get(opts, :id, id), qr: true, aa: true),
             anlist: for({name, ip} <- records, do: dns_rr(domain: name, type: :a, data: ip))
           )
 
-        if records != [],
-          do: :ok = :gen_udp.send(socket, from, from_port, :inet_dns.encode(reply))
-
+        :ok = :gen_udp.send(socket, from, from_port, :inet_dns.encode(reply))
         receive do: (:stop -> :ok)
       end)
 
@@ -45,6 +44,11 @@ defmodule Operator.Cluster.MdnsTest do
     # One question: nerves-7ef3.local, type A, class IN with the unicast-response bit.
     assert <<_id::16, 0::16, 1::16, 0::48, 11, "nerves-7ef3", 5, "local", 0, 1::16, 0x8001::16>> =
              query
+  end
+
+  test "an answer to some other query is not taken" do
+    dest = responder([{~c"nerves-7ef3.local", {10, 0, 0, 66}}], id: 0)
+    assert {:error, :nxdomain} = :operator_mdns.getaddr(~c"nerves-7ef3.local", 300, dest)
   end
 
   test "no answer for the name is nxdomain once the time is up" do

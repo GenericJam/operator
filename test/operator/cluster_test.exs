@@ -176,6 +176,9 @@ defmodule Operator.ClusterTest do
       bad = "not a node #{System.unique_integer([:positive])}"
       assert {:error, :bad_node} = Cluster.connect(bad, nil)
       refute atom_exists?(bad)
+      # Name and host characters fit, but no atom can hold it.
+      assert {:error, :bad_node} =
+               Cluster.connect(String.duplicate("a", 64) <> "@" <> String.duplicate("b", 200))
 
       node = "app#{System.unique_integer([:positive])}@10.0.0.5"
       assert {:error, :bad_cookie} = Cluster.connect(node, "has space")

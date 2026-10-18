@@ -202,27 +202,35 @@ defmodule Operator.Cluster do
   @doc """
   Sets this node's open-mode name (letters, digits, `_`, `-`) and cookie
   (1..255 printable characters, no spaces). A new name restarts open
-  distribution if it runs; a new cookie applies at once.
+  distribution if it runs. A new cookie applies at once: links made on
+  the old one are dropped (remembered nodes are redialled with the new
+  one); nodes remembered with a cookie of their own stay linked.
   """
   @spec configure_open(String.t(), String.t()) :: :ok | {:error, term()}
   def configure_open(name, cookie) when is_binary(name) and is_binary(cookie),
     do: GenServer.call(__MODULE__, {:configure_open, name, cookie}, 30_000)
 
   @doc """
-  Open mode: connects to `node` (`"name@host"`) with `cookie` (nil or
-  `""`: this node's own) and remembers both, so it is dialled again
-  while it is down. `{:error, reason}`, which `explain/1` puts in words:
-  `:not_open`, `:bad_node`, `:bad_cookie`, `:self`, `:no_epmd` (nothing
-  answers lookups on that host), `{:not_registered, names}` (its epmd
-  doesn't know the name), `:refused` (the handshake failed: usually the
-  cookie).
+  Open mode: connects to `node` (`"name@host"`, at most 255 characters)
+  with `cookie` (nil or `""`: this node's own) and remembers both, so it
+  is dialled again while it is down. Each node name and cookie becomes an
+  atom, as with `Node.connect/1`. `{:error, reason}`, which `explain/1`
+  puts in words: `:not_open`, `:bad_node`, `:bad_cookie`, `:self`,
+  `{:store, reason}` (not remembered), `:unknown_host`, `:no_epmd`
+  (nothing answers lookups on that host), `{:not_registered, names}` (its
+  epmd doesn't know the name), `:refused` (the handshake failed: usually
+  the cookie).
   """
   @spec connect(String.t(), String.t() | nil) :: :ok | {:error, term()}
   def connect(node, cookie \\ nil) when is_binary(node),
     do: GenServer.call(__MODULE__, {:connect, node, cookie}, 30_000)
 
-  @doc "Open mode: disconnects `node` (`\"name@host\"`) and forgets it."
-  @spec disconnect(String.t()) :: :ok
+  @doc """
+  Open mode: disconnects `node` (`"name@host"`) and forgets it, its own
+  cookie included. `{:error, {:store, reason}}` if it couldn't be
+  forgotten (it stays remembered and linked).
+  """
+  @spec disconnect(String.t()) :: :ok | {:error, term()}
   def disconnect(node) when is_binary(node), do: GenServer.call(__MODULE__, {:disconnect, node})
 
   @doc "A cluster error in words, for the screen and the agent."
@@ -230,7 +238,7 @@ defmodule Operator.Cluster do
   def explain(:not_open),
     do: "The cluster isn't running in open mode ([menu] › cluster: open, then enable)."
 
-  def explain(:bad_node), do: "A node is name@host, like app@10.0.0.5."
+  def explain(:bad_node), do: "A node is name@host (at most 255 characters), like app@10.0.0.5."
   def explain(:bad_name), do: "A name is 1..64 letters, digits, _ or -."
   def explain(:bad_cookie), do: "A cookie is 1..255 printable characters, no spaces."
   def explain(:self), do: "That's this node."
@@ -256,6 +264,10 @@ defmodule Operator.Cluster do
         "(short names can't talk to this node's long name)."
 
   def explain(:restart_needed), do: "Close and reopen Operator once, then try again."
+
+  def explain({:store, reason}),
+    do: "Couldn't save that in the phone's secure store (#{inspect(reason)}): nothing changed."
+
   def explain(:open_mode), do: "Pairing is for paired mode; this cluster is in open mode."
   def explain(other), do: inspect(other)
 
@@ -530,26 +542,30 @@ defmodule Operator.Cluster do
   def handle_call({:connect, node, cookie}, from, s) do
     cookie = if cookie in [nil, ""], do: nil, else: cookie
 
-    case check_connect(node, cookie, s) do
-      :ok ->
-        # The user typed it: the one place a node atom is made from text,
-        # only once it is a valid name and distribution can use it.
-        atom = String.to_atom(node)
-        use_cookie(atom, cookie)
-        s = remember(s, node, cookie)
-        spawn(fn -> GenServer.reply(from, dial(atom)) end)
-        {:noreply, changed(s)}
-
-      {:error, _} = error ->
-        {:reply, error, s}
+    with :ok <- check_connect(node, cookie, s),
+         {:ok, s} <- remember(s, node, cookie) do
+      # The user typed it: the one place a node atom is made from text,
+      # only once it is a valid name and distribution can use it.
+      atom = String.to_atom(node)
+      use_cookie(atom, cookie)
+      spawn(fn -> GenServer.reply(from, dial(atom)) end)
+      {:noreply, changed(s)}
+    else
+      {:error, _} = error -> {:reply, error, s}
     end
   end
 
   def handle_call({:disconnect, node}, _from, s) do
-    s = %{s | open_nodes: Enum.reject(s.open_nodes, &(&1.node == node))}
-    save_open_nodes(s)
-    drop_link(node)
-    {:reply, :ok, changed(s)}
+    nodes = Enum.reject(s.open_nodes, &(&1.node == node))
+
+    case save_open_nodes(nodes) do
+      :ok ->
+        forget_link(node)
+        {:reply, :ok, changed(%{s | open_nodes: nodes})}
+
+      {:error, _} = error ->
+        {:reply, error, s}
+    end
   end
 
   def handle_call({:subscribe, pid}, _from, s) do
@@ -559,7 +575,7 @@ defmodule Operator.Cluster do
 
   defp check_connect(node, cookie, s) do
     cond do
-      not Regex.match?(@node_name, node) -> {:error, :bad_node}
+      not valid_node?(node) -> {:error, :bad_node}
       not valid_cookie?(cookie) -> {:error, :bad_cookie}
       not s.running or s.mode != :open -> {:error, :not_open}
       node == Atom.to_string(Node.self()) -> {:error, :self}
@@ -567,8 +583,22 @@ defmodule Operator.Cluster do
     end
   end
 
+  # An atom holds at most 255 characters.
+  defp valid_node?(node),
+    do: is_binary(node) and byte_size(node) <= 255 and Regex.match?(@node_name, node)
+
   defp valid_cookie?(nil), do: true
   defp valid_cookie?(cookie), do: is_binary(cookie) and Regex.match?(@open_cookie, cookie)
+
+  # Forgotten: unlinked, and its own cookie no longer opens this node (OTP
+  # keeps a node's cookie after a disconnect). Never makes an atom.
+  defp forget_link(node) do
+    atom = String.to_existing_atom(node)
+    if Node.alive?(), do: :erlang.set_cookie(atom, Node.get_cookie())
+    Node.disconnect(atom)
+  rescue
+    ArgumentError -> false
+  end
 
   defp complete_join(s, invite) do
     case if(s.running, do: {:ok, s}, else: start_cluster(s)) do
@@ -862,10 +892,11 @@ defmodule Operator.Cluster do
     end)
   end
 
+  # Hidden nodes count: `-hidden` is a normal way for a tool to join.
   defp redial(%{mode: :open} = s) do
     for %{node: node} <- s.open_nodes,
         node = String.to_atom(node),
-        node not in Node.list(),
+        node not in Node.list(:connected),
         do: spawn(fn -> Node.connect(node) end)
   end
 
@@ -1228,10 +1259,22 @@ defmodule Operator.Cluster do
         end
 
       true ->
-        Node.set_cookie(String.to_atom(cookie))
+        old = Node.get_cookie()
+        new = String.to_atom(cookie)
+        Node.set_cookie(new)
         apply_cookies(s)
-        {:reply, :ok, changed(s)}
+        if new != old, do: drop_old_cookie_links(s)
+        {:reply, :ok, changed(schedule_reconnect(s, 0))}
     end
+  end
+
+  # A new cookie takes the old one's authority away at once: links made on
+  # this node's cookie go (the remembered ones are redialled with the new
+  # one); links to nodes remembered with a cookie of their own stay.
+  defp drop_old_cookie_links(s) do
+    own = for %{node: node, cookie: cookie} <- s.open_nodes, cookie != nil, do: node
+
+    for node <- Node.list(:connected), Atom.to_string(node) not in own, do: Node.disconnect(node)
   end
 
   # Remembered nodes without a cookie of their own follow this node's.
@@ -1240,28 +1283,32 @@ defmodule Operator.Cluster do
 
   defp remember(s, node, cookie) do
     nodes = Enum.reject(s.open_nodes, &(&1.node == node)) ++ [%{node: node, cookie: cookie}]
-    s = %{s | open_nodes: Enum.take(nodes, -@max_identities)}
-    save_open_nodes(s)
-    s
+    nodes = Enum.take(nodes, -@max_identities)
+
+    with :ok <- save_open_nodes(nodes), do: {:ok, %{s | open_nodes: nodes}}
   end
 
   defp read_open_nodes do
     with {:ok, json} when is_binary(json) <- Rho.CredentialStore.get(@open_nodes_account),
          {:ok, nodes} when is_list(nodes) <- JSON.decode(json) do
       for %{"node" => node} = entry <- nodes,
-          is_binary(node) and Regex.match?(@node_name, node),
+          valid_node?(node),
           cookie = entry["cookie"],
-          is_nil(cookie) or (is_binary(cookie) and Regex.match?(@open_cookie, cookie)),
+          valid_cookie?(cookie),
           do: %{node: node, cookie: cookie}
     else
       _ -> []
     end
   end
 
-  defp save_open_nodes(s) do
-    case Rho.CredentialStore.put(@open_nodes_account, JSON.encode!(s.open_nodes)) do
-      :ok -> :ok
-      {:error, reason} -> Logger.error("[cluster] open nodes not stored: #{inspect(reason)}")
+  defp save_open_nodes(nodes) do
+    case Rho.CredentialStore.put(@open_nodes_account, JSON.encode!(nodes)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[cluster] open nodes not stored: #{inspect(reason)}")
+        {:error, {:store, reason}}
     end
   end
 
@@ -1315,7 +1362,9 @@ defmodule Operator.Cluster do
   end
 
   defp status_map(s) do
-    connected = Enum.map(Node.list(), &Atom.to_string/1)
+    # Open mode lists hidden nodes too; paired members are never hidden.
+    links = if s.mode == :open, do: Node.list(:connected), else: Node.list()
+    connected = Enum.map(links, &Atom.to_string/1)
 
     %{
       enabled: s.enabled,

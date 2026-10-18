@@ -39,8 +39,9 @@ getaddr(Host0, Timeout, {Address, Port}) ->
         {ok, Socket} ->
             try
                 Deadline = erlang:monotonic_time(millisecond) + Timeout,
-                ok = gen_udp:send(Socket, Address, Port, query(rand:uniform(16#ffff), Host)),
-                await(Socket, Host, Deadline)
+                Id = rand:uniform(16#ffff),
+                ok = gen_udp:send(Socket, Address, Port, query(Id, Host)),
+                await(Socket, Id, Host, Deadline)
             after
                 gen_udp:close(Socket)
             end;
@@ -62,13 +63,13 @@ query(Id, Host) ->
     iolist_to_binary([<<Id:16, 0:16, 1:16, 0:16, 0:16, 0:16>>, Labels,
                       <<0, ?TYPE_A:16, ?CLASS_IN_QU:16>>]).
 
-await(Socket, Host, Deadline) ->
+await(Socket, Id, Host, Deadline) ->
     Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
     case gen_udp:recv(Socket, 0, Left) of
         {ok, {_Addr, _Port, Packet}} ->
-            case address(Packet, Host) of
+            case address(Packet, Id, Host) of
                 {ok, _} = Found -> Found;
-                error -> await(Socket, Host, Deadline)
+                error -> await(Socket, Id, Host, Deadline)
             end;
         {error, timeout} ->
             {error, nxdomain};
@@ -76,13 +77,19 @@ await(Socket, Host, Deadline) ->
             Error
     end.
 
-%% Any responder may also answer for other names: only an A record for
-%% `Host`, in the answers or the additional records.
-address(Packet, Host) ->
+%% Only a successful response to this query (a legacy unicast answer
+%% echoes its ID, RFC 6762 §6.7), and in it only an A record for `Host`:
+%% any responder may also answer for other names, in the answers or the
+%% additional records.
+address(Packet, Id, Host) ->
     case inet_dns:decode(Packet) of
         {ok, Msg} ->
+            Header = inet_dns:msg(Msg, header),
+            Ours = inet_dns:header(Header, id) =:= Id andalso
+                       inet_dns:header(Header, qr) =:= true andalso
+                       inet_dns:header(Header, rcode) =:= 0,
             Records = inet_dns:msg(Msg, anlist) ++ inet_dns:msg(Msg, arlist),
-            case [inet_dns:rr(RR, data) || RR <- Records,
+            case [inet_dns:rr(RR, data) || Ours, RR <- Records,
                                            inet_dns:rr(RR, type) =:= a,
                                            normalize(inet_dns:rr(RR, domain)) =:= Host] of
                 [Ip | _] -> {ok, Ip};
