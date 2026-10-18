@@ -706,9 +706,10 @@ defmodule Operator.Cluster do
 
   defp start_cluster(%{running: true} = s), do: {:ok, s}
 
+  # Plain TCP needs no boot argument: `:operator_dist` in its tcp mode, or
+  # stock `inet_tcp_dist` on a VM booted without it.
   defp start_cluster(%{mode: :open} = s) do
-    with :ok <- booted(),
-         {:ok, ip} <- address(s),
+    with {:ok, ip} <- address(s),
          {:ok, cookie} <- open_cookie() do
       :ok = stop_dist()
       :ok = set_global(true)
@@ -720,7 +721,8 @@ defmodule Operator.Cluster do
         {:ok, _} ->
           Node.set_cookie(String.to_atom(cookie))
           apply_cookies(s)
-          :ok = :net_kernel.monitor_nodes(true)
+          # Hidden nodes too, with an info list (the 3-tuple messages).
+          :ok = :net_kernel.monitor_nodes(true, node_type: :all)
           {epmd, epmd_error} = start_epmd(s, ip)
           Logger.info("[cluster] up as #{node} (open)")
 
@@ -837,6 +839,7 @@ defmodule Operator.Cluster do
 
   defp stop_cluster(s) do
     :net_kernel.monitor_nodes(false)
+    :net_kernel.monitor_nodes(false, node_type: :all)
     if s.reconnect, do: Process.cancel_timer(s.reconnect)
     if s.epmd, do: Epmd.stop(s.epmd)
     Mob.Dist.stop()
@@ -1281,11 +1284,16 @@ defmodule Operator.Cluster do
   defp apply_cookies(s),
     do: Enum.each(s.open_nodes, &use_cookie(String.to_atom(&1.node), &1.cookie))
 
+  # At most 64 remembered (@max_identities): the oldest one beyond that is
+  # forgotten like `disconnect/1` does, its cookie with it.
   defp remember(s, node, cookie) do
     nodes = Enum.reject(s.open_nodes, &(&1.node == node)) ++ [%{node: node, cookie: cookie}]
-    nodes = Enum.take(nodes, -@max_identities)
+    {evicted, nodes} = Enum.split(nodes, max(length(nodes) - @max_identities, 0))
 
-    with :ok <- save_open_nodes(nodes), do: {:ok, %{s | open_nodes: nodes}}
+    with :ok <- save_open_nodes(nodes) do
+      Enum.each(evicted, &forget_link(&1.node))
+      {:ok, %{s | open_nodes: nodes}}
+    end
   end
 
   defp read_open_nodes do
@@ -1376,7 +1384,7 @@ defmodule Operator.Cluster do
       fingerprint: s.fingerprint || stored_fingerprint(),
       open_name: s.open_name,
       epmd: s.epmd_error,
-      restart_needed: not booted_for_cluster?(),
+      restart_needed: s.mode == :paired and not booted_for_cluster?(),
       pairing: s.window_until != nil,
       error: s.error,
       peers: peers_status(s, connected)
