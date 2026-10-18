@@ -9,6 +9,16 @@ defmodule Operator.Cluster.OpenTest do
   @cookie "phonecookie"
 
   setup %{tmp_dir: dir} do
+    # Registered first, so even a setup that fails after distribution
+    # starts leaves none behind, nor open-mode settings.
+    on_exit(fn ->
+      Node.stop()
+      :operator_epmd.set_mode(:fixed)
+
+      for key <- [:epmd_module, :operator_dist_port, :inet_dist_use_interface],
+          do: Application.delete_env(:kernel, key)
+    end)
+
     start_supervised!(
       {Cluster,
        dir: Path.join(dir, "cluster"), boot_dist: false, address: {127, 0, 0, 1}, epmd_port: 0}
@@ -17,16 +27,6 @@ defmodule Operator.Cluster.OpenTest do
     :ok = Cluster.set_mode(:open)
     :ok = Cluster.configure_open("operator", @cookie)
     :ok = Cluster.enable()
-
-    on_exit(fn ->
-      # Whatever a failed test left: no distribution, no open-mode settings.
-      Node.stop()
-      :operator_epmd.set_mode(:fixed)
-
-      for key <- [:epmd_module, :operator_dist_port, :inet_dist_use_interface],
-          do: Application.delete_env(:kernel, key)
-    end)
-
     :ok
   end
 
