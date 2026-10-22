@@ -41,11 +41,9 @@ defmodule Operator.MixProject do
       {:rho, github: "GenericJam/rho", ref: "03923351245a27f8a6c9112e665ee1bd6c8d583e"},
       # The on-phone agent: Jido (agent runtime), Jido.AI (ReAct loop,
       # tool calling) and req_llm (provider clients; Anthropic, OpenAI Codex).
-      {:jido, "~> 2.3"},
-      {:jido_ai, "~> 2.3"},
-      {:req_llm, "~> 1.26"},
-      # zoi 0.18.11 removed Zoi.Types.Default, which jido/jido_ai still use.
-      {:zoi, "~> 0.18.10 and < 0.18.11"},
+      {:jido, "~> 2.4"},
+      {:jido_ai, "~> 2.4"},
+      {:req_llm, "~> 1.29"},
       # Keeps the app running while an agent run is backgrounded (Android
       # foreground service; iOS silent audio session): Operator.Core.KeepAlive.
       {:mob_background, "~> 0.1.2"},
